@@ -6,6 +6,8 @@ import csv
 import json
 import logging
 import random
+import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,13 +41,25 @@ class RunPaths:
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma: float = 2.0, weight: Optional[torch.Tensor] = None):
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        weight: Optional[torch.Tensor] = None,
+        label_smoothing: float = 0.0,
+    ):
         super().__init__()
         self.gamma = float(gamma)
         self.weight = weight
+        self.label_smoothing = float(max(label_smoothing, 0.0))
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        ce = F.cross_entropy(logits, target, weight=self.weight, reduction="none")
+        ce = F.cross_entropy(
+            logits,
+            target,
+            weight=self.weight,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
         pt = torch.exp(-ce)
         focal = ((1.0 - pt) ** self.gamma) * ce
         return focal.mean()
@@ -104,6 +118,13 @@ def setup_logging(log_path: Path) -> None:
     )
 
 
+def _format_class_distribution(classes: Sequence[str], counts: Sequence[int]) -> str:
+    parts = []
+    for name, cnt in zip(classes, counts):
+        parts.append(f"{name}:{int(cnt)}")
+    return ", ".join(parts)
+
+
 def compute_class_weights(class_counts: Sequence[int], beta: float = 0.9999) -> torch.Tensor:
     counts = np.asarray(class_counts, dtype=np.float64)
     weights = np.zeros_like(counts)
@@ -133,6 +154,9 @@ def create_data_loaders(
     r_only: bool,
 ) -> Tuple[DataLoader, DataLoader, List[str], str]:
     train_img, train_pcap, test_img, test_pcap, resolved_name = resolve_dataset_dirs(dataset_root, dataset_name)
+    LOGGER.info("加载数据集: %s", resolved_name)
+    LOGGER.info("训练目录 image=%s pcap=%s", train_img, train_pcap)
+    LOGGER.info("验证目录 image=%s pcap=%s", test_img, test_pcap)
 
     train_ds = FusionDataset(
         train_img,
@@ -175,6 +199,12 @@ def create_data_loaders(
 
     train_loader = DataLoader(train_ds, shuffle=shuffle if sampler is None else False, sampler=sampler, **dl_kwargs)
     val_loader = DataLoader(val_ds, shuffle=False, **dl_kwargs)
+    LOGGER.info("DataLoader 参数: batch_size=%s num_workers=%s pin_memory=%s", batch_size, num_workers, pin_memory)
+    LOGGER.info("训练样本=%s 验证样本=%s 类别数=%s", len(train_ds), len(val_ds), len(train_ds.classes))
+    LOGGER.info("训练集类别分布: %s", _format_class_distribution(train_ds.classes, train_ds.class_counts))
+    LOGGER.info("验证集类别分布: %s", _format_class_distribution(val_ds.classes, val_ds.class_counts))
+    if sampler is not None:
+        LOGGER.info("启用采样策略: %s", class_balance)
     return train_loader, val_loader, train_ds.classes, resolved_name
 
 
@@ -185,28 +215,38 @@ def create_criterion(
     class_counts: Sequence[int],
     device: torch.device,
     focal_gamma: float,
+    label_smoothing: float = 0.0,
 ) -> nn.Module:
     class_weight = None
     if class_balance in ("weighted_loss", "weighted_sampler_loss"):
         class_weight = compute_class_weights(class_counts).to(device)
 
     if loss_type == "focal":
-        return FocalLoss(gamma=focal_gamma, weight=class_weight)
-    return nn.CrossEntropyLoss(weight=class_weight)
+        return FocalLoss(
+            gamma=focal_gamma,
+            weight=class_weight,
+            label_smoothing=label_smoothing,
+        )
+    return nn.CrossEntropyLoss(weight=class_weight, label_smoothing=float(max(label_smoothing, 0.0)))
 
 
 def _autocast(device: torch.device, enabled: bool):
-    if device.type == "cuda":
-        return torch.cuda.amp.autocast(enabled=enabled)
+    if device.type != "cuda":
+        return nullcontext()
+    use_amp = bool(enabled)
+    if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+        return torch.amp.autocast(device_type="cuda", enabled=use_amp)
+    return torch.cuda.amp.autocast(enabled=use_amp)
 
-    class _NoOp:
-        def __enter__(self):
-            return None
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    return _NoOp()
+def _make_grad_scaler(device: torch.device, enabled: bool):
+    use_amp = bool(enabled and device.type == "cuda")
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        try:
+            return torch.amp.GradScaler("cuda", enabled=use_amp)
+        except TypeError:
+            return torch.amp.GradScaler(enabled=use_amp)
+    return torch.cuda.amp.GradScaler(enabled=use_amp)
 
 
 def evaluate(
@@ -259,25 +299,52 @@ def fit_model(
     early_stop_metric: str,
     use_amp: bool,
     run_paths: RunPaths,
+    scheduler: Optional[object] = None,
+    scheduler_mode: str = "none",
+    grad_clip_norm: float = 0.0,
+    start_epoch: int = 1,
+    history: Optional[List[Dict[str, float]]] = None,
+    save_artifacts: bool = True,
+    stage_name: str = "",
 ) -> Tuple[List[Dict[str, float]], Path]:
-    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and device.type == "cuda"))
+    use_amp_runtime = bool(use_amp and device.type == "cuda")
+    scaler = _make_grad_scaler(device, use_amp_runtime)
 
     best_score: Optional[float] = None
     best_state: Optional[dict] = None
     best_epoch = 0
     wait = 0
 
-    history: List[Dict[str, float]] = []
+    if history is None:
+        history = []
 
     metric_mode = "max" if early_stop_metric in ("val_f1", "val_acc") else "min"
     best_ckpt_path = run_paths.checkpoints_dir / "best.pt"
     last_ckpt_path = run_paths.checkpoints_dir / "last.pt"
+    stage_prefix = f"[{stage_name}] " if stage_name else ""
+    LOGGER.info(
+        "%s开始训练: epochs=%s start_epoch=%s patience=%s early_stop_metric=%s use_amp=%s scheduler=%s grad_clip_norm=%s",
+        stage_prefix,
+        epochs,
+        start_epoch,
+        patience,
+        early_stop_metric,
+        use_amp_runtime,
+        scheduler_mode,
+        float(grad_clip_norm),
+    )
 
-    for epoch in range(1, int(epochs) + 1):
+    for offset in range(int(epochs)):
+        epoch = int(start_epoch) + offset
+        epoch_t0 = time.perf_counter()
         model.train()
         train_loss_sum = 0.0
+        train_true: List[int] = []
+        train_pred: List[int] = []
+        running_total = 0
+        running_correct = 0
 
-        progress = tqdm(train_loader, desc=f"Train {epoch}/{epochs}", leave=False)
+        progress = tqdm(train_loader, desc=f"Train {epoch}", leave=False)
         for images, tokens, labels in progress:
             images = images.to(device, non_blocking=(device.type == "cuda"))
             tokens = tokens.to(device, non_blocking=(device.type == "cuda"))
@@ -290,23 +357,44 @@ def fit_model(
                     logits = logits[0]
                 loss = criterion(logits, labels)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            if use_amp_runtime:
+                scaler.scale(loss).backward()
+                if grad_clip_norm and grad_clip_norm > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip_norm and grad_clip_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
+                optimizer.step()
 
             train_loss_sum += float(loss.item()) * images.size(0)
-            progress.set_postfix({"loss": f"{float(loss.item()):.4f}"})
+            pred = torch.argmax(logits, dim=1)
+            train_true.extend(labels.detach().cpu().tolist())
+            train_pred.extend(pred.detach().cpu().tolist())
+            running_total += labels.size(0)
+            running_correct += int((pred == labels).sum().item())
+            running_acc = running_correct / max(running_total, 1)
+            progress.set_postfix({"loss": f"{float(loss.item()):.4f}", "acc": f"{running_acc:.4f}"})
 
         train_loss = train_loss_sum / max(len(train_loader.dataset), 1)
+        train_acc = accuracy_score(train_true, train_pred) if train_true else 0.0
+        train_f1 = f1_score(train_true, train_pred, average="macro") if train_true else 0.0
         val_loss, val_acc, val_f1, _, _ = evaluate(model, val_loader, criterion, device, use_amp=use_amp)
+        elapsed = time.perf_counter() - epoch_t0
 
         row = {
             "epoch": float(epoch),
             "train_loss": float(train_loss),
+            "train_acc": float(train_acc),
+            "train_f1": float(train_f1),
             "val_loss": float(val_loss),
             "val_acc": float(val_acc),
             "val_f1": float(val_f1),
             "lr": float(optimizer.param_groups[0].get("lr", 0.0)),
+            "epoch_sec": float(elapsed),
         }
         history.append(row)
 
@@ -316,6 +404,8 @@ def fit_model(
             "optimizer_state_dict": optimizer.state_dict(),
             "history": history,
         }
+        if scheduler is not None and hasattr(scheduler, "state_dict"):
+            checkpoint["scheduler_state_dict"] = scheduler.state_dict()
         torch.save(checkpoint, last_ckpt_path)
 
         score = row.get(early_stop_metric)
@@ -332,35 +422,50 @@ def fit_model(
 
         if improved:
             best_score = score
-            best_state = model.state_dict()
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch
             wait = 0
             torch.save(checkpoint, best_ckpt_path)
+            LOGGER.info("保存最佳模型: %s (epoch=%s, %s=%.6f)", best_ckpt_path, epoch, early_stop_metric, score)
         else:
             wait += 1
 
+        if scheduler is not None:
+            if scheduler_mode == "reduce":
+                scheduler.step(float(score))
+            else:
+                scheduler.step()
+
         LOGGER.info(
-            "Epoch %s/%s - train_loss=%.6f val_loss=%.6f val_acc=%.4f val_f1=%.4f best_%s=%.6f wait=%s",
+            "%sEpoch %s 结果: 训练 Loss=%.6f Acc=%.4f F1=%.4f | 验证 Loss=%.6f Acc=%.4f F1=%.4f | best_%s=%.6f wait=%s/%s 耗时=%.1fs",
+            stage_prefix,
             epoch,
-            epochs,
             train_loss,
+            train_acc,
+            train_f1,
             val_loss,
             val_acc,
             val_f1,
             early_stop_metric,
             best_score if best_score is not None else float("nan"),
             wait,
+            patience,
+            elapsed,
         )
+        LOGGER.info("%s当前学习率: %.8f", stage_prefix, float(optimizer.param_groups[0].get("lr", 0.0)))
 
         if wait >= int(patience):
-            LOGGER.info("触发早停: epoch=%s (best_epoch=%s)", epoch, best_epoch)
+            LOGGER.info("%s触发早停: epoch=%s (best_epoch=%s)", stage_prefix, epoch, best_epoch)
             break
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    save_history_csv(history, run_paths.metrics_dir / "epoch_metrics.csv")
-    plot_history(history, run_paths.figures_dir)
+    if save_artifacts:
+        save_history_csv(history, run_paths.metrics_dir / "epoch_metrics.csv")
+        LOGGER.info("已保存训练曲线数据: %s", run_paths.metrics_dir / "epoch_metrics.csv")
+        plot_history(history, run_paths.figures_dir)
+        LOGGER.info("已保存训练曲线图: %s", run_paths.figures_dir)
     return history, best_ckpt_path
 
 
@@ -393,13 +498,49 @@ def plot_history(history: Sequence[Dict[str, float]], out_dir: Path) -> None:
     if not history:
         return
     xs = [int(r["epoch"]) for r in history]
-    loss = [float(r["val_loss"]) for r in history]
-    acc = [float(r["val_acc"]) for r in history]
-    f1 = [float(r["val_f1"]) for r in history]
+    train_loss = [float(r["train_loss"]) for r in history]
+    val_loss = [float(r["val_loss"]) for r in history]
+    train_acc = [float(r.get("train_acc", 0.0)) for r in history]
+    val_acc = [float(r["val_acc"]) for r in history]
+    train_f1 = [float(r.get("train_f1", 0.0)) for r in history]
+    val_f1 = [float(r["val_f1"]) for r in history]
 
-    _plot_curve(xs, loss, "Validation Loss", "Loss", out_dir / "loss_curve.png")
-    _plot_curve(xs, acc, "Validation Accuracy", "Accuracy", out_dir / "acc_curve.png")
-    _plot_curve(xs, f1, "Validation Macro-F1", "Macro-F1", out_dir / "f1_curve.png")
+    plt.figure(figsize=(8, 5))
+    plt.plot(xs, train_loss, marker="o", label="Train Loss")
+    plt.plot(xs, val_loss, marker="o", label="Val Loss")
+    plt.title("Loss Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    (out_dir / "loss_curve.png").parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_dir / "loss_curve.png", dpi=160)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(xs, train_acc, marker="o", label="Train Acc")
+    plt.plot(xs, val_acc, marker="o", label="Val Acc")
+    plt.title("Accuracy Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_dir / "acc_curve.png", dpi=160)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(xs, train_f1, marker="o", label="Train F1")
+    plt.plot(xs, val_f1, marker="o", label="Val F1")
+    plt.title("Macro-F1 Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Macro-F1")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_dir / "f1_curve.png", dpi=160)
+    plt.close()
 
 
 def save_reports(
@@ -411,21 +552,137 @@ def save_reports(
     prefix: str = "",
 ) -> Dict[str, float]:
     reports_dir.mkdir(parents=True, exist_ok=True)
+    label_ids = list(range(len(class_names)))
 
-    report_txt = classification_report(y_true, y_pred, target_names=list(class_names), digits=4)
+    report_txt = classification_report(
+        y_true,
+        y_pred,
+        labels=label_ids,
+        target_names=list(class_names),
+        digits=4,
+        zero_division=0,
+    )
     txt_name = f"{prefix}classification_report.txt" if prefix else "classification_report.txt"
-    with (reports_dir / txt_name).open("w", encoding="utf-8") as f:
+    txt_path = reports_dir / txt_name
+    with txt_path.open("w", encoding="utf-8") as f:
         f.write(report_txt)
+    LOGGER.info("已保存分类报告: %s", txt_path)
 
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=label_ids)
     fig_name = f"{prefix}confusion_matrix.png" if prefix else "confusion_matrix.png"
-    save_confusion_matrix(cm, class_names, reports_dir / fig_name)
+    fig_path = reports_dir / fig_name
+    save_confusion_matrix(cm, class_names, fig_path)
+    LOGGER.info("已保存混淆矩阵: %s", fig_path)
 
     metrics = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
+        "report_file": txt_name,
+        "confusion_image": fig_name,
+        "report_text": report_txt,
+        "confusion_matrix": cm.tolist(),
     }
     return metrics
+
+
+def save_markdown_report(
+    *,
+    reports_dir: Path,
+    file_name: str,
+    title: str,
+    test_accuracy: float,
+    macro_f1: float,
+    report_text: str,
+    confusion_image: str,
+    confusion_matrix_text: str = "",
+    metrics_curve_image: str = "",
+) -> Path:
+    out = reports_dir / file_name
+    with out.open("w", encoding="utf-8") as f:
+        f.write(f"# {title}\n\n")
+        f.write(f"**Test Accuracy:** {test_accuracy:.4f}\n\n")
+        f.write(f"**Macro F1:** {macro_f1:.4f}\n\n")
+        f.write("**分类报告:**\n\n")
+        f.write("```\n")
+        f.write(report_text.strip() + "\n")
+        f.write("```\n\n")
+        if confusion_matrix_text:
+            f.write("**混淆矩阵:**\n\n")
+            f.write("```\n")
+            f.write(confusion_matrix_text.strip() + "\n")
+            f.write("```\n\n")
+        if confusion_image:
+            f.write(f"![Confusion Matrix]({confusion_image})\n")
+        if metrics_curve_image:
+            f.write(f"![Metrics Curve]({metrics_curve_image})\n")
+    LOGGER.info("已保存 Markdown 报告: %s", out)
+    return out
+
+
+def collect_attention_diagnostics(
+    *,
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    use_amp: bool,
+    out_path: Path,
+    max_batches: int = 8,
+) -> Optional[Dict[str, float]]:
+    model.eval()
+    attn_chunks: List[torch.Tensor] = []
+    with torch.no_grad():
+        for batch_idx, (images, tokens, _) in enumerate(loader):
+            if batch_idx >= int(max_batches):
+                break
+            images = images.to(device, non_blocking=(device.type == "cuda"))
+            tokens = tokens.to(device, non_blocking=(device.type == "cuda"))
+            with _autocast(device, use_amp):
+                try:
+                    out = model(images, tokens, return_attention=True)
+                except TypeError:
+                    return None
+            if not isinstance(out, (tuple, list)) or len(out) < 2:
+                return None
+            attn = out[1]
+            if attn is None:
+                continue
+            if not isinstance(attn, torch.Tensor):
+                continue
+            if attn.ndim == 1:
+                attn = attn.unsqueeze(0)
+            if attn.ndim != 2:
+                continue
+            attn_chunks.append(attn.detach().float().cpu())
+
+    if not attn_chunks:
+        return None
+
+    attn_all = torch.cat(attn_chunks, dim=0)
+    attn_mean = attn_all.mean(dim=0).numpy()
+    eps = 1e-12
+    row = attn_all.clamp(min=eps)
+    entropy = float((-(row * row.log()).sum(dim=1)).mean().item())
+    stats = {
+        "mean": float(attn_all.mean().item()),
+        "min": float(attn_all.min().item()),
+        "max": float(attn_all.max().item()),
+        "entropy": entropy,
+        "top1": float(torch.topk(attn_all, k=1, dim=1).values.mean().item()),
+        "top5": float(torch.topk(attn_all, k=min(5, attn_all.size(1)), dim=1).values.sum(dim=1).mean().item()),
+        "top10": float(torch.topk(attn_all, k=min(10, attn_all.size(1)), dim=1).values.sum(dim=1).mean().item()),
+    }
+
+    plt.figure(figsize=(9, 4))
+    plt.plot(np.arange(len(attn_mean)), attn_mean)
+    plt.title("Mean Attention Curve")
+    plt.xlabel("Token Index")
+    plt.ylabel("Attention Weight")
+    plt.grid(True, linestyle="--", alpha=0.35)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=160)
+    plt.close()
+    return stats
 
 
 def save_confusion_matrix(cm: np.ndarray, labels: Sequence[str], out_path: Path) -> None:

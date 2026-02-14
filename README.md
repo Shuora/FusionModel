@@ -156,3 +156,7 @@ python src/train_attention_stacking.py --dataset_root dataset/CIC_42 --ablation 
 
 - USTC 每类只有 1 个源 pcap
   - 代码已对该场景自动启用“单文件类别的 session 级切分”，避免测试集为空。
+
+
+
+ python src/train_attention_stacking.py --dataset_root dataset/USTC_10 --train_profile auto --output_dir outputs/train
