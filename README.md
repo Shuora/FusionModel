@@ -124,6 +124,20 @@ python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all
 ```
 
 说明：以上两个 profile 已内置 `batch_size=64, num_workers=4, prefetch_factor=2`，适配 4060 Laptop 8GB + 16GB 内存的稳定优先场景。
+说明：`run_attention_suite.py` 现在默认会在全部流程结束后自动归档本次输出到 `outputs/archive/<profile>_<mode>_<timestamp>/`。
+
+常用归档参数：
+
+```powershell
+# 指定归档目录名（便于实验管理）
+python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all --archive_tag ustc_try_01
+
+# 归档时移动文件（默认是复制）
+python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all --archive_move
+
+# 关闭自动归档
+python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all --no_archive
+```
 
 ## 5. 结果产物与日志
 
