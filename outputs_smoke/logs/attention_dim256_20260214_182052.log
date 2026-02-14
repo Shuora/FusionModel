@@ -1,0 +1,15 @@
+2026-02-14 18:20:52,709 - INFO - run_attention - 🚀 开始训练模式=attention, outputs=outputs_smoke
+2026-02-14 18:20:52,710 - INFO - fusion_common - 加载融合数据 - 图像目录: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\image_data\Train, Pcap目录: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\pcap_data\Train
+2026-02-14 18:20:52,856 - INFO - fusion_common - 融合索引缓存命中: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\image_data\Train\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 52338
+2026-02-14 18:20:52,860 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 52338
+2026-02-14 18:20:52,860 - INFO - fusion_common - 加载融合数据 - 图像目录: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\image_data\Test, Pcap目录: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\pcap_data\Test
+2026-02-14 18:20:52,878 - INFO - fusion_common - 融合索引缓存命中: C:\Repositories\Traffic\FusionModel\dataset\USTC-TFC2016\image_data\Test\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 12982
+2026-02-14 18:20:52,878 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 12982
+2026-02-14 18:20:52,878 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-02-14 18:20:52,953 - INFO - fusion_common - CharBERT 加载成功: C:\Repositories\Traffic\FusionModel\src\CharBERT\src
+2026-02-14 18:20:52,956 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 10 个类别
+2026-02-14 18:20:52,956 - INFO - fusion_common - 开始训练融合模型
+2026-02-14 18:20:52,956 - INFO - fusion_common - 训练参数 - Epochs: 2, Learning Rate: 0.001, Early Stopping Patience: 8
+2026-02-14 18:20:52,956 - INFO - fusion_common - 训练策略 - class_balance: none, loss_type: ce, focal_gamma: 2.000, weight_decay: 0.000000, label_smoothing: 0.0000, early_stop_metric: val_loss, lr_scheduler: none, val_every: 1
+2026-02-14 18:20:52,956 - INFO - fusion_common - DataLoader参数 - train_batches: 818, val_batches: 203, batch_size: 64, num_workers: 4, pin_memory: True
+2026-02-14 18:20:53,573 - INFO - fusion_common - Epoch 1/2

@@ -1,0 +1,43 @@
+profiles:
+  ustc_baseline:
+    dataset_root: dataset
+    dataset_name: USTC-TFC2016
+    preset: none
+    batch_size: 64
+    image_size: 28
+    max_pcap_length: 784
+    epochs: 32
+    lr: 0.001
+    patience: 8
+    class_balance: none
+    loss_type: ce
+    attention_dim: 256
+    output_dir: outputs
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  cic5_balanced:
+    dataset_root: dataset
+    dataset_name: CIC5_payload
+    preset: cic_balanced
+    batch_size: 64
+    image_size: 28
+    max_pcap_length: 784
+    epochs: 40
+    lr: 0.0003
+    patience: 14
+    class_balance: weighted_sampler_loss
+    loss_type: focal
+    focal_gamma: 1.5
+    attention_dim: 256
+    output_dir: outputs
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
