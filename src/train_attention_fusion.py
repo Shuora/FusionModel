@@ -72,8 +72,8 @@ def main() -> None:
     run_paths = init_run_dirs(args.output_dir, args.run_name)
     setup_logging(run_paths.logs_dir / "train.log")
 
-    LOGGER.info("Run ID: %s", run_paths.run_id)
-    LOGGER.info("Device: %s", device)
+    LOGGER.info("运行 ID: %s", run_paths.run_id)
+    LOGGER.info("训练设备: %s", device)
 
     train_loader, val_loader, classes, resolved_dataset = create_data_loaders(
         dataset_root=args.dataset_root,
@@ -90,7 +90,7 @@ def main() -> None:
     )
 
     num_classes = len(classes)
-    LOGGER.info("Dataset=%s classes=%s train=%s val=%s", resolved_dataset, num_classes, len(train_loader.dataset), len(val_loader.dataset))
+    LOGGER.info("数据集=%s 类别数=%s 训练样本=%s 验证样本=%s", resolved_dataset, num_classes, len(train_loader.dataset), len(val_loader.dataset))
 
     model = AttentionFusionModel(
         num_classes=num_classes,
@@ -157,9 +157,9 @@ def main() -> None:
 
     save_final_metrics(run_paths.metrics_dir / "final_metrics.json", final_metrics)
 
-    LOGGER.info("Training complete. best_ckpt=%s", best_ckpt)
-    LOGGER.info("Final val_loss=%.6f val_acc=%.4f val_f1=%.4f", val_loss, val_acc, val_f1)
-    LOGGER.info("Outputs: %s", run_paths.root)
+    LOGGER.info("训练完成，最佳模型: %s", best_ckpt)
+    LOGGER.info("最终指标 val_loss=%.6f val_acc=%.4f val_f1=%.4f", val_loss, val_acc, val_f1)
+    LOGGER.info("输出目录: %s", run_paths.root)
 
 
 if __name__ == "__main__":

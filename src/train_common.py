@@ -353,7 +353,7 @@ def fit_model(
         )
 
         if wait >= int(patience):
-            LOGGER.info("Early stopping at epoch=%s (best_epoch=%s)", epoch, best_epoch)
+            LOGGER.info("触发早停: epoch=%s (best_epoch=%s)", epoch, best_epoch)
             break
 
     if best_state is not None:

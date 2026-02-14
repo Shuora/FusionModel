@@ -106,8 +106,8 @@ def main() -> None:
     run_paths = init_run_dirs(args.output_dir, args.run_name)
     setup_logging(run_paths.logs_dir / "train.log")
 
-    LOGGER.info("Run ID: %s", run_paths.run_id)
-    LOGGER.info("Device: %s", device)
+    LOGGER.info("运行 ID: %s", run_paths.run_id)
+    LOGGER.info("训练设备: %s", device)
 
     train_loader, val_loader, classes, resolved_dataset = create_data_loaders(
         dataset_root=args.dataset_root,
@@ -124,7 +124,7 @@ def main() -> None:
     )
 
     num_classes = len(classes)
-    LOGGER.info("Dataset=%s classes=%s train=%s val=%s", resolved_dataset, num_classes, len(train_loader.dataset), len(val_loader.dataset))
+    LOGGER.info("数据集=%s 类别数=%s 训练样本=%s 验证样本=%s", resolved_dataset, num_classes, len(train_loader.dataset), len(val_loader.dataset))
 
     model = AttentionFusionModel(
         num_classes=num_classes,
@@ -252,7 +252,7 @@ def main() -> None:
     save_final_metrics(run_paths.metrics_dir / "final_metrics.json", final_metrics)
 
     LOGGER.info(
-        "Stacking complete. base_f1=%.4f stacking_f1=%.4f outputs=%s",
+        "Stacking 完成. base_f1=%.4f stacking_f1=%.4f 输出目录=%s",
         float(base_val_f1),
         final_metrics["stacking"]["val_f1"],
         run_paths.root,

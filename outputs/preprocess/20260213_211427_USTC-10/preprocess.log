@@ -1,0 +1,35 @@
+2026-02-13 21:14:27,291 - INFO - preprocess_splitcap_rgb - 使用 SplitCap 可执行文件: C:\Repositories\Traffic\FusionModel\tools\SplitCap_2-1\SplitCap.exe
+2026-02-13 21:14:27,293 - INFO - preprocess_splitcap_rgb - 标签=Cridex 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,293 - INFO - preprocess_splitcap_rgb - 标签切分 label=Cridex: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Geodo 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Geodo: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Htbot 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Htbot: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Miuref 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Miuref: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Neris 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Neris: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Nsis-ay 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Nsis-ay: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Shifu 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Shifu: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Tinba 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Tinba: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Virut 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Virut: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签=Zeus 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 标签切分 label=Zeus: train=0 test=1 total=1
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - 开始预处理: source_pcaps=10
+2026-02-13 21:14:27,294 - INFO - preprocess_splitcap_rgb - [1/10] 处理 pcap=Cridex.pcap label=Cridex split=SessionSplit
+2026-02-13 21:15:17,734 - INFO - preprocess_splitcap_rgb - [2/10] 处理 pcap=Geodo.pcap label=Geodo split=SessionSplit
+2026-02-13 21:16:07,589 - INFO - preprocess_splitcap_rgb - [3/10] 处理 pcap=Htbot.pcap label=Htbot split=SessionSplit
+2026-02-13 21:16:24,514 - INFO - preprocess_splitcap_rgb - [4/10] 处理 pcap=Miuref.pcap label=Miuref split=SessionSplit
+2026-02-13 21:16:42,520 - INFO - preprocess_splitcap_rgb - [5/10] 处理 pcap=Neris.pcap label=Neris split=SessionSplit
+2026-02-13 21:17:28,700 - INFO - preprocess_splitcap_rgb - [6/10] 处理 pcap=Nsis-ay.pcap label=Nsis-ay split=SessionSplit
+2026-02-13 21:17:58,084 - INFO - preprocess_splitcap_rgb - [7/10] 处理 pcap=Shifu.pcap label=Shifu split=SessionSplit
+2026-02-13 21:18:27,468 - INFO - preprocess_splitcap_rgb - [8/10] 处理 pcap=Tinba.pcap label=Tinba split=SessionSplit
+2026-02-13 21:18:49,214 - INFO - preprocess_splitcap_rgb - [9/10] 处理 pcap=Virut.pcap label=Virut split=SessionSplit
+2026-02-13 21:19:36,959 - INFO - preprocess_splitcap_rgb - [10/10] 处理 pcap=Zeus.pcap label=Zeus split=SessionSplit
+2026-02-13 21:19:58,716 - INFO - preprocess_splitcap_rgb - 预处理完成. 写入=70129 总会话=179252 空会话丢弃=108205 去重丢弃=918 splitcap失败=0 fallback次数=0 错误=0
+2026-02-13 21:19:58,716 - INFO - preprocess_splitcap_rgb - 数据输出目录: C:\Repositories\Traffic\FusionModel\dataset\USTC_10
+2026-02-13 21:19:58,716 - INFO - preprocess_splitcap_rgb - 日志与统计输出目录: C:\Repositories\Traffic\FusionModel\outputs\preprocess\20260213_211427
