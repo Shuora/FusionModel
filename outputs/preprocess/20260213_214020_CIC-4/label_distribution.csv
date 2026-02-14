@@ -1,9 +1,0 @@
-split,label,count
-Test,Adware,35419
-Test,Ransomware,36698
-Test,SMSMalware,22204
-Test,Scareware,40200
-Train,Adware,158086
-Train,Ransomware,132304
-Train,SMSMalware,96436
-Train,Scareware,154262
