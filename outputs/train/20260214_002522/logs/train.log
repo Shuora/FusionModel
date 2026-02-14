@@ -1,0 +1,17 @@
+2026-02-14 00:25:22,309 - INFO - train_attention_stacking - 运行 ID: 20260214_002522
+2026-02-14 00:25:22,310 - INFO - train_attention_stacking - 训练设备: cuda:0
+2026-02-14 00:25:32,332 - INFO - train_attention_stacking - 数据集=USTC_10 类别数=10 训练样本=52375 验证样本=19396
+2026-02-14 00:27:46,114 - INFO - train_common - Epoch 1/30 - train_loss=0.227526 val_loss=2.310942 val_acc=0.6314 val_f1=0.7136 best_val_f1=0.713605 wait=0
+2026-02-14 00:29:06,057 - INFO - train_common - Epoch 2/30 - train_loss=0.107628 val_loss=1.148747 val_acc=0.6707 val_f1=0.7164 best_val_f1=0.716449 wait=0
+2026-02-14 00:30:26,301 - INFO - train_common - Epoch 3/30 - train_loss=0.092587 val_loss=1.733744 val_acc=0.6492 val_f1=0.7168 best_val_f1=0.716795 wait=0
+2026-02-14 00:31:47,216 - INFO - train_common - Epoch 4/30 - train_loss=0.080498 val_loss=1.482472 val_acc=0.6895 val_f1=0.7524 best_val_f1=0.752352 wait=0
+2026-02-14 00:33:09,444 - INFO - train_common - Epoch 5/30 - train_loss=0.073789 val_loss=1.475605 val_acc=0.6858 val_f1=0.7522 best_val_f1=0.752352 wait=1
+2026-02-14 00:34:28,382 - INFO - train_common - Epoch 6/30 - train_loss=0.064971 val_loss=1.865310 val_acc=0.6413 val_f1=0.6867 best_val_f1=0.752352 wait=2
+2026-02-14 00:35:46,126 - INFO - train_common - Epoch 7/30 - train_loss=0.059983 val_loss=2.011957 val_acc=0.6465 val_f1=0.6950 best_val_f1=0.752352 wait=3
+2026-02-14 00:37:05,259 - INFO - train_common - Epoch 8/30 - train_loss=0.056541 val_loss=2.196267 val_acc=0.6405 val_f1=0.6879 best_val_f1=0.752352 wait=4
+2026-02-14 00:38:24,462 - INFO - train_common - Epoch 9/30 - train_loss=0.054355 val_loss=1.570208 val_acc=0.6606 val_f1=0.7129 best_val_f1=0.752352 wait=5
+2026-02-14 00:39:42,530 - INFO - train_common - Epoch 10/30 - train_loss=0.048158 val_loss=2.141265 val_acc=0.6518 val_f1=0.6882 best_val_f1=0.752352 wait=6
+2026-02-14 00:41:02,524 - INFO - train_common - Epoch 11/30 - train_loss=0.047714 val_loss=1.844912 val_acc=0.6576 val_f1=0.6989 best_val_f1=0.752352 wait=7
+2026-02-14 00:42:24,430 - INFO - train_common - Epoch 12/30 - train_loss=0.044931 val_loss=2.352677 val_acc=0.6414 val_f1=0.6983 best_val_f1=0.752352 wait=8
+2026-02-14 00:42:24,431 - INFO - train_common - 触发早停: epoch=12 (best_epoch=4)
+2026-02-14 00:43:26,657 - INFO - train_attention_stacking - Stacking 完成. base_f1=0.7524 stacking_f1=0.7189 输出目录=C:\Repositories\Traffic\FusionModel\outputs\train\20260214_002522

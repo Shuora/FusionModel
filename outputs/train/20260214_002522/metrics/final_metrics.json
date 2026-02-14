@@ -1,0 +1,66 @@
+{
+  "run_id": "20260214_002522",
+  "dataset": "USTC_10",
+  "num_classes": 10,
+  "base": {
+    "val_loss": 1.482472166077922,
+    "val_acc": 0.6895236131161064,
+    "val_f1": 0.7523521537752766,
+    "report_metrics": {
+      "accuracy": 0.6895236131161064,
+      "macro_f1": 0.7523521537752766
+    }
+  },
+  "stacking": {
+    "val_acc": 0.6708084141060012,
+    "val_f1": 0.7188969185730137,
+    "report_metrics": {
+      "accuracy": 0.6708084141060012,
+      "macro_f1": 0.7188969185730137
+    },
+    "model_path": "C:\\Repositories\\Traffic\\FusionModel\\outputs\\train\\20260214_002522\\stacking\\meta_model_xgboost.json"
+  },
+  "epochs_recorded": 12,
+  "class_names": [
+    "Cridex",
+    "Geodo",
+    "Htbot",
+    "Miuref",
+    "Neris",
+    "Nsis-ay",
+    "Shifu",
+    "Tinba",
+    "Virut",
+    "Zeus"
+  ],
+  "config": {
+    "dataset_root": "dataset/USTC_10",
+    "dataset_name": "",
+    "batch_size": 32,
+    "image_size": 28,
+    "char_seq_len": 786,
+    "epochs": 30,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "patience": 8,
+    "early_stop_metric": "val_f1",
+    "class_balance": "none",
+    "loss_type": "ce",
+    "focal_gamma": 2.0,
+    "attention_dim": 128,
+    "dropout": 0.3,
+    "xgb_estimators": 300,
+    "xgb_max_depth": 6,
+    "xgb_lr": 0.05,
+    "num_workers": 4,
+    "pin_memory": false,
+    "device": "auto",
+    "seed": 42,
+    "no_amp": false,
+    "ablation": "none",
+    "no_index_cache": false,
+    "rebuild_index_cache": false,
+    "output_dir": "outputs/train",
+    "run_name": ""
+  }
+}

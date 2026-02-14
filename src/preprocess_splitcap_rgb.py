@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import random
@@ -53,6 +54,7 @@ class Summary:
     duplicate_sessions_dropped: int = 0
     splitcap_failures: int = 0
     python_fallback_used: int = 0
+    external_fallback_used: int = 0
     source_errors: int = 0
 
 
@@ -66,7 +68,7 @@ def parse_temporal_formats(value: str) -> List[str]:
         raise ValueError(f"Unsupported temporal formats: {invalid}. Supported: {sorted(SUPPORTED_TEMPORAL_FORMATS)}")
 
     if "bin" not in formats:
-        LOGGER.warning("'bin' is required for training. Automatically adding it to temporal formats.")
+        LOGGER.warning("训练需要 'bin' 格式，已自动追加到 temporal_formats。")
         formats.append("bin")
 
     return sorted(set(formats))
@@ -133,17 +135,34 @@ def split_sources_by_pcap(entries: Sequence[SourcePcap], train_ratio: float, see
         rng.shuffle(items_copy)
 
         if len(items_copy) <= 1:
-            cut = len(items_copy)
+            # For singleton labels (for example USTC file_stem mode), fallback to
+            # session-level split later to avoid empty test sets.
+            cut = 0
         else:
             cut = int(len(items_copy) * train_ratio)
             cut = max(1, min(cut, len(items_copy) - 1))
 
-        for i, item in enumerate(items_copy):
-            split_map[item.path] = "Train" if i < cut else "Test"
+        if len(items_copy) <= 1:
+            split_map[items_copy[0].path] = "SessionSplit"
+            LOGGER.info(
+                "标签=%s 只有 1 个源 pcap，后续将对该 pcap 内 session 做 Train/Test 切分。",
+                label,
+            )
+        else:
+            for i, item in enumerate(items_copy):
+                split_map[item.path] = "Train" if i < cut else "Test"
 
-        LOGGER.info("Split label=%s: train=%s test=%s total=%s", label, cut, len(items_copy) - cut, len(items_copy))
+        LOGGER.info("标签切分 label=%s: train=%s test=%s total=%s", label, cut, len(items_copy) - cut, len(items_copy))
 
     return split_map
+
+
+def split_sessions_for_singleton(total_sessions: int, train_ratio: float) -> List[str]:
+    if total_sessions <= 1:
+        return ["Train"] * total_sessions
+    cut = int(total_sessions * train_ratio)
+    cut = max(1, min(cut, total_sessions - 1))
+    return ["Train" if i < cut else "Test" for i in range(total_sessions)]
 
 
 def write_temporal_exports(base_path: Path, unified: bytes, temporal_formats: Iterable[str]) -> None:
@@ -245,6 +264,7 @@ def export_summary(
                 "duplicate_sessions_dropped": summary.duplicate_sessions_dropped,
                 "splitcap_failures": summary.splitcap_failures,
                 "python_fallback_used": summary.python_fallback_used,
+                "external_fallback_used": summary.external_fallback_used,
                 "source_errors": summary.source_errors,
             },
         }
@@ -293,14 +313,14 @@ def main() -> None:
 
     temporal_formats = parse_temporal_formats(args.temporal_formats)
     if args.sanitize_headers:
-        LOGGER.warning("--sanitize_headers is currently a no-op in payload-only preprocessing mode.")
+        LOGGER.warning("--sanitize_headers 在当前 payload-only 模式下不生效。")
 
     splitcap_exe = Path(args.splitcap_exe).resolve() if args.splitcap_exe else default_splitcap_path()
-    LOGGER.info("Using SplitCap executable: %s", splitcap_exe)
+    LOGGER.info("使用 SplitCap 可执行文件: %s", splitcap_exe)
 
     entries = discover_pcaps(input_root, args.label_mode)
     if not entries:
-        LOGGER.warning("No pcap files found under input_root: %s", input_root)
+        LOGGER.warning("在 input_root 下未找到 pcap 文件: %s", input_root)
         return
 
     split_map = split_sources_by_pcap(entries, args.train_ratio, args.seed)
@@ -309,21 +329,30 @@ def main() -> None:
     seen_hashes: Set[str] = set()
     label_split_counts: Dict[Tuple[str, str], int] = {}
 
-    tmp_root = artifact_dir / "tmp_splitcap_sessions"
+    # Use a short temp root to avoid Windows MAX_PATH issues when SplitCap
+    # creates long output filenames (source_name + tuple metadata).
+    repo_root = Path(__file__).resolve().parent.parent
+    tmp_root = repo_root / "tmp_splitcap" / run_id
     tmp_root.mkdir(parents=True, exist_ok=True)
+    tmp_in_root = tmp_root / "in"
+    tmp_in_root.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("SplitCap 临时目录: %s", tmp_root)
 
-    LOGGER.info("Start preprocessing: source_pcaps=%s", len(entries))
+    LOGGER.info("开始预处理: source_pcaps=%s", len(entries))
     for idx, item in enumerate(entries, start=1):
-        split = split_map[item.path]
-        LOGGER.info("[%s/%s] Processing pcap=%s label=%s split=%s", idx, len(entries), item.path.name, item.label, split)
+        split_tag = split_map[item.path]
+        LOGGER.info("[%s/%s] 处理 pcap=%s label=%s split=%s", idx, len(entries), item.path.name, item.label, split_tag)
 
         payloads: List[bytes] = []
         try:
             if args.splitcap_mode in ("external", "auto"):
-                pcap_tmp_dir = tmp_root / f"{item.path.stem}_{idx:06d}"
+                stem_hash = hashlib.sha1(str(item.path).encode("utf-8")).hexdigest()[:10]
+                pcap_tmp_dir = tmp_root / f"s{idx:06d}_{stem_hash}"
+                short_input = tmp_in_root / f"s{idx:06d}{item.path.suffix.lower()}"
+                shutil.copy2(item.path, short_input)
                 result = run_splitcap(
                     splitcap_exe=splitcap_exe,
-                    input_pcap=item.path,
+                    input_pcap=short_input,
                     output_dir=pcap_tmp_dir,
                     split_group="session",
                     output_filetype="pcap",
@@ -340,7 +369,7 @@ def main() -> None:
                 else:
                     summary.splitcap_failures += 1
                     LOGGER.warning(
-                        "SplitCap failed for %s (rc=%s). stderr=%s",
+                        "SplitCap 处理失败: %s (rc=%s). stderr=%s",
                         item.path,
                         result.returncode,
                         (result.stderr or "").strip(),
@@ -348,17 +377,36 @@ def main() -> None:
 
                 if not args.save_temp_sessions and pcap_tmp_dir.exists():
                     shutil.rmtree(pcap_tmp_dir, ignore_errors=True)
+                if short_input.exists():
+                    try:
+                        short_input.unlink()
+                    except Exception:
+                        pass
 
-            if (not payloads) and args.splitcap_mode in ("auto", "python"):
+            fallback_allowed = False
+            if not payloads:
+                if args.splitcap_mode in ("auto", "python"):
+                    fallback_allowed = True
+                elif args.splitcap_mode == "external":
+                    LOGGER.warning("SplitCap 未产出可用 session，自动回退到 Python 解析: %s", item.path)
+                    summary.external_fallback_used += 1
+                    fallback_allowed = True
+
+            if fallback_allowed:
                 fallback_sessions = split_sessions_python_fallback(item.path)
                 payloads = list(fallback_sessions.values())
                 summary.python_fallback_used += 1
+
+            if split_tag == "SessionSplit":
+                session_splits = split_sessions_for_singleton(len(payloads), float(args.train_ratio))
+            else:
+                session_splits = [split_tag] * len(payloads)
 
             for session_idx, payload in enumerate(payloads, start=1):
                 process_payload(
                     payload,
                     source_pcap=item.path,
-                    split=split,
+                    split=session_splits[session_idx - 1],
                     label=item.label,
                     session_idx=session_idx,
                     max_len=int(args.max_len),
@@ -372,7 +420,7 @@ def main() -> None:
 
         except Exception as exc:
             summary.source_errors += 1
-            LOGGER.exception("Failed processing source pcap %s: %s", item.path, exc)
+            LOGGER.exception("处理源 pcap 失败 %s: %s", item.path, exc)
 
     run_config = {
         "run_id": run_id,
@@ -397,17 +445,18 @@ def main() -> None:
     )
 
     LOGGER.info(
-        "Preprocess done. written=%s seen=%s empty_drop=%s dup_drop=%s splitcap_fail=%s fallback=%s errors=%s",
+        "预处理完成. 写入=%s 总会话=%s 空会话丢弃=%s 去重丢弃=%s splitcap失败=%s python_fallback=%s external_fallback=%s 错误=%s",
         summary.total_sessions_written,
         summary.total_sessions_seen,
         summary.empty_sessions_dropped,
         summary.duplicate_sessions_dropped,
         summary.splitcap_failures,
         summary.python_fallback_used,
+        summary.external_fallback_used,
         summary.source_errors,
     )
-    LOGGER.info("Dataset output root: %s", output_root)
-    LOGGER.info("Artifact output root: %s", artifact_dir)
+    LOGGER.info("数据输出目录: %s", output_root)
+    LOGGER.info("日志与统计输出目录: %s", artifact_dir)
 
 
 if __name__ == "__main__":
