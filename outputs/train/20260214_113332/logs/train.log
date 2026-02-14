@@ -1,0 +1,16 @@
+2026-02-14 11:33:32,516 - INFO - train_attention_stacking - 运行 ID: 20260214_113332
+2026-02-14 11:33:32,516 - INFO - train_attention_stacking - 训练设备: cuda:0
+2026-02-14 11:33:32,517 - INFO - train_common - 加载数据集: USTC_10
+2026-02-14 11:33:32,517 - INFO - train_common - 训练目录 image=C:\Repositories\Traffic\FusionModel\dataset\USTC_10\image_data\Train pcap=C:\Repositories\Traffic\FusionModel\dataset\USTC_10\pcap_data\Train
+2026-02-14 11:33:32,518 - INFO - train_common - 验证目录 image=C:\Repositories\Traffic\FusionModel\dataset\USTC_10\image_data\Test pcap=C:\Repositories\Traffic\FusionModel\dataset\USTC_10\pcap_data\Test
+2026-02-14 11:33:32,756 - INFO - train_common - DataLoader 参数: batch_size=64 num_workers=4 pin_memory=True
+2026-02-14 11:33:32,756 - INFO - train_common - 训练样本=52375 验证样本=19396 类别数=10
+2026-02-14 11:33:32,756 - INFO - train_common - 训练集类别分布: Cridex:8196, Geodo:4977, Htbot:4705, Miuref:3967, Neris:5196, Nsis-ay:4819, Shifu:7655, Tinba:6803, Virut:2584, Zeus:3473
+2026-02-14 11:33:32,756 - INFO - train_common - 验证集类别分布: Cridex:1642, Geodo:1712, Htbot:1246, Miuref:984, Neris:3232, Nsis-ay:1214, Shifu:1920, Tinba:1700, Virut:3555, Zeus:2191
+2026-02-14 11:33:32,756 - INFO - train_common - 启用采样策略: weighted_sampler_loss
+2026-02-14 11:33:32,757 - INFO - train_attention_stacking - 训练参数: {"dataset_root": "dataset/USTC_10", "dataset_name": "", "train_profile": "ustc_strict_base", "batch_size": 64, "image_size": 28, "char_seq_len": 786, "epochs": 32, "lr": 0.001, "weight_decay": 0.0001, "label_smoothing": 0.03, "patience": 8, "early_stop_metric": "val_f1", "optimizer": "adamw", "lr_scheduler": "reduce", "lr_patience": 2, "lr_factor": 0.5, "min_lr": 1e-06, "grad_clip_norm": 1.0, "class_balance": "weighted_sampler_loss", "loss_type": "ce", "focal_gamma": 2.0, "attention_dim": 256, "dropout": 0.3, "stage1_epochs": 10, "stage2_lr_scale": 0.25, "freeze_charbert_layers": 1, "use_pretrained_mobilevit": true, "mobilevit_pretrained_dir": "model/mobilevit-small", "mobilevit_pretrained_input_size": 224, "use_pretrained_charbert": false, "charbert_pretrained_path": "", "xgb_estimators": 300, "xgb_max_depth": 6, "xgb_lr": 0.05, "stacking_subsample": 1.0, "num_workers": 4, "pin_memory": false, "device": "auto", "seed": 42, "no_amp": false, "ablation": "none", "no_index_cache": false, "rebuild_index_cache": false, "output_dir": "outputs/train", "run_name": ""}
+2026-02-14 11:33:32,757 - INFO - train_attention_stacking - 数据集=USTC_10 类别数=10 训练样本=52375 验证样本=19396
+2026-02-14 11:33:38,445 - INFO - models_charbert_mobilevit - 已加载预训练 MobileViT: C:\Repositories\Traffic\FusionModel\model\mobilevit-small
+2026-02-14 11:33:38,705 - INFO - train_attention_stacking - 模型参数量: total=5617470 trainable=5617470
+2026-02-14 11:33:38,707 - INFO - train_attention_stacking - Stage1 冻结训练: epochs=10 冻结CharBERT前层=1 trainable_params=448414
+2026-02-14 11:33:38,708 - INFO - train_common - [stage1] 开始训练: epochs=10 start_epoch=1 patience=8 early_stop_metric=val_f1 use_amp=True scheduler=reduce grad_clip_norm=1.0

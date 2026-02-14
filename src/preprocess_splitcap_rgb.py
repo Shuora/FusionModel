@@ -157,12 +157,17 @@ def split_sources_by_pcap(entries: Sequence[SourcePcap], train_ratio: float, see
     return split_map
 
 
-def split_sessions_for_singleton(total_sessions: int, train_ratio: float) -> List[str]:
+def split_sessions_for_singleton(total_sessions: int, train_ratio: float, seed: int, key: str) -> List[str]:
     if total_sessions <= 1:
         return ["Train"] * total_sessions
     cut = int(total_sessions * train_ratio)
     cut = max(1, min(cut, total_sessions - 1))
-    return ["Train" if i < cut else "Test" for i in range(total_sessions)]
+    idx = list(range(total_sessions))
+    # Deterministic per-file shuffle to avoid temporal-order bias while keeping reproducibility.
+    rng = random.Random(f"{seed}:{key}")
+    rng.shuffle(idx)
+    train_idx = set(idx[:cut])
+    return ["Train" if i in train_idx else "Test" for i in range(total_sessions)]
 
 
 def write_temporal_exports(base_path: Path, unified: bytes, temporal_formats: Iterable[str]) -> None:
@@ -398,7 +403,12 @@ def main() -> None:
                 summary.python_fallback_used += 1
 
             if split_tag == "SessionSplit":
-                session_splits = split_sessions_for_singleton(len(payloads), float(args.train_ratio))
+                session_splits = split_sessions_for_singleton(
+                    len(payloads),
+                    float(args.train_ratio),
+                    int(args.seed),
+                    str(item.path),
+                )
             else:
                 session_splits = [split_tag] * len(payloads)
 

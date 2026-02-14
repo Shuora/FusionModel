@@ -7,3 +7,4 @@ torchvision
 scikit-learn
 matplotlib
 xgboost
+transformers
