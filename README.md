@@ -110,7 +110,20 @@ python src/fusion/train_fusion_attention_stacking.py --dataset_name USTC-TFC2016
 说明：4.1-4.4 这些单跑命令现在也会默认自动归档本次产物到 `outputs/archive/<tag>_<timestamp>/`。  
 可选参数：`--no_archive`（关闭归档）、`--archive_tag <name>`、`--archive_dir <path>`、`--archive_move`（移动而非复制）。
 
-### 4.5 使用训练配置批跑（推荐）
+### 4.5 CIC5（full_packet 轨）
+
+```powershell
+# Attention（单跑）
+python src/fusion/train_fusion_attention.py --dataset_name CIC5_fullpacket --preset cic_balanced --batch_size 64 --num_workers 4 --prefetch_factor 2
+
+# Attention + Stacking（单跑）
+python src/fusion/train_fusion_attention_stacking.py --dataset_name CIC5_fullpacket --preset cic_balanced --batch_size 64 --num_workers 4 --prefetch_factor 2
+
+# 批跑（沿用 cic5_balanced 配置，覆盖 dataset_name）
+python src/fusion/run_attention_suite.py --profile cic5_balanced --dataset_name CIC5_fullpacket --mode all
+```
+
+### 4.6 使用训练配置批跑（推荐）
 
 按 `configs/train_profiles.yaml`：
 

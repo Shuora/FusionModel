@@ -1,0 +1,16 @@
+2026-02-16 14:36:15,907 - INFO - run_attention - 🚀 开始训练模式=attention, outputs=C:\Repositories\Traffic\FusionModel\outputs
+2026-02-16 14:36:15,907 - INFO - fusion_common - 加载融合数据 - 图像目录: dataset\CIC5_payload\image_data\Train, Pcap目录: dataset\CIC5_payload\pcap_data\Train
+2026-02-16 14:36:17,097 - INFO - fusion_common - 融合索引缓存命中: dataset\CIC5_payload\image_data\Train\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 542292
+2026-02-16 14:36:17,983 - INFO - fusion_common - 融合数据加载完成，类别数: 4, 样本总数: 542292
+2026-02-16 14:36:17,986 - INFO - fusion_common - 加载融合数据 - 图像目录: dataset\CIC5_payload\image_data\Test, Pcap目录: dataset\CIC5_payload\pcap_data\Test
+2026-02-16 14:36:18,149 - INFO - fusion_common - 融合索引缓存命中: dataset\CIC5_payload\image_data\Test\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 129809
+2026-02-16 14:36:18,154 - INFO - fusion_common - 融合数据加载完成，类别数: 4, 样本总数: 129809
+2026-02-16 14:36:18,155 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-02-16 14:36:18,224 - INFO - fusion_common - CharBERT 加载成功: C:\Repositories\Traffic\FusionModel\src\CharBERT\src
+2026-02-16 14:36:18,227 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 4 个类别
+2026-02-16 14:36:18,227 - INFO - fusion_common - 开始训练融合模型
+2026-02-16 14:36:18,227 - INFO - fusion_common - 训练参数 - Epochs: 40, Learning Rate: 0.0003, Early Stopping Patience: 14
+2026-02-16 14:36:18,227 - INFO - fusion_common - 训练策略 - class_balance: weighted_sampler_loss, loss_type: focal, focal_gamma: 1.500, weight_decay: 0.000100, label_smoothing: 0.0300, early_stop_metric: val_f1, lr_scheduler: reduce, val_every: 1
+2026-02-16 14:36:18,227 - INFO - fusion_common - DataLoader参数 - train_batches: 8474, val_batches: 2029, batch_size: 64, num_workers: 4, pin_memory: True
+2026-02-16 14:36:18,480 - INFO - fusion_common - 使用 class-weighted CrossEntropyLoss
+2026-02-16 14:36:18,481 - INFO - fusion_common - 🧭 Epoch 1/40
