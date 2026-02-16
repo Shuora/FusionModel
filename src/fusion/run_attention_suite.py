@@ -118,7 +118,8 @@ def _archive_outputs(
 
 
 def _run(script: Path, cli_args: List[str]) -> None:
-    cmd = [sys.executable, str(script)] + cli_args
+    # Suite manages one consolidated archive at the end; disable per-script archive.
+    cmd = [sys.executable, str(script)] + cli_args + ["--no_archive"]
     print("▶️ 执行命令:", " ".join(cmd))
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
