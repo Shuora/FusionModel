@@ -107,6 +107,9 @@ python src/fusion/train_fusion_attention.py --dataset_name USTC-TFC2016 --preset
 python src/fusion/train_fusion_attention_stacking.py --dataset_name USTC-TFC2016 --preset none --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
+说明：4.1-4.4 这些单跑命令现在也会默认自动归档本次产物到 `outputs/archive/<tag>_<timestamp>/`。  
+可选参数：`--no_archive`（关闭归档）、`--archive_tag <name>`、`--archive_dir <path>`、`--archive_move`（移动而非复制）。
+
 ### 4.5 使用训练配置批跑（推荐）
 
 按 `configs/train_profiles.yaml`：

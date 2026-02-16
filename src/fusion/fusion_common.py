@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import sys
 import copy
 from datetime import datetime
@@ -208,6 +209,85 @@ def device_from_arg(device: str) -> torch.device:
 def ensure_output_dirs(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+
+def _archive_run_artifacts(
+    *,
+    output_dir: Path,
+    artifacts: Iterable[Path],
+    run_label: str,
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    move_files: bool = False,
+    logger_obj=None,
+) -> Optional[Path]:
+    output_dir = output_dir.resolve()
+    archive_root = archive_dir if archive_dir is not None else (output_dir / "archive")
+    archive_root = archive_root if archive_root.is_absolute() else (PROJECT_ROOT / archive_root).resolve()
+
+    unique_paths = []
+    seen = set()
+    for item in artifacts:
+        if item is None:
+            continue
+        path = Path(item)
+        if not path.is_absolute():
+            path = (PROJECT_ROOT / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.exists() or not path.is_file():
+            continue
+        marker = str(path).lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique_paths.append(path)
+
+    if not unique_paths:
+        if logger_obj is not None:
+            logger_obj.warning("🗂️ 未检测到可归档文件，已跳过自动归档")
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_tag = archive_tag.strip() or f"{run_label}_{ts}"
+    archive_path = archive_root / run_tag
+    archive_path.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for src in unique_paths:
+        try:
+            rel = src.relative_to(output_dir)
+        except ValueError:
+            rel = Path(src.name)
+        dst = archive_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if move_files:
+            try:
+                shutil.move(str(src), str(dst))
+            except PermissionError:
+                # On Windows, currently-open log files cannot be moved reliably.
+                shutil.copy2(str(src), str(dst))
+                if logger_obj is not None:
+                    logger_obj.warning("⚠️ 文件占用，改为复制: %s", src)
+        else:
+            shutil.copy2(str(src), str(dst))
+        copied.append(str(rel))
+
+    manifest = {
+        "run_label": run_label,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "output_dir": str(output_dir),
+        "archive_dir": str(archive_path),
+        "move_files": bool(move_files),
+        "file_count": len(copied),
+        "files": copied,
+    }
+    with (archive_path / "manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    if logger_obj is not None:
+        logger_obj.info("🗂️ 已归档文件数: %s, 目录: %s", len(copied), archive_path)
+    return archive_path
 
 
 def log_saved(logger_obj, path: Path, what: str) -> None:
@@ -943,7 +1023,7 @@ def evaluate_epoch(
     use_amp = bool(use_amp and device.type == "cuda")
     non_blocking = bool(device.type == "cuda")
     with torch.no_grad():
-        eval_progress = tqdm(data_loader, desc="评估", leave=False)
+        eval_progress = tqdm(data_loader, desc="🧪 验证", leave=False)
         for images, pcap_data, labels in eval_progress:
             images = images.to(device, non_blocking=non_blocking)
             pcap_data = pcap_data.to(device, non_blocking=non_blocking)
@@ -963,7 +1043,7 @@ def evaluate_epoch(
             all_predictions.extend(predicted.cpu().numpy())
 
             acc = 100.0 * val_corrects / max(val_total, 1)
-            eval_progress.set_postfix({"Loss": f"{loss.item():.4f}", "Acc": f"{acc:.2f}%"})
+            eval_progress.set_postfix({"val_loss": f"{loss.item():.4f}", "val_acc": f"{acc:.2f}%"})
 
     epoch_val_loss = val_loss / max(len(data_loader.dataset), 1)
     accuracy = accuracy_score(all_labels, all_predictions) if all_labels else 0.0
@@ -1070,7 +1150,7 @@ def train_fusion_model(
     }
 
     for epoch in range(num_epochs):
-        logger.info("Epoch %s/%s", epoch + 1, num_epochs)
+        logger.info("🧭 Epoch %s/%s", epoch + 1, num_epochs)
         model.train()
         train_loss = 0.0
         train_total = 0
@@ -1078,7 +1158,7 @@ def train_fusion_model(
         train_labels = []
         train_preds = []
 
-        train_progress = tqdm(train_loader, desc=f"训练 Epoch {epoch + 1}")
+        train_progress = tqdm(train_loader, desc=f"🏋️ 训练 Epoch {epoch + 1}")
         for images, pcap_data, labels in train_progress:
             images = images.to(device, non_blocking=non_blocking)
             pcap_data = pcap_data.to(device, non_blocking=non_blocking)
@@ -1111,7 +1191,7 @@ def train_fusion_model(
             train_preds.extend(predicted.cpu().numpy())
 
             acc = 100.0 * train_corrects / max(train_total, 1)
-            train_progress.set_postfix({"Loss": f"{loss.item():.4f}", "Acc": f"{acc:.2f}%"})
+            train_progress.set_postfix({"train_loss": f"{loss.item():.4f}", "train_acc": f"{acc:.2f}%"})
 
         epoch_train_loss = train_loss / max(len(train_loader.dataset), 1)
         epoch_train_acc = accuracy_score(train_labels, train_preds) if train_labels else 0.0
@@ -1119,6 +1199,7 @@ def train_fusion_model(
 
         run_validation = ((epoch + 1) % max(int(val_every), 1) == 0) or ((epoch + 1) == num_epochs)
         if run_validation:
+            logger.info("🧪 开始验证: epoch=%s", epoch + 1)
             val_loss, val_acc, val_f1, _, _ = evaluate_epoch(model, val_loader, criterion, device, use_amp=use_amp)
         else:
             val_loss, val_acc, val_f1 = float("nan"), float("nan"), float("nan")
@@ -1132,7 +1213,7 @@ def train_fusion_model(
 
         if run_validation:
             logger.info(
-                "Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 验证 Loss: %.4f, 验证 Acc: %.4f, 验证 F1: %.4f",
+                "📊 Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 验证 Loss: %.4f, 验证 Acc: %.4f, 验证 F1: %.4f",
                 epoch + 1,
                 epoch_train_loss,
                 epoch_train_acc,
@@ -1150,21 +1231,21 @@ def train_fusion_model(
                 monitor_value = val_loss
 
             early_stopping(float(monitor_value), model)
-            logger.info("早停计数器: %s/%s", early_stopping.counter, early_stopping.patience)
+            logger.info("⏱️ 早停计数: %s/%s", early_stopping.counter, early_stopping.patience)
 
             if scheduler is not None:
                 if lr_scheduler_mode == "reduce":
                     scheduler.step(float(monitor_value))
                 else:
                     scheduler.step()
-            logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
+            logger.info("📉 当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
             if early_stopping.early_stop:
-                logger.info("早停机制触发，在第 %s 轮后停止训练", epoch + 1)
+                logger.info("🛑 早停触发，在第 %s 轮后停止训练", epoch + 1)
                 break
         else:
             logger.info(
-                "Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 跳过验证 (val_every=%s)",
+                "📊 Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 跳过验证 (val_every=%s)",
                 epoch + 1,
                 epoch_train_loss,
                 epoch_train_acc,
@@ -1173,7 +1254,7 @@ def train_fusion_model(
             )
             if scheduler is not None and lr_scheduler_mode == "cosine":
                 scheduler.step()
-                logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
+                logger.info("📉 当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
     if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
         model.load_state_dict(early_stopping.best_weights)
@@ -1557,6 +1638,10 @@ def add_common_args(p):
     p.add_argument("--val_every", type=int, default=1)
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
+    p.add_argument("--no_archive", action="store_true", help="Disable auto archive for this run")
+    p.add_argument("--archive_dir", default="", help="Archive root directory, default <output_dir>/archive")
+    p.add_argument("--archive_tag", default="", help="Archive folder name, default <tag>_<timestamp>")
+    p.add_argument("--archive_move", action="store_true", help="Move artifacts into archive instead of copy")
     p.add_argument("--attention_dim", type=int, default=256)
     return p
 
@@ -1628,6 +1713,13 @@ def build_common_kwargs(args):
     if args.cic_group:
         print(f"[Data] cic_group={args.cic_group}")
 
+    output_dir = Path(args.output_dir)
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
+    archive_dir = Path(args.archive_dir) if args.archive_dir else None
+    if archive_dir is not None and not archive_dir.is_absolute():
+        archive_dir = (PROJECT_ROOT / archive_dir).resolve()
+
     return dict(
         train_image_dir=train_image_dir,
         train_pcap_dir=train_pcap_dir,
@@ -1640,7 +1732,7 @@ def build_common_kwargs(args):
         lr=args.lr,
         patience=args.patience,
         device=device,
-        output_dir=Path(args.output_dir),
+        output_dir=output_dir,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         persistent_workers=args.persistent_workers,
@@ -1663,6 +1755,10 @@ def build_common_kwargs(args):
         grad_clip_norm=args.grad_clip_norm,
         val_every=args.val_every,
         selected_groups=parse_csv_values(args.cic_group) if args.cic_group else None,
+        no_archive=bool(args.no_archive),
+        archive_dir=archive_dir,
+        archive_tag=args.archive_tag,
+        archive_move=bool(args.archive_move),
     )
 
 
@@ -1709,7 +1805,13 @@ def run_fusion_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    no_archive: bool = False,
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    archive_move: bool = False,
 ) -> None:
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = make_tag(fusion_mode, attention_dim)
@@ -1779,8 +1881,9 @@ def run_fusion_experiment(
         val_every=val_every,
     )
 
+    attention_curve_path = None
     if fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
@@ -1821,6 +1924,22 @@ def run_fusion_experiment(
     model_path = output_dir / f"fusion_model_{tag}.pth"
     torch.save(model.state_dict(), model_path)
     log_saved(run_logger, model_path, f"model_{tag}")
+
+    if not no_archive:
+        artifacts = [log_path, curve_path, cm_path, report_path, model_path]
+        if attention_curve_path is not None:
+            artifacts.append(attention_curve_path)
+        archive_path = _archive_run_artifacts(
+            output_dir=output_dir,
+            artifacts=artifacts,
+            run_label=tag,
+            archive_dir=archive_dir,
+            archive_tag=archive_tag,
+            move_files=archive_move,
+            logger_obj=run_logger,
+        )
+        if archive_path is not None:
+            run_logger.info("🗂️ 本次训练归档目录: %s", archive_path)
 
     run_logger.info("🏁 训练完成 mode=%s, log=%s", fusion_mode, log_path)
     print(f"[{fusion_mode}] done. acc={eval_result['acc']:.4f}, saved={model_path}, log={log_path}")
@@ -1865,7 +1984,13 @@ def run_stacking_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    no_archive: bool = False,
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    archive_move: bool = False,
 ) -> None:
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_tag = make_tag(base_fusion_mode, attention_dim)
@@ -1936,8 +2061,10 @@ def run_stacking_experiment(
         val_every=val_every,
     )
 
+    artifacts: List[Path] = [log_path]
+    attention_curve_path = None
     if base_fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
@@ -1945,10 +2072,13 @@ def run_stacking_experiment(
             prefix=f"{ensemble_tag}_{ts}",
             logger_obj=run_logger,
         )
+        if attention_curve_path is not None:
+            artifacts.append(attention_curve_path)
 
     curve_path = output_dir / f"metrics_curve_{ensemble_tag}_{ts}.png"
     plot_training_curves(history, curve_path, title=f"Training Curves - {ensemble_tag}")
     log_saved(run_logger, curve_path, f"metrics_curve_{ensemble_tag}")
+    artifacts.append(curve_path)
 
     meta_features, meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, train_loader, device)
     test_meta_features, test_meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, test_loader, device)
@@ -1978,6 +2108,7 @@ def run_stacking_experiment(
         cm_path = output_dir / f"confusion_matrix_{tag}_{ts}.png"
         plot_confusion(cm, train_classes, cm_path, f"Confusion Matrix - {tag}")
         log_saved(run_logger, cm_path, f"confusion_matrix_{tag}")
+        artifacts.append(cm_path)
 
         report_path = output_dir / f"report_{tag}_{ts}.md"
         save_report_md(
@@ -1991,6 +2122,7 @@ def run_stacking_experiment(
             curve_image=curve_path.name,
         )
         log_saved(run_logger, report_path, f"report_{tag}")
+        artifacts.append(report_path)
 
         try:
             import pickle
@@ -1999,12 +2131,27 @@ def run_stacking_experiment(
             with open(meta_path, "wb") as f:
                 pickle.dump(meta_model, f)
             log_saved(run_logger, meta_path, f"meta_model_{tag}")
+            artifacts.append(meta_path)
         except Exception as e:
             run_logger.warning("保存 %s 失败: %s", method, e)
 
     base_path = output_dir / f"fusion_model_{ensemble_tag}_base.pth"
     torch.save(model.state_dict(), base_path)
     log_saved(run_logger, base_path, f"model_{ensemble_tag}_base")
+    artifacts.append(base_path)
+
+    if not no_archive:
+        archive_path = _archive_run_artifacts(
+            output_dir=output_dir,
+            artifacts=artifacts,
+            run_label=ensemble_tag,
+            archive_dir=archive_dir,
+            archive_tag=archive_tag,
+            move_files=archive_move,
+            logger_obj=run_logger,
+        )
+        if archive_path is not None:
+            run_logger.info("🗂️ 本次训练归档目录: %s", archive_path)
 
     run_logger.info("🏁 stacking 完成, log=%s", log_path)
     print(f"[{ensemble_tag}] done. saved_base={base_path}, log={log_path}")
