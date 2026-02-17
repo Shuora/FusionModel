@@ -30,9 +30,16 @@ profiles:
     epochs: 40
     lr: 0.0003
     patience: 14
-    class_balance: weighted_sampler_loss
-    loss_type: focal
-    focal_gamma: 1.5
+    class_balance: weighted_loss
+    loss_type: ce
+    label_smoothing: 0.01
+    early_stop_metric: val_f1
+    early_stop_mode: max
+    lr_scheduler: reduce
+    lr_patience: 2
+    lr_factor: 0.5
+    min_lr: 0.000001
+    grad_clip_norm: 1.0
     attention_dim: 256
     output_dir: outputs
     device: auto

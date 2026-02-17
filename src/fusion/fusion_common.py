@@ -123,6 +123,15 @@ def parse_csv_values(value: str) -> List[str]:
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
+def _looks_like_cic_dataset(*values: Optional[Union[str, os.PathLike]]) -> bool:
+    for value in values:
+        if value is None:
+            continue
+        if "cic" in str(value).lower():
+            return True
+    return False
+
+
 def _is_flat_dataset_layout(dataset_dir: Union[str, os.PathLike]) -> bool:
     root = Path(dataset_dir)
     required_dirs = [
@@ -624,11 +633,13 @@ class FocalCrossEntropyLoss(nn.Module):
         ce = F.cross_entropy(
             logits,
             target,
-            weight=self.weight,
             reduction="none",
             label_smoothing=self.label_smoothing,
         )
-        pt = torch.exp(-ce)
+        pt = F.softmax(logits, dim=1).gather(1, target.unsqueeze(1)).squeeze(1).clamp(min=1e-8, max=1.0)
+        if self.weight is not None:
+            sample_weight = self.weight.to(logits.device)[target]
+            ce = ce * sample_weight
         focal = ((1.0 - pt) ** self.gamma) * ce
         return focal.mean()
 
@@ -649,6 +660,7 @@ def load_fusion_data(
     is_train: bool = True,
     balance_mode: str = "none",
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
 ):
     logger.info("加载融合数据 - 图像目录: %s, Pcap目录: %s", image_dir, pcap_dir)
 
@@ -716,12 +728,36 @@ def load_fusion_data(
             rebuild_index_cache=rebuild_index_cache,
         )
 
+    valid_counts = [int(c) for c in getattr(dataset, "class_counts", []) if int(c) > 0]
+    imbalance_ratio = (max(valid_counts) / max(min(valid_counts), 1)) if valid_counts else 0.0
+    class_distribution = ", ".join(f"{cls}:{cnt}" for cls, cnt in zip(dataset.classes, dataset.class_counts))
+    logger.info(
+        "类别分布(%s) - %s | imbalance_ratio=%.2f",
+        "Train" if is_train else "Test",
+        class_distribution,
+        imbalance_ratio,
+    )
+
+    effective_balance_mode = balance_mode
+    if (
+        is_train
+        and (not allow_cic_sampler)
+        and balance_mode in ("weighted_sampler", "weighted_sampler_loss")
+        and _looks_like_cic_dataset(image_dir, pcap_dir)
+    ):
+        effective_balance_mode = "weighted_loss" if balance_mode == "weighted_sampler_loss" else "none"
+        logger.info(
+            "检测到CIC数据集，关闭WeightedRandomSampler避免训练/验证分布偏移: %s -> %s",
+            balance_mode,
+            effective_balance_mode,
+        )
+
     dl_kwargs = dict(batch_size=batch_size, shuffle=bool(is_train), num_workers=int(num_workers), pin_memory=bool(pin_memory))
     if int(num_workers) > 0:
         dl_kwargs["persistent_workers"] = bool(persistent_workers)
         dl_kwargs["prefetch_factor"] = int(prefetch_factor)
 
-    if is_train and balance_mode in ("weighted_sampler", "weighted_sampler_loss"):
+    if is_train and effective_balance_mode in ("weighted_sampler", "weighted_sampler_loss"):
         class_weights = compute_class_weights(dataset.class_counts)
         sample_weights = [float(class_weights[t]) for t in dataset.targets]
         sampler = WeightedRandomSampler(
@@ -1122,7 +1158,8 @@ def train_fusion_model(
     mode = early_stop_mode
     if mode == "auto":
         mode = "min" if early_stop_metric == "val_loss" else "max"
-    early_stopping = EarlyStopping(patience=patience, min_delta=0.001, mode=mode)
+    min_delta = 1e-4 if early_stop_metric in ("val_acc", "val_f1") else 1e-3
+    early_stopping = EarlyStopping(patience=patience, min_delta=min_delta, mode=mode)
 
     scheduler = None
     if lr_scheduler_mode == "reduce":
@@ -1619,6 +1656,11 @@ def add_common_args(p):
     p.add_argument("--no_index_cache", action="store_true", help="Disable sample index cache")
     p.add_argument("--rebuild_index_cache", action="store_true", help="Force rebuild sample index cache")
     p.add_argument(
+        "--allow_cic_sampler",
+        action="store_true",
+        help="Allow WeightedRandomSampler on CIC datasets (default disables sampler to reduce distribution shift)",
+    )
+    p.add_argument(
         "--class_balance",
         choices=["none", "weighted_loss", "weighted_sampler", "weighted_sampler_loss"],
         default="none",
@@ -1653,13 +1695,16 @@ def _arg_explicitly_set(flag: str) -> bool:
 def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
     if getattr(args, "preset", "none") != "cic_balanced":
         return
+    if not _looks_like_cic_dataset(resolved_dataset_name):
+        logger.info("preset=cic_balanced 仅用于CIC数据集，当前数据集 %s，跳过预设注入", resolved_dataset_name)
+        return
 
     preset_values = {
-        "--class_balance": "weighted_sampler_loss",
-        "--loss_type": "focal",
+        "--class_balance": "weighted_loss",
+        "--loss_type": "ce",
         "--focal_gamma": 1.5,
         "--weight_decay": 1e-4,
-        "--label_smoothing": 0.03,
+        "--label_smoothing": 0.01,
         "--early_stop_metric": "val_f1",
         "--early_stop_mode": "max",
         "--lr_scheduler": "reduce",
@@ -1673,8 +1718,9 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
         if not _arg_explicitly_set(flag):
             setattr(args, flag[2:], value)
 
-    if resolved_dataset_name == "CICAndMal2017":
+    if _looks_like_cic_dataset(resolved_dataset_name):
         cic_values = {
+            "--epochs": 40,
             "--lr": 3e-4,
             "--patience": 14,
             "--num_workers": 6,
@@ -1755,6 +1801,7 @@ def build_common_kwargs(args):
         grad_clip_norm=args.grad_clip_norm,
         val_every=args.val_every,
         selected_groups=parse_csv_values(args.cic_group) if args.cic_group else None,
+        allow_cic_sampler=bool(args.allow_cic_sampler),
         no_archive=bool(args.no_archive),
         archive_dir=archive_dir,
         archive_tag=args.archive_tag,
@@ -1805,6 +1852,7 @@ def run_fusion_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
     no_archive: bool = False,
     archive_dir: Optional[Path] = None,
     archive_tag: str = "",
@@ -1835,6 +1883,7 @@ def run_fusion_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -1851,6 +1900,7 @@ def run_fusion_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
@@ -1984,6 +2034,7 @@ def run_stacking_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
     no_archive: bool = False,
     archive_dir: Optional[Path] = None,
     archive_tag: str = "",
@@ -2015,6 +2066,7 @@ def run_stacking_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -2031,6 +2083,7 @@ def run_stacking_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
