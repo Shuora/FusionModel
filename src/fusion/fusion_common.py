@@ -225,6 +225,8 @@ def _archive_run_artifacts(
     output_dir: Path,
     artifacts: Iterable[Path],
     run_label: str,
+    dataset_name: str = "",
+    method_name: str = "",
     archive_dir: Optional[Path] = None,
     archive_tag: str = "",
     move_files: bool = False,
@@ -258,7 +260,12 @@ def _archive_run_artifacts(
         return None
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_tag = archive_tag.strip() or f"{run_label}_{ts}"
+    dataset_part = re.sub(r'[<>:"/\\|?*\s]+', "-", (dataset_name or "").strip())
+    dataset_part = re.sub(r"-{2,}", "-", dataset_part).strip("._-") or "dataset"
+    method_source = method_name or run_label
+    method_part = re.sub(r'[<>:"/\\|?*\s]+', "-", str(method_source).strip())
+    method_part = re.sub(r"-{2,}", "-", method_part).strip("._-") or "method"
+    run_tag = archive_tag.strip() or f"{ts}_{dataset_part}_{method_part}"
     archive_path = archive_root / run_tag
     archive_path.mkdir(parents=True, exist_ok=True)
 
@@ -284,6 +291,8 @@ def _archive_run_artifacts(
 
     manifest = {
         "run_label": run_label,
+        "dataset_name": dataset_name,
+        "method_name": method_name or run_label,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "output_dir": str(output_dir),
         "archive_dir": str(archive_path),
@@ -1693,7 +1702,7 @@ def add_common_args(p):
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--no_archive", action="store_true", help="Disable auto archive for this run")
     p.add_argument("--archive_dir", default="", help="Archive root directory, default <output_dir>/archive")
-    p.add_argument("--archive_tag", default="", help="Archive folder name, default <tag>_<timestamp>")
+    p.add_argument("--archive_tag", default="", help="Archive folder name, default <timestamp>_<dataset>_<method>")
     p.add_argument("--archive_move", action="store_true", help="Move artifacts into archive instead of copy")
     p.add_argument("--attention_dim", type=int, default=256)
     return p
@@ -1778,6 +1787,7 @@ def build_common_kwargs(args):
         archive_dir = (PROJECT_ROOT / archive_dir).resolve()
 
     return dict(
+        dataset_name=resolved_dataset_name,
         train_image_dir=train_image_dir,
         train_pcap_dir=train_pcap_dir,
         test_image_dir=test_image_dir,
@@ -1829,6 +1839,7 @@ def make_tag(fusion_mode: str, attention_dim: int) -> str:
 def run_fusion_experiment(
     *,
     fusion_mode: str,
+    dataset_name: str,
     train_image_dir: str,
     train_pcap_dir: str,
     test_image_dir: str,
@@ -1999,6 +2010,8 @@ def run_fusion_experiment(
             output_dir=output_dir,
             artifacts=artifacts,
             run_label=tag,
+            dataset_name=dataset_name,
+            method_name=fusion_mode,
             archive_dir=archive_dir,
             archive_tag=archive_tag,
             move_files=archive_move,
@@ -2015,6 +2028,7 @@ def run_stacking_experiment(
     *,
     base_fusion_mode: str,
     meta_methods: Iterable[str],
+    dataset_name: str,
     train_image_dir: str,
     train_pcap_dir: str,
     test_image_dir: str,
@@ -2219,6 +2233,8 @@ def run_stacking_experiment(
             output_dir=output_dir,
             artifacts=artifacts,
             run_label=ensemble_tag,
+            dataset_name=dataset_name,
+            method_name=ensemble_tag,
             archive_dir=archive_dir,
             archive_tag=archive_tag,
             move_files=archive_move,

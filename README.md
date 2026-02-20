@@ -107,7 +107,7 @@ python src/fusion/train_fusion_attention.py --dataset_name USTC-TFC2016 --preset
 python src/fusion/train_fusion_attention_stacking.py --dataset_name USTC-TFC2016 --preset none --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
-说明：4.1-4.4 这些单跑命令现在也会默认自动归档本次产物到 `outputs/archive/<tag>_<timestamp>/`。  
+说明：4.1-4.4 这些单跑命令现在也会默认自动归档本次产物到 `outputs/archive/<timestamp>_<dataset>_<method>/`。  
 可选参数：`--no_archive`（关闭归档）、`--archive_tag <name>`、`--archive_dir <path>`、`--archive_move`（移动而非复制）。
 
 ### 4.5 CIC5（full_packet 轨）
@@ -140,7 +140,7 @@ python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all
 ```
 
 说明：以上两个 profile 已内置 `batch_size=64, num_workers=4, prefetch_factor=2`，适配 4060 Laptop 8GB + 16GB 内存的稳定优先场景。
-说明：`run_attention_suite.py` 现在默认会在全部流程结束后自动归档本次输出到 `outputs/archive/<profile>_<mode>_<timestamp>/`。
+说明：`run_attention_suite.py` 现在默认会在全部流程结束后自动归档本次输出到 `outputs/archive/<timestamp>_<dataset>_<method>/`。
 
 常用归档参数：
 
