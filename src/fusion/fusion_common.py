@@ -895,7 +895,7 @@ class FusionModel(nn.Module):
     融合模型：结合 MobileViT（图像）和 CharBERT（Pcap 字节序列）
     """
 
-    def __init__(self, num_classes: int = 10, fusion_mode: str = "concat"):
+    def __init__(self, num_classes: int = 10, fusion_mode: str = "concat", seq_len: int = 784):
         super().__init__()
         self.fusion_mode = fusion_mode
 
@@ -905,7 +905,7 @@ class FusionModel(nn.Module):
 
         self.text_encoder = CharBERTTextEncoder(
             feature_dim=256,
-            seq_len=784,
+            seq_len=seq_len,
             hidden_size=128,
             num_layers=2,
             num_heads=4,
@@ -968,7 +968,13 @@ class FusionModel(nn.Module):
 class AttentionFusionModel(nn.Module):
     """Cross-attention fusion model."""
 
-    def __init__(self, num_classes: int = 10, attention_dim: int = 256, char_hidden_size: int = 128):
+    def __init__(
+        self,
+        num_classes: int = 10,
+        attention_dim: int = 256,
+        char_hidden_size: int = 128,
+        seq_len: int = 784,
+    ):
         super().__init__()
 
         mv_cfg = MobileViTConfig()
@@ -979,7 +985,7 @@ class AttentionFusionModel(nn.Module):
 
         self.text_encoder = CharBERTTextEncoder(
             feature_dim=char_hidden_size,
-            seq_len=784,
+            seq_len=seq_len,
             hidden_size=char_hidden_size,
             num_layers=2,
             num_heads=4,
@@ -1031,12 +1037,17 @@ class AttentionFusionModel(nn.Module):
         return logits
 
 
-def initialize_fusion_model(num_classes: int, fusion_mode: str = "concat", attention_dim: int = 256) -> nn.Module:
+def initialize_fusion_model(
+    num_classes: int,
+    fusion_mode: str = "concat",
+    attention_dim: int = 256,
+    seq_len: int = 784,
+) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
     if fusion_mode == "attention":
-        model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim)
+        model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim, seq_len=seq_len)
     else:
-        model = FusionModel(num_classes=num_classes, fusion_mode=fusion_mode)
+        model = FusionModel(num_classes=num_classes, fusion_mode=fusion_mode, seq_len=seq_len)
     logger.info("融合模型初始化完成，分类头设置为 %s 个类别", num_classes)
     return model
 
@@ -1906,7 +1917,12 @@ def run_fusion_experiment(
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        fusion_mode,
+        attention_dim=attention_dim,
+        seq_len=max_pcap_length,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
@@ -2089,7 +2105,12 @@ def run_stacking_experiment(
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, base_fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        base_fusion_mode,
+        attention_dim=attention_dim,
+        seq_len=max_pcap_length,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
