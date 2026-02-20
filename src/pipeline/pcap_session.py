@@ -24,6 +24,14 @@ class SessionKey:
         return f"{self.proto}_{self.src_ip}_{self.src_port}_{self.dst_ip}_{self.dst_port}"
 
 
+@dataclass(frozen=True)
+class SessionRecord:
+    key: SessionKey
+    payload: bytes
+    first_ts: float
+    last_ts: float
+
+
 def ip_to_str(ip_bytes: bytes) -> str:
     try:
         return socket.inet_ntoa(ip_bytes).replace(".", "-")
@@ -76,15 +84,14 @@ def _extract_chunk(transport, raw_buf: bytes, byte_mode: ByteMode, sanitize_head
     return raw_buf
 
 
-def extract_sessions_from_pcap(
+def _collect_session_chunks_from_pcap(
     pcap_path: Path,
     *,
     byte_mode: ByteMode = "payload",
     merge_bidirectional: bool = True,
     sanitize_headers: bool = True,
     min_chunk_bytes: int = 1,
-    min_session_bytes: int = 1,
-) -> Dict[SessionKey, bytes]:
+) -> Dict[SessionKey, List[Tuple[float, bytes]]]:
     sessions: Dict[SessionKey, List[Tuple[float, bytes]]] = {}
     with pcap_path.open("rb") as f:
         pcap = dpkt.pcap.Reader(f)
@@ -124,13 +131,65 @@ def extract_sessions_from_pcap(
             if len(chunk) < int(min_chunk_bytes):
                 continue
             sessions.setdefault(key, []).append((float(ts), chunk))
+    return sessions
 
-    merged: Dict[SessionKey, bytes] = {}
+
+def extract_session_records_from_pcap(
+    pcap_path: Path,
+    *,
+    byte_mode: ByteMode = "payload",
+    merge_bidirectional: bool = True,
+    sanitize_headers: bool = True,
+    min_chunk_bytes: int = 1,
+    min_session_bytes: int = 1,
+) -> List[SessionRecord]:
+    sessions = _collect_session_chunks_from_pcap(
+        pcap_path,
+        byte_mode=byte_mode,
+        merge_bidirectional=merge_bidirectional,
+        sanitize_headers=sanitize_headers,
+        min_chunk_bytes=min_chunk_bytes,
+    )
+
+    records: List[SessionRecord] = []
     for key, chunks in sessions.items():
         chunks.sort(key=lambda item: item[0])
         payload = b"".join(part for _, part in chunks)
-        if len(payload) >= int(min_session_bytes):
-            merged[key] = payload
+        if len(payload) < int(min_session_bytes):
+            continue
+        records.append(
+            SessionRecord(
+                key=key,
+                payload=payload,
+                first_ts=float(chunks[0][0]),
+                last_ts=float(chunks[-1][0]),
+            )
+        )
+    records.sort(key=lambda r: (r.first_ts, r.key.to_id()))
+    return records
+
+
+def extract_sessions_from_pcap(
+    pcap_path: Path,
+    *,
+    byte_mode: ByteMode = "payload",
+    merge_bidirectional: bool = True,
+    sanitize_headers: bool = True,
+    min_chunk_bytes: int = 1,
+    min_session_bytes: int = 1,
+) -> Dict[SessionKey, bytes]:
+    records = extract_session_records_from_pcap(
+        pcap_path,
+        byte_mode=byte_mode,
+        merge_bidirectional=merge_bidirectional,
+        sanitize_headers=sanitize_headers,
+        min_chunk_bytes=min_chunk_bytes,
+        min_session_bytes=min_session_bytes,
+    )
+
+    merged: Dict[SessionKey, bytes] = {}
+    for record in records:
+        merged[record.key] = record.payload
     return merged
 
 

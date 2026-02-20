@@ -20,6 +20,48 @@ profiles:
     persistent_workers: true
     prefetch_factor: 2
 
+  ustc_strict_nofallback_eval:
+    dataset_root: dataset
+    dataset_name: USTC-TFC2016-strict-nofallback
+    preset: none
+    batch_size: 64
+    image_size: 28
+    max_pcap_length: 784
+    epochs: 32
+    lr: 0.001
+    patience: 8
+    class_balance: none
+    loss_type: ce
+    attention_dim: 256
+    output_dir: outputs
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  ustc_strict_time80_eval:
+    dataset_root: dataset
+    dataset_name: USTC-TFC2016-strict-time80
+    preset: none
+    batch_size: 64
+    image_size: 28
+    max_pcap_length: 784
+    epochs: 32
+    lr: 0.001
+    patience: 8
+    class_balance: none
+    loss_type: ce
+    attention_dim: 256
+    output_dir: outputs
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
   cic5_balanced:
     dataset_root: dataset
     dataset_name: CIC5_payload
@@ -27,6 +69,35 @@ profiles:
     batch_size: 64
     image_size: 28
     max_pcap_length: 784
+    epochs: 40
+    lr: 0.0003
+    patience: 14
+    class_balance: weighted_loss
+    loss_type: ce
+    label_smoothing: 0.01
+    early_stop_metric: val_f1
+    early_stop_mode: max
+    lr_scheduler: reduce
+    lr_patience: 2
+    lr_factor: 0.5
+    min_lr: 0.000001
+    grad_clip_norm: 1.0
+    attention_dim: 256
+    output_dir: outputs
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  cic4_fullpacket_l1024_balanced:
+    dataset_root: dataset
+    dataset_name: CIC4_fullpacket_l1024_hraw
+    preset: cic_balanced
+    batch_size: 64
+    image_size: 32
+    max_pcap_length: 1024
     epochs: 40
     lr: 0.0003
     patience: 14

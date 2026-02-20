@@ -177,3 +177,117 @@ python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all --no
   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
   ```
 - Windows 路径建议避免中文和空格，减少第三方库路径问题。
+
+## 7. USTC strict split check (commands)
+
+下面这组命令用于验证 USTC 高分是否受切分口径影响。  
+不会改动原数据集 `dataset/USTC-TFC2016`，只会在 `dataset/` 下新建目录。
+
+```powershell
+Set-Location C:\Repositories\Traffic\FusionModel
+```
+
+### 7.1 Build strict datasets (new folders only)
+
+```powershell
+# A) no fallback: single-pcap class -> Train only
+python src/pipeline/dataset_builder.py --profile ustc_strict_nofallback --dataset_root dataset
+
+# B) time split fallback: same pcap, first 80% sessions -> Train, last 20% -> Test
+python src/pipeline/dataset_builder.py --profile ustc_strict_time80 --dataset_root dataset
+```
+
+### 7.2 Audit split leakage
+
+```powershell
+python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016 --output outputs/split_audit_USTC-TFC2016.json
+python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016-strict-nofallback --output outputs/split_audit_USTC-TFC2016-strict-nofallback.json
+python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016-strict-time80 --output outputs/split_audit_USTC-TFC2016-strict-time80.json
+```
+
+### 7.3 Fair model comparison (same model/hparams, different split)
+
+```powershell
+# baseline split
+python src/fusion/run_attention_suite.py --profile ustc_baseline --mode attention --archive_tag ustc_baseline_splitcheck
+
+# strict time split
+python src/fusion/run_attention_suite.py --profile ustc_strict_time80_eval --mode attention --archive_tag ustc_strict_time80_splitcheck
+```
+
+### 7.4 Optional: stacking comparison
+
+```powershell
+python src/fusion/run_attention_suite.py --profile ustc_baseline --mode attention_stacking --archive_tag ustc_baseline_splitcheck_stack
+python src/fusion/run_attention_suite.py --profile ustc_strict_time80_eval --mode attention_stacking --archive_tag ustc_strict_time80_splitcheck_stack
+```
+
+### 7.5 Note
+
+- `ustc_strict_nofallback` 默认是 `train_only`，Test 为空，主要用于反证切分回退依赖，不用于最终 ACC/F1 对比。  
+- 主对比口径：`USTC-TFC2016` vs `USTC-TFC2016-strict-time80`。
+
+## 8. CIC4 full_packet l1024 (CIC-only, keep USTC unchanged)
+
+本方案只改 CIC，不改 USTC。
+
+```powershell
+Set-Location C:\Repositories\Traffic\FusionModel
+```
+
+### 8.1 Build dataset (new folder)
+
+```powershell
+python src/pipeline/dataset_builder.py --profile cic4_fullpacket_l1024_hraw --dataset_root dataset
+```
+
+输出目录：`dataset/CIC4_fullpacket_l1024_hraw`
+
+### 8.2 Train attention (new train profile)
+
+```powershell
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_attn
+```
+
+### 8.3 Optional: attention + stacking
+
+```powershell
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention_stacking --archive_tag cic4_fp_l1024_stack
+```
+
+### 8.4 Compare with previous CIC baseline
+
+```powershell
+# old CIC payload baseline
+python src/fusion/run_attention_suite.py --profile cic5_balanced --mode attention --archive_tag cic5_payload_baseline
+
+# new CIC full_packet l1024
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_compare
+```
+
+## 9. CIC only runbook (copy and run)
+
+```powershell
+Set-Location C:\Repositories\Traffic\FusionModel
+```
+
+```powershell
+# 1) build / resume CIC4 full_packet dataset (safe to rerun; existing files will be skipped)
+python src/pipeline/dataset_builder.py --profile cic4_fullpacket_l1024_hraw --dataset_root dataset
+```
+
+```powershell
+# 2) train attention (primary)
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_attn
+```
+
+```powershell
+# 3) optional: attention + stacking
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention_stacking --archive_tag cic4_fp_l1024_stack
+```
+
+```powershell
+# 4) optional: compare with old CIC payload baseline
+python src/fusion/run_attention_suite.py --profile cic5_balanced --mode attention --archive_tag cic5_payload_baseline
+python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_compare
+```

@@ -1,0 +1,143 @@
+2026-02-17 20:06:26,816 - INFO - run_attention - 🚀 开始训练模式=attention, outputs=C:\Repositories\Traffic\FusionModel\outputs
+2026-02-17 20:06:26,816 - INFO - fusion_common - 加载融合数据 - 图像目录: dataset\USTC-TFC2016\image_data\Train, Pcap目录: dataset\USTC-TFC2016\pcap_data\Train
+2026-02-17 20:06:26,963 - INFO - fusion_common - 融合索引缓存命中: dataset\USTC-TFC2016\image_data\Train\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 52338
+2026-02-17 20:06:26,965 - INFO - fusion_common - 类别分布(Train) - Cridex:6548, Geodo:5296, Htbot:4794, Miuref:899, Neris:6275, Nsis-ay:4817, Shifu:7607, Tinba:6846, Virut:4712, Zeus:4544 | imbalance_ratio=8.46
+2026-02-17 20:06:26,967 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 52338
+2026-02-17 20:06:26,967 - INFO - fusion_common - 加载融合数据 - 图像目录: dataset\USTC-TFC2016\image_data\Test, Pcap目录: dataset\USTC-TFC2016\pcap_data\Test
+2026-02-17 20:06:26,988 - INFO - fusion_common - 融合索引缓存命中: dataset\USTC-TFC2016\image_data\Test\.fusion_index_cache_v1_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 12982
+2026-02-17 20:06:26,988 - INFO - fusion_common - 类别分布(Test) - Cridex:1648, Geodo:1393, Htbot:1130, Miuref:209, Neris:1511, Nsis-ay:1194, Shifu:1968, Tinba:1657, Virut:1165, Zeus:1107 | imbalance_ratio=9.42
+2026-02-17 20:06:26,988 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 12982
+2026-02-17 20:06:26,988 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-02-17 20:06:27,070 - INFO - fusion_common - CharBERT 加载成功: C:\Repositories\Traffic\FusionModel\src\CharBERT\src
+2026-02-17 20:06:27,073 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 10 个类别
+2026-02-17 20:06:27,073 - INFO - fusion_common - 开始训练融合模型
+2026-02-17 20:06:27,073 - INFO - fusion_common - 训练参数 - Epochs: 32, Learning Rate: 0.001, Early Stopping Patience: 8
+2026-02-17 20:06:27,074 - INFO - fusion_common - 训练策略 - class_balance: none, loss_type: ce, focal_gamma: 2.000, weight_decay: 0.000000, label_smoothing: 0.0000, early_stop_metric: val_loss, lr_scheduler: none, val_every: 1
+2026-02-17 20:06:27,074 - INFO - fusion_common - DataLoader参数 - train_batches: 818, val_batches: 203, batch_size: 64, num_workers: 4, pin_memory: True
+2026-02-17 20:06:27,423 - INFO - fusion_common - 🧭 Epoch 1/32
+2026-02-17 20:09:20,339 - INFO - fusion_common - 🧪 开始验证: epoch=1
+2026-02-17 20:09:45,472 - INFO - fusion_common - 📊 Epoch 1 结果: 训练 Loss: 0.3610, 训练 Acc: 0.8692, 训练 F1: 0.8617 | 验证 Loss: 0.1255, 验证 Acc: 0.9582, 验证 F1: 0.9548
+2026-02-17 20:09:45,492 - INFO - fusion_common - ⏱️ 早停计数: 0/8
+2026-02-17 20:09:45,492 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:09:45,492 - INFO - fusion_common - 🧭 Epoch 2/32
+2026-02-17 20:10:56,181 - INFO - fusion_common - 🧪 开始验证: epoch=2
+2026-02-17 20:11:01,918 - INFO - fusion_common - 📊 Epoch 2 结果: 训练 Loss: 0.1363, 训练 Acc: 0.9522, 训练 F1: 0.9500 | 验证 Loss: 0.1552, 验证 Acc: 0.9575, 验证 F1: 0.9549
+2026-02-17 20:11:01,918 - INFO - fusion_common - ⏱️ 早停计数: 1/8
+2026-02-17 20:11:01,918 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:11:01,918 - INFO - fusion_common - 🧭 Epoch 3/32
+2026-02-17 20:12:12,884 - INFO - fusion_common - 🧪 开始验证: epoch=3
+2026-02-17 20:12:18,333 - INFO - fusion_common - 📊 Epoch 3 结果: 训练 Loss: 0.1073, 训练 Acc: 0.9611, 训练 F1: 0.9592 | 验证 Loss: 0.0830, 验证 Acc: 0.9723, 验证 F1: 0.9706
+2026-02-17 20:12:18,352 - INFO - fusion_common - ⏱️ 早停计数: 0/8
+2026-02-17 20:12:18,352 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:12:18,352 - INFO - fusion_common - 🧭 Epoch 4/32
+2026-02-17 20:13:29,491 - INFO - fusion_common - 🧪 开始验证: epoch=4
+2026-02-17 20:13:35,024 - INFO - fusion_common - 📊 Epoch 4 结果: 训练 Loss: 0.0946, 训练 Acc: 0.9660, 训练 F1: 0.9638 | 验证 Loss: 0.0875, 验证 Acc: 0.9749, 验证 F1: 0.9736
+2026-02-17 20:13:35,024 - INFO - fusion_common - ⏱️ 早停计数: 1/8
+2026-02-17 20:13:35,024 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:13:35,024 - INFO - fusion_common - 🧭 Epoch 5/32
+2026-02-17 20:14:45,524 - INFO - fusion_common - 🧪 开始验证: epoch=5
+2026-02-17 20:14:50,933 - INFO - fusion_common - 📊 Epoch 5 结果: 训练 Loss: 0.0864, 训练 Acc: 0.9681, 训练 F1: 0.9665 | 验证 Loss: 3.7738, 验证 Acc: 0.8908, 验证 F1: 0.8855
+2026-02-17 20:14:50,933 - INFO - fusion_common - ⏱️ 早停计数: 2/8
+2026-02-17 20:14:50,933 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:14:50,933 - INFO - fusion_common - 🧭 Epoch 6/32
+2026-02-17 20:16:01,991 - INFO - fusion_common - 🧪 开始验证: epoch=6
+2026-02-17 20:16:07,776 - INFO - fusion_common - 📊 Epoch 6 结果: 训练 Loss: 0.0861, 训练 Acc: 0.9700, 训练 F1: 0.9685 | 验证 Loss: 0.0718, 验证 Acc: 0.9758, 验证 F1: 0.9745
+2026-02-17 20:16:07,802 - INFO - fusion_common - ⏱️ 早停计数: 0/8
+2026-02-17 20:16:07,802 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:16:07,802 - INFO - fusion_common - 🧭 Epoch 7/32
+2026-02-17 20:17:19,283 - INFO - fusion_common - 🧪 开始验证: epoch=7
+2026-02-17 20:17:24,904 - INFO - fusion_common - 📊 Epoch 7 结果: 训练 Loss: 0.0800, 训练 Acc: 0.9713, 训练 F1: 0.9697 | 验证 Loss: 0.0976, 验证 Acc: 0.9740, 验证 F1: 0.9735
+2026-02-17 20:17:24,905 - INFO - fusion_common - ⏱️ 早停计数: 1/8
+2026-02-17 20:17:24,905 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:17:24,905 - INFO - fusion_common - 🧭 Epoch 8/32
+2026-02-17 20:18:36,178 - INFO - fusion_common - 🧪 开始验证: epoch=8
+2026-02-17 20:18:41,593 - INFO - fusion_common - 📊 Epoch 8 结果: 训练 Loss: 0.0693, 训练 Acc: 0.9748, 训练 F1: 0.9732 | 验证 Loss: 0.0814, 验证 Acc: 0.9787, 验证 F1: 0.9781
+2026-02-17 20:18:41,593 - INFO - fusion_common - ⏱️ 早停计数: 2/8
+2026-02-17 20:18:41,593 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:18:41,594 - INFO - fusion_common - 🧭 Epoch 9/32
+2026-02-17 20:19:52,773 - INFO - fusion_common - 🧪 开始验证: epoch=9
+2026-02-17 20:19:58,565 - INFO - fusion_common - 📊 Epoch 9 结果: 训练 Loss: 0.0701, 训练 Acc: 0.9747, 训练 F1: 0.9733 | 验证 Loss: 0.0630, 验证 Acc: 0.9772, 验证 F1: 0.9763
+2026-02-17 20:19:58,591 - INFO - fusion_common - ⏱️ 早停计数: 0/8
+2026-02-17 20:19:58,592 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:19:58,592 - INFO - fusion_common - 🧭 Epoch 10/32
+2026-02-17 20:21:10,287 - INFO - fusion_common - 🧪 开始验证: epoch=10
+2026-02-17 20:21:15,914 - INFO - fusion_common - 📊 Epoch 10 结果: 训练 Loss: 0.0688, 训练 Acc: 0.9752, 训练 F1: 0.9741 | 验证 Loss: 0.0865, 验证 Acc: 0.9767, 验证 F1: 0.9750
+2026-02-17 20:21:15,914 - INFO - fusion_common - ⏱️ 早停计数: 1/8
+2026-02-17 20:21:15,914 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:21:15,914 - INFO - fusion_common - 🧭 Epoch 11/32
+2026-02-17 20:22:27,200 - INFO - fusion_common - 🧪 开始验证: epoch=11
+2026-02-17 20:22:32,811 - INFO - fusion_common - 📊 Epoch 11 结果: 训练 Loss: 0.0736, 训练 Acc: 0.9742, 训练 F1: 0.9716 | 验证 Loss: 0.1096, 验证 Acc: 0.9763, 验证 F1: 0.9749
+2026-02-17 20:22:32,811 - INFO - fusion_common - ⏱️ 早停计数: 2/8
+2026-02-17 20:22:32,812 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:22:32,812 - INFO - fusion_common - 🧭 Epoch 12/32
+2026-02-17 20:23:43,865 - INFO - fusion_common - 🧪 开始验证: epoch=12
+2026-02-17 20:23:49,587 - INFO - fusion_common - 📊 Epoch 12 结果: 训练 Loss: 0.0594, 训练 Acc: 0.9777, 训练 F1: 0.9766 | 验证 Loss: 0.0736, 验证 Acc: 0.9779, 验证 F1: 0.9772
+2026-02-17 20:23:49,587 - INFO - fusion_common - ⏱️ 早停计数: 3/8
+2026-02-17 20:23:49,587 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:23:49,587 - INFO - fusion_common - 🧭 Epoch 13/32
+2026-02-17 20:25:00,855 - INFO - fusion_common - 🧪 开始验证: epoch=13
+2026-02-17 20:25:06,276 - INFO - fusion_common - 📊 Epoch 13 结果: 训练 Loss: 0.0608, 训练 Acc: 0.9779, 训练 F1: 0.9769 | 验证 Loss: 0.0687, 验证 Acc: 0.9804, 验证 F1: 0.9792
+2026-02-17 20:25:06,276 - INFO - fusion_common - ⏱️ 早停计数: 4/8
+2026-02-17 20:25:06,276 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:25:06,276 - INFO - fusion_common - 🧭 Epoch 14/32
+2026-02-17 20:26:17,387 - INFO - fusion_common - 🧪 开始验证: epoch=14
+2026-02-17 20:26:22,793 - INFO - fusion_common - 📊 Epoch 14 结果: 训练 Loss: 0.0586, 训练 Acc: 0.9786, 训练 F1: 0.9771 | 验证 Loss: 0.1108, 验证 Acc: 0.9707, 验证 F1: 0.9703
+2026-02-17 20:26:22,793 - INFO - fusion_common - ⏱️ 早停计数: 5/8
+2026-02-17 20:26:22,793 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:26:22,793 - INFO - fusion_common - 🧭 Epoch 15/32
+2026-02-17 20:27:33,863 - INFO - fusion_common - 🧪 开始验证: epoch=15
+2026-02-17 20:27:39,416 - INFO - fusion_common - 📊 Epoch 15 结果: 训练 Loss: 0.0556, 训练 Acc: 0.9797, 训练 F1: 0.9788 | 验证 Loss: 0.0724, 验证 Acc: 0.9809, 验证 F1: 0.9805
+2026-02-17 20:27:39,416 - INFO - fusion_common - ⏱️ 早停计数: 6/8
+2026-02-17 20:27:39,416 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:27:39,416 - INFO - fusion_common - 🧭 Epoch 16/32
+2026-02-17 20:28:50,963 - INFO - fusion_common - 🧪 开始验证: epoch=16
+2026-02-17 20:28:56,598 - INFO - fusion_common - 📊 Epoch 16 结果: 训练 Loss: 0.0576, 训练 Acc: 0.9785, 训练 F1: 0.9766 | 验证 Loss: 0.0930, 验证 Acc: 0.9753, 验证 F1: 0.9745
+2026-02-17 20:28:56,599 - INFO - fusion_common - ⏱️ 早停计数: 7/8
+2026-02-17 20:28:56,599 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:28:56,599 - INFO - fusion_common - 🧭 Epoch 17/32
+2026-02-17 20:30:08,305 - INFO - fusion_common - 🧪 开始验证: epoch=17
+2026-02-17 20:30:13,840 - INFO - fusion_common - 📊 Epoch 17 结果: 训练 Loss: 0.0585, 训练 Acc: 0.9791, 训练 F1: 0.9780 | 验证 Loss: 0.0674, 验证 Acc: 0.9787, 验证 F1: 0.9779
+2026-02-17 20:30:13,851 - INFO - fusion_common - ⏱️ 早停计数: 8/8
+2026-02-17 20:30:13,851 - INFO - fusion_common - 📉 当前学习率: 0.00100000
+2026-02-17 20:30:13,851 - INFO - fusion_common - 🛑 早停触发，在第 17 轮后停止训练
+2026-02-17 20:30:13,861 - INFO - fusion_common - ✅ 已恢复最佳验证权重: metric=val_loss, best_score=0.063019, mode=min
+2026-02-17 20:30:13,861 - INFO - fusion_common - 融合模型训练完成
+2026-02-17 20:30:16,302 - INFO - run_attention - [AttentionDiag] mean=0.001276 min=0.000444 max=0.002520 entropy=6.6334 top1=0.0020 top5=0.0093 top10=0.0181 nonpad_mass=1.0000 pad_mass=0.0000 nonpad_frac=1.0000
+2026-02-17 20:30:17,376 - INFO - run_attention - [AttentionDiag] saved attention curve: C:\Repositories\Traffic\FusionModel\outputs\attention_curve_attention_dim256_20260217_200626.png
+2026-02-17 20:30:23,226 - INFO - run_attention - 📊 评估结果:
+2026-02-17 20:30:23,226 - INFO - run_attention -   - 准确率(ACC): 0.9772
+2026-02-17 20:30:23,227 - INFO - run_attention -   - Macro F1: 0.9763
+2026-02-17 20:30:23,227 - INFO - run_attention -   分类报告:
+              precision    recall  f1-score   support
+
+           0     1.0000    0.9994    0.9997      1648
+           1     0.9914    0.9914    0.9914      1393
+           2     0.9937    0.9823    0.9880      1130
+           3     0.9765    0.9952    0.9858       209
+           4     0.9783    0.8657    0.9185      1511
+           5     0.9824    0.9799    0.9811      1194
+           6     0.9995    0.9975    0.9985      1968
+           7     0.9946    0.9988    0.9967      1657
+           8     0.8495    0.9785    0.9095      1165
+           9     0.9910    0.9973    0.9941      1107
+
+    accuracy                         0.9772     12982
+   macro avg     0.9757    0.9786    0.9763     12982
+weighted avg     0.9790    0.9772    0.9773     12982
+
+2026-02-17 20:30:23,227 - INFO - run_attention -   混淆矩阵:
+[[1647    0    0    0    0    0    0    1    0    0]
+ [   0 1381    3    1    0    0    0    7    0    1]
+ [   0    9 1110    1    5    0    0    0    3    2]
+ [   0    0    0  208    1    0    0    0    0    0]
+ [   0    2    1    1 1308   13    1    0  184    1]
+ [   0    1    1    1   10 1170    0    0   11    0]
+ [   0    0    2    1    0    0 1963    1    1    0]
+ [   0    0    0    0    0    0    0 1655    0    2]
+ [   0    0    0    0   13    8    0    0 1140    4]
+ [   0    0    0    0    0    0    0    0    3 1104]]
+2026-02-17 20:30:23,440 - INFO - run_attention - ✅ 已保存 metrics_curve_attention_dim256: C:\Repositories\Traffic\FusionModel\outputs\metrics_curve_attention_dim256_20260217_200626.png (exists=True)
+2026-02-17 20:30:23,613 - INFO - run_attention - ✅ 已保存 confusion_matrix_attention_dim256: C:\Repositories\Traffic\FusionModel\outputs\confusion_matrix_attention_dim256_20260217_200626.png (exists=True)
+2026-02-17 20:30:23,614 - INFO - run_attention - ✅ 已保存 report_attention_dim256: C:\Repositories\Traffic\FusionModel\outputs\report_attention_dim256_20260217_200626.md (exists=True)
+2026-02-17 20:30:23,669 - INFO - run_attention - ✅ 已保存 model_attention_dim256: C:\Repositories\Traffic\FusionModel\outputs\fusion_model_attention_dim256.pth (exists=True)
+2026-02-17 20:30:23,669 - INFO - run_attention - 🏁 训练完成 mode=attention, log=C:\Repositories\Traffic\FusionModel\outputs\logs\attention_dim256_20260217_200626.log

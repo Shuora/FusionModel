@@ -6,16 +6,17 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List, Literal, Tuple
 
 import yaml
 from tqdm import tqdm
 
 from feature_rgb import build_rgb_image, save_rgb_image
 from pcap_session import (
+    SessionRecord,
     collect_cic_pcaps,
     collect_ustc_pcaps,
-    extract_sessions_from_pcap,
+    extract_session_records_from_pcap,
     normalize_session_bytes,
     session_sha1,
     split_class_files,
@@ -24,6 +25,9 @@ from pcap_session import (
 
 LOGGER = logging.getLogger("dataset_builder")
 
+SessionFallbackStrategy = Literal["hash", "time", "none"]
+SinglePcapPolicy = Literal["train_only", "test_only"]
+
 
 @dataclass
 class BuildStats:
@@ -31,6 +35,8 @@ class BuildStats:
     dataset_name: str
     source_dir: str
     byte_mode: str
+    session_fallback_strategy: str
+    single_pcap_policy: str
     processed_pcap: int = 0
     processed_session: int = 0
     saved_session: int = 0
@@ -61,10 +67,10 @@ def _load_profiles(path: Path) -> Dict[str, dict]:
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"配置文件格式错误: {path}")
+        raise ValueError(f"Invalid profiles file: {path}")
     profiles = data.get("profiles", data)
     if not isinstance(profiles, dict):
-        raise ValueError(f"profiles 字段格式错误: {path}")
+        raise ValueError(f"Invalid `profiles` section in: {path}")
     return profiles
 
 
@@ -86,16 +92,20 @@ def _validate_pairs(dataset_dir: Path) -> Dict[str, Dict[str, int]]:
         pcap_split = dataset_dir / "pcap_data" / split
         image_classes = {p.name for p in image_split.iterdir() if p.is_dir()} if image_split.exists() else set()
         pcap_classes = {p.name for p in pcap_split.iterdir() if p.is_dir()} if pcap_split.exists() else set()
-        class_names = sorted(
-            image_classes | pcap_classes
-        )
+        class_names = sorted(image_classes | pcap_classes)
         for class_name in class_names:
             image_dir = image_split / class_name
             pcap_dir = pcap_split / class_name
             image_count = len(list(image_dir.glob("*.png"))) if image_dir.exists() else 0
             pcap_count = len(list(pcap_dir.glob("*.bin"))) if pcap_dir.exists() else 0
             if image_count != pcap_count:
-                LOGGER.warning("⚠️ 类别计数不一致 %s/%s: image=%s pcap=%s", split, class_name, image_count, pcap_count)
+                LOGGER.warning(
+                    "Class count mismatch %s/%s: image=%s pcap=%s",
+                    split,
+                    class_name,
+                    image_count,
+                    pcap_count,
+                )
             split_counts[split][class_name] = min(image_count, pcap_count)
     return split_counts
 
@@ -104,7 +114,7 @@ def _collect_pcaps(profile: dict) -> Dict[str, List[Path]]:
     dataset_type = str(profile.get("dataset_type", "")).strip().lower()
     source_dir = Path(profile["source_dir"]).resolve()
     if not source_dir.exists():
-        raise FileNotFoundError(f"source_dir 不存在: {source_dir}")
+        raise FileNotFoundError(f"source_dir does not exist: {source_dir}")
 
     if dataset_type == "ustc_flat":
         class_to_pcaps = collect_ustc_pcaps(source_dir)
@@ -115,11 +125,93 @@ def _collect_pcaps(profile: dict) -> Dict[str, List[Path]]:
             label_map=profile.get("label_map"),
         )
     else:
-        raise ValueError(f"不支持的 dataset_type: {dataset_type}")
+        raise ValueError(f"Unsupported dataset_type: {dataset_type}")
 
     if not class_to_pcaps:
-        raise RuntimeError(f"未找到可处理 pcap: source_dir={source_dir}, dataset_type={dataset_type}")
+        raise RuntimeError(f"No pcap found: source_dir={source_dir}, dataset_type={dataset_type}")
     return class_to_pcaps
+
+
+def _parse_fallback_strategy(profile: dict) -> SessionFallbackStrategy:
+    raw = str(profile.get("session_fallback_strategy", "hash")).strip().lower()
+    allowed = {"hash", "time", "none"}
+    if raw not in allowed:
+        raise ValueError(f"Invalid session_fallback_strategy: {raw}. Allowed: {sorted(allowed)}")
+    return raw  # type: ignore[return-value]
+
+
+def _parse_single_pcap_policy(profile: dict) -> SinglePcapPolicy:
+    raw = str(profile.get("single_pcap_policy", "train_only")).strip().lower()
+    allowed = {"train_only", "test_only"}
+    if raw not in allowed:
+        raise ValueError(f"Invalid single_pcap_policy: {raw}. Allowed: {sorted(allowed)}")
+    return raw  # type: ignore[return-value]
+
+
+def _policy_to_split(single_pcap_policy: SinglePcapPolicy) -> str:
+    return "Train" if single_pcap_policy == "train_only" else "Test"
+
+
+def _compute_train_cut(total: int, train_ratio: float) -> int:
+    if total <= 1:
+        return total
+    cut = int(round(total * float(train_ratio)))
+    return max(1, min(total - 1, cut))
+
+
+def _build_time_split_map(
+    records: List[SessionRecord],
+    split_ratio: float,
+    *,
+    single_pcap_policy: SinglePcapPolicy,
+) -> Dict[str, str]:
+    if not records:
+        return {}
+    ordered = sorted(records, key=lambda item: (item.first_ts, item.key.to_id()))
+    if len(ordered) <= 1:
+        fallback_split = _policy_to_split(single_pcap_policy)
+        return {ordered[0].key.to_id(): fallback_split}
+    cut = _compute_train_cut(len(ordered), split_ratio)
+    assignment: Dict[str, str] = {}
+    for idx, rec in enumerate(ordered):
+        assignment[rec.key.to_id()] = "Train" if idx < cut else "Test"
+    return assignment
+
+
+def _iter_effective_splits(
+    records: List[SessionRecord],
+    *,
+    split_name: str,
+    split_ratio: float,
+    target_length: int,
+    session_fallback_strategy: SessionFallbackStrategy,
+    single_pcap_policy: SinglePcapPolicy,
+) -> List[Tuple[SessionRecord, str, bytes]]:
+    if not records:
+        return []
+
+    time_assignment: Dict[str, str] = {}
+    if split_name == "SESSION_SPLIT" and session_fallback_strategy == "time":
+        time_assignment = _build_time_split_map(
+            records,
+            split_ratio=split_ratio,
+            single_pcap_policy=single_pcap_policy,
+        )
+
+    result: List[Tuple[SessionRecord, str, bytes]] = []
+    for record in records:
+        normalized = normalize_session_bytes(record.payload, target_length=target_length)
+        effective_split = split_name
+        if split_name == "SESSION_SPLIT":
+            if session_fallback_strategy == "hash":
+                bucket = int(session_sha1(normalized)[:8], 16) / float(0xFFFFFFFF)
+                effective_split = "Train" if bucket < split_ratio else "Test"
+            elif session_fallback_strategy == "time":
+                effective_split = time_assignment.get(record.key.to_id(), _policy_to_split(single_pcap_policy))
+            else:
+                effective_split = _policy_to_split(single_pcap_policy)
+        result.append((record, effective_split, normalized))
+    return result
 
 
 def _write_summary(stats: BuildStats, dataset_dir: Path, log_path: Path) -> Path:
@@ -132,6 +224,8 @@ def _write_summary(stats: BuildStats, dataset_dir: Path, log_path: Path) -> Path
         "dataset_name": stats.dataset_name,
         "source_dir": stats.source_dir,
         "byte_mode": stats.byte_mode,
+        "session_fallback_strategy": stats.session_fallback_strategy,
+        "single_pcap_policy": stats.single_pcap_policy,
         "processed_pcap": stats.processed_pcap,
         "processed_session": stats.processed_session,
         "saved_session": stats.saved_session,
@@ -152,14 +246,16 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = _setup_logging(dataset_name, dataset_dir)
-    LOGGER.info("🚀 开始预处理 profile=%s dataset=%s", profile_name, dataset_name)
-    LOGGER.info("📁 source_dir=%s", profile.get("source_dir"))
-    LOGGER.info("📁 output_dir=%s", dataset_dir)
+    LOGGER.info("Build dataset profile=%s dataset=%s", profile_name, dataset_name)
+    LOGGER.info("source_dir=%s", profile.get("source_dir"))
+    LOGGER.info("output_dir=%s", dataset_dir)
 
     class_to_pcaps = _collect_pcaps(profile)
     split_ratio = float(profile.get("train_ratio", 0.8))
     seed = int(profile.get("seed", 42))
     allow_session_split_fallback = bool(profile.get("allow_session_split_fallback", True))
+    session_fallback_strategy = _parse_fallback_strategy(profile)
+    single_pcap_policy = _parse_single_pcap_policy(profile)
     byte_mode = str(profile.get("byte_mode", "payload")).strip().lower()
     merge_bidirectional = bool(profile.get("merge_bidirectional", True))
     sanitize_headers = bool(profile.get("sanitize_headers", True))
@@ -168,22 +264,51 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
     target_length = int(profile.get("target_length", 784))
     image_size = int(profile.get("image_size", 28))
 
+    LOGGER.info(
+        "split_config allow_session_split_fallback=%s session_fallback_strategy=%s single_pcap_policy=%s train_ratio=%.4f seed=%s",
+        allow_session_split_fallback,
+        session_fallback_strategy,
+        single_pcap_policy,
+        split_ratio,
+        seed,
+    )
+
     splits = split_class_files(class_to_pcaps, train_ratio=split_ratio, seed=seed)
     stats = BuildStats(
         profile=profile_name,
         dataset_name=dataset_name,
         source_dir=str(profile.get("source_dir")),
         byte_mode=byte_mode,
+        session_fallback_strategy=session_fallback_strategy,
+        single_pcap_policy=single_pcap_policy,
     )
 
-    split_iter = []
+    split_iter: List[Tuple[str, str, Path]] = []
     for class_name in sorted(class_to_pcaps):
         total_pcaps = len(class_to_pcaps[class_name])
-        if allow_session_split_fallback and total_pcaps < 2:
-            LOGGER.warning("⚠️ 类别 %s 仅有 %s 个 pcap，启用 session 级回退切分", class_name, total_pcaps)
+        if total_pcaps < 2:
+            if allow_session_split_fallback and session_fallback_strategy in {"hash", "time"}:
+                LOGGER.warning(
+                    "Class %s has %s pcap(s), using SESSION_SPLIT strategy=%s",
+                    class_name,
+                    total_pcaps,
+                    session_fallback_strategy,
+                )
+                for pcap_path in sorted(class_to_pcaps[class_name]):
+                    split_iter.append((class_name, "SESSION_SPLIT", pcap_path))
+                continue
+
+            fixed_split = _policy_to_split(single_pcap_policy)
+            LOGGER.warning(
+                "Class %s has %s pcap(s), fallback disabled/effectively disabled; assigning all samples to %s",
+                class_name,
+                total_pcaps,
+                fixed_split,
+            )
             for pcap_path in sorted(class_to_pcaps[class_name]):
-                split_iter.append((class_name, "SESSION_SPLIT", pcap_path))
+                split_iter.append((class_name, fixed_split, pcap_path))
             continue
+
         for split_name in ("Train", "Test"):
             for pcap_path in splits[class_name][split_name]:
                 split_iter.append((class_name, split_name, pcap_path))
@@ -193,7 +318,7 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
     for class_name, split_name, pcap_path in progress:
         stats.processed_pcap += 1
         try:
-            sessions = extract_sessions_from_pcap(
+            records = extract_session_records_from_pcap(
                 pcap_path,
                 byte_mode=byte_mode,
                 merge_bidirectional=merge_bidirectional,
@@ -202,23 +327,26 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
                 min_session_bytes=min_session_bytes,
             )
         except Exception as exc:
-            LOGGER.warning("❌ 解析失败: %s, err=%s", pcap_path, exc)
+            LOGGER.warning("Failed to parse %s, err=%s", pcap_path, exc)
             continue
 
-        if not sessions:
+        if not records:
             continue
 
-        for sess_key, sess_bytes in sessions.items():
+        effective_samples = _iter_effective_splits(
+            records,
+            split_name=split_name,
+            split_ratio=split_ratio,
+            target_length=target_length,
+            session_fallback_strategy=session_fallback_strategy,
+            single_pcap_policy=single_pcap_policy,
+        )
+
+        for record, effective_split, normalized in effective_samples:
             stats.processed_session += 1
-            if not sess_bytes:
+            if not record.payload:
                 stats.empty_session += 1
                 continue
-
-            normalized = normalize_session_bytes(sess_bytes, target_length=target_length)
-            effective_split = split_name
-            if split_name == "SESSION_SPLIT":
-                bucket = int(session_sha1(normalized)[:8], 16) / float(0xFFFFFFFF)
-                effective_split = "Train" if bucket < split_ratio else "Test"
 
             dedup = dedup_seen.setdefault(f"{effective_split}/{class_name}", set())
             digest = session_sha1(normalized)
@@ -227,7 +355,7 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
                 continue
             dedup.add(digest)
 
-            sample_id = _sanitize_name(f"{pcap_path.stem}.{sess_key.to_id()}")
+            sample_id = _sanitize_name(f"{pcap_path.stem}.{record.key.to_id()}")
             pcap_out_dir = dataset_dir / "pcap_data" / effective_split / class_name
             image_out_dir = dataset_dir / "image_data" / effective_split / class_name
             pcap_out_dir.mkdir(parents=True, exist_ok=True)
@@ -243,7 +371,7 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
                 f.write(normalized)
 
             rgb = build_rgb_image(
-                sess_bytes,
+                record.payload,
                 target_length=target_length,
                 image_size=image_size,
             )
@@ -261,35 +389,37 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
     stats.split_counts = _validate_pairs(dataset_dir)
     report_path = _write_summary(stats, dataset_dir, log_path)
 
-    LOGGER.info("✅ 预处理完成 profile=%s", profile_name)
-    LOGGER.info("📊 pcap=%s sessions=%s saved=%s dup=%s empty=%s skipped=%s",
-                stats.processed_pcap,
-                stats.processed_session,
-                stats.saved_session,
-                stats.duplicate_session,
-                stats.empty_session,
-                stats.skipped_existing)
-    LOGGER.info("🧾 summary=%s", report_path)
-    LOGGER.info("📝 log=%s", log_path)
+    LOGGER.info("Done profile=%s", profile_name)
+    LOGGER.info(
+        "pcap=%s sessions=%s saved=%s dup=%s empty=%s skipped=%s",
+        stats.processed_pcap,
+        stats.processed_session,
+        stats.saved_session,
+        stats.duplicate_session,
+        stats.empty_session,
+        stats.skipped_existing,
+    )
+    LOGGER.info("summary=%s", report_path)
+    LOGGER.info("log=%s", log_path)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="构建 USTC/CIC 的 RGB+Bin 融合数据集")
-    parser.add_argument("--profile", required=True, help="配置名称，例如 ustc / cic5_payload / cic5_fullpacket")
+    parser = argparse.ArgumentParser(description="Build USTC/CIC RGB+BIN fusion datasets.")
+    parser.add_argument("--profile", required=True, help="Profile name, e.g. ustc / cic5_payload / cic5_fullpacket")
     parser.add_argument(
         "--profiles",
         default=str(Path("configs") / "dataset_profiles.yaml"),
-        help="配置文件路径（YAML）",
+        help="Profiles yaml path",
     )
     parser.add_argument(
         "--dataset_root",
         default="dataset",
-        help="输出数据集根目录",
+        help="Output dataset root",
     )
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="覆盖已存在样本（默认跳过已存在样本）",
+        help="Overwrite existing image/bin files",
     )
     return parser.parse_args()
 
@@ -299,7 +429,7 @@ def main() -> int:
     profiles_path = Path(args.profiles).resolve()
     profiles = _load_profiles(profiles_path)
     if args.profile not in profiles:
-        raise KeyError(f"profile 不存在: {args.profile}. 可用: {sorted(profiles)}")
+        raise KeyError(f"Profile not found: {args.profile}. Available: {sorted(profiles)}")
 
     profile = dict(profiles[args.profile] or {})
     dataset_root = Path(args.dataset_root).resolve()
