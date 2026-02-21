@@ -1,0 +1,8 @@
+run_name: stacking_baseline
+dataset_name: tls_full
+seed: 42
+folds: 5
+meta_learner: gbdt
+features:
+  use_logits: true
+  use_entropy: true
