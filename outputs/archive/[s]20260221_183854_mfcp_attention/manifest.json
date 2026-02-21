@@ -1,0 +1,18 @@
+{
+  "run_label": "mfcp_attention_dim256",
+  "dataset_name": "mfcp",
+  "method_name": "attention",
+  "created_at": "2026-02-21T18:38:54",
+  "output_dir": "/home/shuora/Repositories/Traffic/FusionModel/outputs",
+  "archive_dir": "/home/shuora/Repositories/Traffic/FusionModel/outputs/archive/20260221_183854_mfcp_attention",
+  "move_files": false,
+  "file_count": 6,
+  "files": [
+    "logs/mfcp_attention_dim256_20260221_175414.log",
+    "metrics_curve_mfcp_attention_dim256_20260221_175414.png",
+    "confusion_matrix_mfcp_attention_dim256_20260221_175414.png",
+    "report_mfcp_attention_dim256_20260221_175414.md",
+    "fusion_model_mfcp_attention_dim256.pth",
+    "attention_curve_mfcp_attention_dim256_20260221_175414.png"
+  ]
+}
