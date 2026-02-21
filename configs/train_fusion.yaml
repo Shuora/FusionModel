@@ -1,0 +1,11 @@
+run_name: fusion_baseline
+dataset_name: tls_full
+seed: 42
+num_epochs: 20
+batch_size: 64
+optimizer:
+  name: adamw
+  lr: 0.0003
+model:
+  attention_dim: 256
+  num_classes: 10
