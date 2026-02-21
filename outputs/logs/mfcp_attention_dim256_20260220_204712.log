@@ -1,0 +1,17 @@
+2026-02-20 20:47:12,723 - INFO - run_mfcp_attention_dim256 - 🚀 开始训练模式=attention, outputs=C:\Repositories\Traffic\FusionModel\outputs
+2026-02-20 20:47:12,724 - INFO - fusion_common - 加载融合数据 - 图像目录: C:\Repositories\Traffic\FusionModel\dataset\mfcp\image_data\Train, Pcap目录: C:\Repositories\Traffic\FusionModel\dataset\mfcp\pcap_data\Train
+2026-02-20 20:47:12,779 - INFO - fusion_common - 融合索引缓存命中: C:\Repositories\Traffic\FusionModel\dataset\mfcp\image_data\Train\.fusion_index_cache_v2_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 44977
+2026-02-20 20:47:12,781 - INFO - fusion_common - 类别分布(Train) - Artemis:8236, Cobalt:934, Dridex:4021, PUA:1439, Trickbot:21821, Ursnif:8526 | imbalance_ratio=23.36
+2026-02-20 20:47:12,781 - INFO - fusion_common - 融合数据加载完成，类别数: 6, 样本总数: 44977
+2026-02-20 20:47:12,781 - INFO - fusion_common - 加载融合数据 - 图像目录: C:\Repositories\Traffic\FusionModel\dataset\mfcp\image_data\Test, Pcap目录: C:\Repositories\Traffic\FusionModel\dataset\mfcp\pcap_data\Test
+2026-02-20 20:47:12,873 - INFO - fusion_common - 融合索引缓存命中: C:\Repositories\Traffic\FusionModel\dataset\mfcp\image_data\Test\.fusion_index_cache_v2_crepositoriestrafficfusionmo_crepositoriestrafficfusionmo.json, 样本数: 12513
+2026-02-20 20:47:12,873 - INFO - fusion_common - 类别分布(Test) - Artemis:2059, Cobalt:262, Dridex:1040, PUA:1649, Trickbot:5428, Ursnif:2075 | imbalance_ratio=20.72
+2026-02-20 20:47:12,873 - INFO - fusion_common - 融合数据加载完成，类别数: 6, 样本总数: 12513
+2026-02-20 20:47:12,873 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-02-20 20:47:12,933 - INFO - fusion_common - CharBERT 加载成功: C:\Repositories\Traffic\FusionModel\src\CharBERT\src
+2026-02-20 20:47:12,936 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 6 个类别
+2026-02-20 20:47:12,936 - INFO - fusion_common - 开始训练融合模型
+2026-02-20 20:47:12,936 - INFO - fusion_common - 训练参数 - Epochs: 24, Learning Rate: 0.001, Early Stopping Patience: 8
+2026-02-20 20:47:12,936 - INFO - fusion_common - 训练策略 - class_balance: none, loss_type: ce, focal_gamma: 2.000, weight_decay: 0.000000, label_smoothing: 0.0000, early_stop_metric: val_loss, lr_scheduler: none, val_every: 1
+2026-02-20 20:47:12,936 - INFO - fusion_common - DataLoader参数 - train_batches: 703, val_batches: 196, batch_size: 64, num_workers: 8, pin_memory: True
+2026-02-20 20:47:13,087 - INFO - fusion_common - 🧭 Epoch 1/24
