@@ -1,10 +1,12 @@
 dataset_name: tls_leakage_reduced
 source_root: SourceData
 split:
+  strategy: group_by_capture
+  group_key: capture_id
+  seed: 42
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
-  group_key: capture_id
 tls_filter:
   enabled: true
   min_record_len: 1
@@ -13,3 +15,6 @@ feature:
   image_size: 28
   token_max_len: 256
   leakage_reduced: true
+leakage_control:
+  redact_sni: true
+  drop_cert_fingerprint: true
