@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,21 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _sanitize_tag_part(value: str, fallback: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return fallback
+    text = re.sub(r'[<>:"/\\|?*\s]+', "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("._-")
+    return text or fallback
+
+
+def _build_default_archive_tag(ts: str, dataset_name: str, method: str) -> str:
+    dataset_part = _sanitize_tag_part(dataset_name, "dataset")
+    method_part = _sanitize_tag_part(method, "method")
+    return f"{ts}_{dataset_part}_{method_part}"
 
 
 def _load_profiles(path: Path) -> Dict[str, dict]:
@@ -75,6 +91,7 @@ def _archive_outputs(
     output_dir: Path,
     touched_files: Set[str],
     profile: str,
+    dataset_name: str,
     mode: str,
     archive_dir: Path | None = None,
     archive_tag: str = "",
@@ -85,7 +102,7 @@ def _archive_outputs(
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_root = archive_dir if archive_dir is not None else (output_dir / "archive")
-    run_tag = archive_tag.strip() or f"{profile}_{mode}_{ts}"
+    run_tag = archive_tag.strip() or _build_default_archive_tag(ts, dataset_name, mode)
     archive_path = archive_root / run_tag
     archive_path.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +121,7 @@ def _archive_outputs(
 
     manifest = {
         "profile": profile,
+        "dataset_name": dataset_name,
         "mode": mode,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "output_dir": str(output_dir),
@@ -118,7 +136,8 @@ def _archive_outputs(
 
 
 def _run(script: Path, cli_args: List[str]) -> None:
-    cmd = [sys.executable, str(script)] + cli_args
+    # Suite manages one consolidated archive at the end; disable per-script archive.
+    cmd = [sys.executable, str(script)] + cli_args + ["--no_archive"]
     print("▶️ 执行命令:", " ".join(cmd))
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
@@ -141,7 +160,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no_archive", action="store_true", help="不自动归档本次运行输出")
     parser.add_argument("--archive_dir", default="", help="归档根目录，默认 <output_dir>/archive")
-    parser.add_argument("--archive_tag", default="", help="归档目录名，默认 <profile>_<mode>_<timestamp>")
+    parser.add_argument("--archive_tag", default="", help="归档目录名，默认 <timestamp>_<dataset>_<method>")
     parser.add_argument("--archive_move", action="store_true", help="归档时移动文件（默认复制）")
     parser.add_argument("--dataset_name", default="", help="可选：覆盖 profile 中 dataset_name")
     parser.add_argument("--dataset_root", default="", help="可选：覆盖 profile 中 dataset_root")
@@ -159,6 +178,7 @@ def main() -> int:
         config["dataset_name"] = args.dataset_name
     if args.dataset_root:
         config["dataset_root"] = args.dataset_root
+    dataset_name = str(config.get("dataset_name", args.profile))
 
     cli_args = _to_cli_args(config)
     output_dir = Path(str(config.get("output_dir", "outputs")))
@@ -187,6 +207,7 @@ def main() -> int:
             output_dir=output_dir,
             touched_files=touched_files,
             profile=args.profile,
+            dataset_name=dataset_name,
             mode=args.mode,
             archive_dir=archive_dir,
             archive_tag=args.archive_tag,

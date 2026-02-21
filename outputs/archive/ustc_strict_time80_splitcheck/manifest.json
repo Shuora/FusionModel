@@ -1,0 +1,17 @@
+{
+  "profile": "ustc_strict_time80_eval",
+  "mode": "attention",
+  "created_at": "2026-02-17T20:51:59",
+  "output_dir": "C:\\Repositories\\Traffic\\FusionModel\\outputs",
+  "archive_dir": "C:\\Repositories\\Traffic\\FusionModel\\outputs\\archive\\ustc_strict_time80_splitcheck",
+  "move_files": false,
+  "file_count": 6,
+  "files": [
+    "attention_curve_attention_dim256_20260217_203033.png",
+    "confusion_matrix_attention_dim256_20260217_203033.png",
+    "fusion_model_attention_dim256.pth",
+    "logs\\attention_dim256_20260217_203033.log",
+    "metrics_curve_attention_dim256_20260217_203033.png",
+    "report_attention_dim256_20260217_203033.md"
+  ]
+}

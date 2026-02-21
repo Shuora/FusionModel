@@ -10,8 +10,10 @@ import logging
 import math
 import os
 import re
+import shutil
 import sys
 import copy
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Tuple
@@ -122,6 +124,15 @@ def parse_csv_values(value: str) -> List[str]:
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
+def _looks_like_cic_dataset(*values: Optional[Union[str, os.PathLike]]) -> bool:
+    for value in values:
+        if value is None:
+            continue
+        if "cic" in str(value).lower():
+            return True
+    return False
+
+
 def _is_flat_dataset_layout(dataset_dir: Union[str, os.PathLike]) -> bool:
     root = Path(dataset_dir)
     required_dirs = [
@@ -210,6 +221,94 @@ def ensure_output_dirs(output_dir: Path) -> None:
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
 
 
+def _archive_run_artifacts(
+    *,
+    output_dir: Path,
+    artifacts: Iterable[Path],
+    run_label: str,
+    dataset_name: str = "",
+    method_name: str = "",
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    move_files: bool = False,
+    logger_obj=None,
+) -> Optional[Path]:
+    output_dir = output_dir.resolve()
+    archive_root = archive_dir if archive_dir is not None else (output_dir / "archive")
+    archive_root = archive_root if archive_root.is_absolute() else (PROJECT_ROOT / archive_root).resolve()
+
+    unique_paths = []
+    seen = set()
+    for item in artifacts:
+        if item is None:
+            continue
+        path = Path(item)
+        if not path.is_absolute():
+            path = (PROJECT_ROOT / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.exists() or not path.is_file():
+            continue
+        marker = str(path).lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique_paths.append(path)
+
+    if not unique_paths:
+        if logger_obj is not None:
+            logger_obj.warning("🗂️ 未检测到可归档文件，已跳过自动归档")
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dataset_part = re.sub(r'[<>:"/\\|?*\s]+', "-", (dataset_name or "").strip())
+    dataset_part = re.sub(r"-{2,}", "-", dataset_part).strip("._-") or "dataset"
+    method_source = method_name or run_label
+    method_part = re.sub(r'[<>:"/\\|?*\s]+', "-", str(method_source).strip())
+    method_part = re.sub(r"-{2,}", "-", method_part).strip("._-") or "method"
+    run_tag = archive_tag.strip() or f"{ts}_{dataset_part}_{method_part}"
+    archive_path = archive_root / run_tag
+    archive_path.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for src in unique_paths:
+        try:
+            rel = src.relative_to(output_dir)
+        except ValueError:
+            rel = Path(src.name)
+        dst = archive_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if move_files:
+            try:
+                shutil.move(str(src), str(dst))
+            except PermissionError:
+                # On Windows, currently-open log files cannot be moved reliably.
+                shutil.copy2(str(src), str(dst))
+                if logger_obj is not None:
+                    logger_obj.warning("⚠️ 文件占用，改为复制: %s", src)
+        else:
+            shutil.copy2(str(src), str(dst))
+        copied.append(str(rel))
+
+    manifest = {
+        "run_label": run_label,
+        "dataset_name": dataset_name,
+        "method_name": method_name or run_label,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "output_dir": str(output_dir),
+        "archive_dir": str(archive_path),
+        "move_files": bool(move_files),
+        "file_count": len(copied),
+        "files": copied,
+    }
+    with (archive_path / "manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    if logger_obj is not None:
+        logger_obj.info("🗂️ 已归档文件数: %s, 目录: %s", len(copied), archive_path)
+    return archive_path
+
+
 def log_saved(logger_obj, path: Path, what: str) -> None:
     try:
         logger_obj.info("✅ 已保存 %s: %s (exists=%s)", what, path, path.exists())
@@ -276,7 +375,7 @@ class FusionDataset(Dataset):
     融合数据集类，同时加载图像数据和Pcap数据
     """
 
-    CACHE_VERSION = 1
+    CACHE_VERSION = 2
 
     def __init__(
         self,
@@ -380,6 +479,49 @@ class FusionDataset(Dataset):
         filename = f".fusion_index_cache_v{cls.CACHE_VERSION}_{image_key[:28]}_{pcap_key[:28]}.json"
         return os.path.join(image_dir, filename)
 
+    @staticmethod
+    def _safe_mtime_ns(path: str) -> int:
+        stat = os.stat(path)
+        return int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9)))
+
+    @staticmethod
+    def _list_class_dirs(root_dir: str) -> dict:
+        out = {}
+        if not os.path.isdir(root_dir):
+            return out
+        for entry in os.scandir(root_dir):
+            if not entry.is_dir():
+                continue
+            out[entry.name] = FusionDataset._safe_mtime_ns(entry.path)
+        return out
+
+    def _cache_is_stale(self, payload: dict, cache_path: str) -> bool:
+        cache_ns = int(payload.get("cache_created_at_ns", 0))
+        if cache_ns <= 0:
+            cache_ns = self._safe_mtime_ns(cache_path)
+
+        image_dirs = self._list_class_dirs(self.image_dir)
+        pcap_dirs = self._list_class_dirs(self.pcap_dir)
+        image_classes = set(image_dirs.keys())
+        pcap_classes = set(pcap_dirs.keys())
+        payload_classes = set(str(x) for x in payload.get("classes", []))
+        current_classes = image_classes & pcap_classes
+
+        if payload_classes != current_classes:
+            logger.info("融合索引缓存失效: 类别集合变化 cache=%s current=%s", sorted(payload_classes), sorted(current_classes))
+            return True
+
+        changed_dirs = [
+            cls
+            for cls in sorted(current_classes)
+            if max(image_dirs.get(cls, 0), pcap_dirs.get(cls, 0)) > cache_ns
+        ]
+        if changed_dirs:
+            logger.info("融合索引缓存失效: 检测到目录更新 classes=%s", changed_dirs[:8])
+            return True
+
+        return False
+
     def _load_index_cache(self, cache_path: str) -> Optional[dict]:
         try:
             if not os.path.isfile(cache_path):
@@ -396,6 +538,8 @@ class FusionDataset(Dataset):
             samples = payload.get("samples", [])
             if not isinstance(classes, list) or not isinstance(samples, list):
                 return None
+            if self._cache_is_stale(payload, cache_path):
+                return None
             return payload
         except Exception as e:
             logger.warning("读取融合索引缓存失败 %s: %s", cache_path, e)
@@ -409,6 +553,7 @@ class FusionDataset(Dataset):
                 "pcap_dir": os.path.abspath(self.pcap_dir),
                 "classes": self.classes,
                 "samples": self.samples,
+                "cache_created_at_ns": int(time.time_ns()),
             }
             tmp_path = cache_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -544,11 +689,13 @@ class FocalCrossEntropyLoss(nn.Module):
         ce = F.cross_entropy(
             logits,
             target,
-            weight=self.weight,
             reduction="none",
             label_smoothing=self.label_smoothing,
         )
-        pt = torch.exp(-ce)
+        pt = F.softmax(logits, dim=1).gather(1, target.unsqueeze(1)).squeeze(1).clamp(min=1e-8, max=1.0)
+        if self.weight is not None:
+            sample_weight = self.weight.to(logits.device)[target]
+            ce = ce * sample_weight
         focal = ((1.0 - pt) ** self.gamma) * ce
         return focal.mean()
 
@@ -569,6 +716,7 @@ def load_fusion_data(
     is_train: bool = True,
     balance_mode: str = "none",
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
 ):
     logger.info("加载融合数据 - 图像目录: %s, Pcap目录: %s", image_dir, pcap_dir)
 
@@ -636,12 +784,36 @@ def load_fusion_data(
             rebuild_index_cache=rebuild_index_cache,
         )
 
+    valid_counts = [int(c) for c in getattr(dataset, "class_counts", []) if int(c) > 0]
+    imbalance_ratio = (max(valid_counts) / max(min(valid_counts), 1)) if valid_counts else 0.0
+    class_distribution = ", ".join(f"{cls}:{cnt}" for cls, cnt in zip(dataset.classes, dataset.class_counts))
+    logger.info(
+        "类别分布(%s) - %s | imbalance_ratio=%.2f",
+        "Train" if is_train else "Test",
+        class_distribution,
+        imbalance_ratio,
+    )
+
+    effective_balance_mode = balance_mode
+    if (
+        is_train
+        and (not allow_cic_sampler)
+        and balance_mode in ("weighted_sampler", "weighted_sampler_loss")
+        and _looks_like_cic_dataset(image_dir, pcap_dir)
+    ):
+        effective_balance_mode = "weighted_loss" if balance_mode == "weighted_sampler_loss" else "none"
+        logger.info(
+            "检测到CIC数据集，关闭WeightedRandomSampler避免训练/验证分布偏移: %s -> %s",
+            balance_mode,
+            effective_balance_mode,
+        )
+
     dl_kwargs = dict(batch_size=batch_size, shuffle=bool(is_train), num_workers=int(num_workers), pin_memory=bool(pin_memory))
     if int(num_workers) > 0:
         dl_kwargs["persistent_workers"] = bool(persistent_workers)
         dl_kwargs["prefetch_factor"] = int(prefetch_factor)
 
-    if is_train and balance_mode in ("weighted_sampler", "weighted_sampler_loss"):
+    if is_train and effective_balance_mode in ("weighted_sampler", "weighted_sampler_loss"):
         class_weights = compute_class_weights(dataset.class_counts)
         sample_weights = [float(class_weights[t]) for t in dataset.targets]
         sampler = WeightedRandomSampler(
@@ -779,7 +951,7 @@ class FusionModel(nn.Module):
     融合模型：结合 MobileViT（图像）和 CharBERT（Pcap 字节序列）
     """
 
-    def __init__(self, num_classes: int = 10, fusion_mode: str = "concat"):
+    def __init__(self, num_classes: int = 10, fusion_mode: str = "concat", seq_len: int = 784):
         super().__init__()
         self.fusion_mode = fusion_mode
 
@@ -789,7 +961,7 @@ class FusionModel(nn.Module):
 
         self.text_encoder = CharBERTTextEncoder(
             feature_dim=256,
-            seq_len=784,
+            seq_len=seq_len,
             hidden_size=128,
             num_layers=2,
             num_heads=4,
@@ -852,7 +1024,13 @@ class FusionModel(nn.Module):
 class AttentionFusionModel(nn.Module):
     """Cross-attention fusion model."""
 
-    def __init__(self, num_classes: int = 10, attention_dim: int = 256, char_hidden_size: int = 128):
+    def __init__(
+        self,
+        num_classes: int = 10,
+        attention_dim: int = 256,
+        char_hidden_size: int = 128,
+        seq_len: int = 784,
+    ):
         super().__init__()
 
         mv_cfg = MobileViTConfig()
@@ -863,7 +1041,7 @@ class AttentionFusionModel(nn.Module):
 
         self.text_encoder = CharBERTTextEncoder(
             feature_dim=char_hidden_size,
-            seq_len=784,
+            seq_len=seq_len,
             hidden_size=char_hidden_size,
             num_layers=2,
             num_heads=4,
@@ -915,12 +1093,17 @@ class AttentionFusionModel(nn.Module):
         return logits
 
 
-def initialize_fusion_model(num_classes: int, fusion_mode: str = "concat", attention_dim: int = 256) -> nn.Module:
+def initialize_fusion_model(
+    num_classes: int,
+    fusion_mode: str = "concat",
+    attention_dim: int = 256,
+    seq_len: int = 784,
+) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
     if fusion_mode == "attention":
-        model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim)
+        model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim, seq_len=seq_len)
     else:
-        model = FusionModel(num_classes=num_classes, fusion_mode=fusion_mode)
+        model = FusionModel(num_classes=num_classes, fusion_mode=fusion_mode, seq_len=seq_len)
     logger.info("融合模型初始化完成，分类头设置为 %s 个类别", num_classes)
     return model
 
@@ -943,7 +1126,7 @@ def evaluate_epoch(
     use_amp = bool(use_amp and device.type == "cuda")
     non_blocking = bool(device.type == "cuda")
     with torch.no_grad():
-        eval_progress = tqdm(data_loader, desc="评估", leave=False)
+        eval_progress = tqdm(data_loader, desc="🧪 验证", leave=False)
         for images, pcap_data, labels in eval_progress:
             images = images.to(device, non_blocking=non_blocking)
             pcap_data = pcap_data.to(device, non_blocking=non_blocking)
@@ -963,7 +1146,7 @@ def evaluate_epoch(
             all_predictions.extend(predicted.cpu().numpy())
 
             acc = 100.0 * val_corrects / max(val_total, 1)
-            eval_progress.set_postfix({"Loss": f"{loss.item():.4f}", "Acc": f"{acc:.2f}%"})
+            eval_progress.set_postfix({"val_loss": f"{loss.item():.4f}", "val_acc": f"{acc:.2f}%"})
 
     epoch_val_loss = val_loss / max(len(data_loader.dataset), 1)
     accuracy = accuracy_score(all_labels, all_predictions) if all_labels else 0.0
@@ -1042,7 +1225,8 @@ def train_fusion_model(
     mode = early_stop_mode
     if mode == "auto":
         mode = "min" if early_stop_metric == "val_loss" else "max"
-    early_stopping = EarlyStopping(patience=patience, min_delta=0.001, mode=mode)
+    min_delta = 1e-4 if early_stop_metric in ("val_acc", "val_f1") else 1e-3
+    early_stopping = EarlyStopping(patience=patience, min_delta=min_delta, mode=mode)
 
     scheduler = None
     if lr_scheduler_mode == "reduce":
@@ -1070,7 +1254,7 @@ def train_fusion_model(
     }
 
     for epoch in range(num_epochs):
-        logger.info("Epoch %s/%s", epoch + 1, num_epochs)
+        logger.info("🧭 Epoch %s/%s", epoch + 1, num_epochs)
         model.train()
         train_loss = 0.0
         train_total = 0
@@ -1078,7 +1262,7 @@ def train_fusion_model(
         train_labels = []
         train_preds = []
 
-        train_progress = tqdm(train_loader, desc=f"训练 Epoch {epoch + 1}")
+        train_progress = tqdm(train_loader, desc=f"🏋️ 训练 Epoch {epoch + 1}")
         for images, pcap_data, labels in train_progress:
             images = images.to(device, non_blocking=non_blocking)
             pcap_data = pcap_data.to(device, non_blocking=non_blocking)
@@ -1111,7 +1295,7 @@ def train_fusion_model(
             train_preds.extend(predicted.cpu().numpy())
 
             acc = 100.0 * train_corrects / max(train_total, 1)
-            train_progress.set_postfix({"Loss": f"{loss.item():.4f}", "Acc": f"{acc:.2f}%"})
+            train_progress.set_postfix({"train_loss": f"{loss.item():.4f}", "train_acc": f"{acc:.2f}%"})
 
         epoch_train_loss = train_loss / max(len(train_loader.dataset), 1)
         epoch_train_acc = accuracy_score(train_labels, train_preds) if train_labels else 0.0
@@ -1119,6 +1303,7 @@ def train_fusion_model(
 
         run_validation = ((epoch + 1) % max(int(val_every), 1) == 0) or ((epoch + 1) == num_epochs)
         if run_validation:
+            logger.info("🧪 开始验证: epoch=%s", epoch + 1)
             val_loss, val_acc, val_f1, _, _ = evaluate_epoch(model, val_loader, criterion, device, use_amp=use_amp)
         else:
             val_loss, val_acc, val_f1 = float("nan"), float("nan"), float("nan")
@@ -1132,7 +1317,7 @@ def train_fusion_model(
 
         if run_validation:
             logger.info(
-                "Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 验证 Loss: %.4f, 验证 Acc: %.4f, 验证 F1: %.4f",
+                "📊 Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 验证 Loss: %.4f, 验证 Acc: %.4f, 验证 F1: %.4f",
                 epoch + 1,
                 epoch_train_loss,
                 epoch_train_acc,
@@ -1150,21 +1335,21 @@ def train_fusion_model(
                 monitor_value = val_loss
 
             early_stopping(float(monitor_value), model)
-            logger.info("早停计数器: %s/%s", early_stopping.counter, early_stopping.patience)
+            logger.info("⏱️ 早停计数: %s/%s", early_stopping.counter, early_stopping.patience)
 
             if scheduler is not None:
                 if lr_scheduler_mode == "reduce":
                     scheduler.step(float(monitor_value))
                 else:
                     scheduler.step()
-            logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
+            logger.info("📉 当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
             if early_stopping.early_stop:
-                logger.info("早停机制触发，在第 %s 轮后停止训练", epoch + 1)
+                logger.info("🛑 早停触发，在第 %s 轮后停止训练", epoch + 1)
                 break
         else:
             logger.info(
-                "Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 跳过验证 (val_every=%s)",
+                "📊 Epoch %s 结果: 训练 Loss: %.4f, 训练 Acc: %.4f, 训练 F1: %.4f | 跳过验证 (val_every=%s)",
                 epoch + 1,
                 epoch_train_loss,
                 epoch_train_acc,
@@ -1173,7 +1358,7 @@ def train_fusion_model(
             )
             if scheduler is not None and lr_scheduler_mode == "cosine":
                 scheduler.step()
-                logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
+                logger.info("📉 当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
     if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
         model.load_state_dict(early_stopping.best_weights)
@@ -1530,13 +1715,18 @@ def add_common_args(p):
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     p.add_argument("--seed", type=int, default=42)
 
-    p.add_argument("--num_workers", type=int, default=8)
+    p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--pin_memory", action="store_true")
     p.add_argument("--persistent_workers", action="store_true")
     p.add_argument("--prefetch_factor", type=int, default=4)
     p.add_argument("--no_amp", action="store_true", help="Disable CUDA mixed precision training")
     p.add_argument("--no_index_cache", action="store_true", help="Disable sample index cache")
     p.add_argument("--rebuild_index_cache", action="store_true", help="Force rebuild sample index cache")
+    p.add_argument(
+        "--allow_cic_sampler",
+        action="store_true",
+        help="Allow WeightedRandomSampler on CIC datasets (default disables sampler to reduce distribution shift)",
+    )
     p.add_argument(
         "--class_balance",
         choices=["none", "weighted_loss", "weighted_sampler", "weighted_sampler_loss"],
@@ -1557,6 +1747,15 @@ def add_common_args(p):
     p.add_argument("--val_every", type=int, default=1)
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
+    p.add_argument("--no_archive", action="store_true", help="Disable auto archive for this run")
+    p.add_argument("--archive_dir", default="", help="Archive root directory, default <output_dir>/archive")
+    p.add_argument("--archive_tag", default="", help="Archive folder name, default <timestamp>_<dataset>_<method>")
+    p.add_argument("--archive_move", action="store_true", help="Move artifacts into archive instead of copy")
+    p.add_argument(
+        "--output_tag_prefix",
+        default="",
+        help="Optional filename prefix for outputs, e.g. mfcp",
+    )
     p.add_argument("--attention_dim", type=int, default=256)
     return p
 
@@ -1565,16 +1764,30 @@ def _arg_explicitly_set(flag: str) -> bool:
     return any(token == flag or token.startswith(f"{flag}=") for token in sys.argv[1:])
 
 
+def _should_force_single_worker_on_windows(num_workers: int) -> bool:
+    if os.name != "nt":
+        return False
+    if int(num_workers) <= 0:
+        return False
+    if os.getenv("FUSIONMODEL_ALLOW_WIN_MULTIPROC", "0") == "1":
+        return False
+    # Windows spawn workers may repeatedly load CUDA DLLs and trigger WinError 1455.
+    return bool(getattr(torch.version, "cuda", None))
+
+
 def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
     if getattr(args, "preset", "none") != "cic_balanced":
         return
+    if not _looks_like_cic_dataset(resolved_dataset_name):
+        logger.info("preset=cic_balanced 仅用于CIC数据集，当前数据集 %s，跳过预设注入", resolved_dataset_name)
+        return
 
     preset_values = {
-        "--class_balance": "weighted_sampler_loss",
-        "--loss_type": "focal",
+        "--class_balance": "weighted_loss",
+        "--loss_type": "ce",
         "--focal_gamma": 1.5,
         "--weight_decay": 1e-4,
-        "--label_smoothing": 0.03,
+        "--label_smoothing": 0.01,
         "--early_stop_metric": "val_f1",
         "--early_stop_mode": "max",
         "--lr_scheduler": "reduce",
@@ -1588,8 +1801,9 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
         if not _arg_explicitly_set(flag):
             setattr(args, flag[2:], value)
 
-    if resolved_dataset_name == "CICAndMal2017":
+    if _looks_like_cic_dataset(resolved_dataset_name):
         cic_values = {
+            "--epochs": 40,
             "--lr": 3e-4,
             "--patience": 14,
             "--num_workers": 6,
@@ -1603,10 +1817,6 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
 def build_common_kwargs(args):
     device = device_from_arg(args.device)
     set_seed(args.seed)
-    if device.type == "cuda" and not args.pin_memory:
-        args.pin_memory = True
-    if int(args.num_workers) > 0 and not args.persistent_workers:
-        args.persistent_workers = True
     if device.type == "cuda":
         try:
             torch.backends.cudnn.benchmark = True
@@ -1618,6 +1828,18 @@ def build_common_kwargs(args):
         args.dataset_name or None,
     )
     _apply_preset_defaults(args, resolved_dataset_name)
+    if _should_force_single_worker_on_windows(args.num_workers):
+        logger.warning(
+            "检测到 Windows + CUDA 版 PyTorch 且 num_workers=%s，自动降级为 num_workers=0 以规避 WinError 1455。"
+            "如需强制启用多进程，请设置环境变量 FUSIONMODEL_ALLOW_WIN_MULTIPROC=1。",
+            args.num_workers,
+        )
+        args.num_workers = 0
+        args.persistent_workers = False
+    if device.type == "cuda" and not args.pin_memory:
+        args.pin_memory = True
+    if int(args.num_workers) > 0 and not args.persistent_workers:
+        args.persistent_workers = True
     logger.info("Using dataset: %s (root=%s)", resolved_dataset_name, args.dataset_root)
     print(f"[Data] dataset={resolved_dataset_name}")
     print(f"[Data] dataset_root={args.dataset_root}")
@@ -1628,7 +1850,15 @@ def build_common_kwargs(args):
     if args.cic_group:
         print(f"[Data] cic_group={args.cic_group}")
 
+    output_dir = Path(args.output_dir)
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
+    archive_dir = Path(args.archive_dir) if args.archive_dir else None
+    if archive_dir is not None and not archive_dir.is_absolute():
+        archive_dir = (PROJECT_ROOT / archive_dir).resolve()
+
     return dict(
+        dataset_name=resolved_dataset_name,
         train_image_dir=train_image_dir,
         train_pcap_dir=train_pcap_dir,
         test_image_dir=test_image_dir,
@@ -1640,7 +1870,7 @@ def build_common_kwargs(args):
         lr=args.lr,
         patience=args.patience,
         device=device,
-        output_dir=Path(args.output_dir),
+        output_dir=output_dir,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         persistent_workers=args.persistent_workers,
@@ -1663,6 +1893,12 @@ def build_common_kwargs(args):
         grad_clip_norm=args.grad_clip_norm,
         val_every=args.val_every,
         selected_groups=parse_csv_values(args.cic_group) if args.cic_group else None,
+        allow_cic_sampler=bool(args.allow_cic_sampler),
+        no_archive=bool(args.no_archive),
+        archive_dir=archive_dir,
+        archive_tag=args.archive_tag,
+        archive_move=bool(args.archive_move),
+        output_tag_prefix=args.output_tag_prefix,
     )
 
 
@@ -1672,9 +1908,17 @@ def make_tag(fusion_mode: str, attention_dim: int) -> str:
     return fusion_mode
 
 
+def _compose_output_tag(base_tag: str, output_tag_prefix: str = "") -> str:
+    prefix = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(output_tag_prefix).strip()).strip("._-")
+    if not prefix:
+        return base_tag
+    return f"{prefix}_{base_tag}"
+
+
 def run_fusion_experiment(
     *,
     fusion_mode: str,
+    dataset_name: str,
     train_image_dir: str,
     train_pcap_dir: str,
     test_image_dir: str,
@@ -1709,13 +1953,21 @@ def run_fusion_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
+    no_archive: bool = False,
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    archive_move: bool = False,
+    output_tag_prefix: str = "",
 ) -> None:
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag = make_tag(fusion_mode, attention_dim)
+    tag = _compose_output_tag(make_tag(fusion_mode, attention_dim), output_tag_prefix)
     log_path = output_dir / "logs" / f"{tag}_{ts}.log"
     setup_logging(log_path, force=True)
-    run_logger = logging.getLogger(f"run_{fusion_mode}")
+    run_logger = logging.getLogger(f"run_{tag}")
     run_logger.info("🚀 开始训练模式=%s, outputs=%s", fusion_mode, output_dir)
 
     train_loader, train_classes = load_fusion_data(
@@ -1733,6 +1985,7 @@ def run_fusion_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -1749,12 +2002,18 @@ def run_fusion_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        fusion_mode,
+        attention_dim=attention_dim,
+        seq_len=max_pcap_length,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
@@ -1779,8 +2038,9 @@ def run_fusion_experiment(
         val_every=val_every,
     )
 
+    attention_curve_path = None
     if fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
@@ -1822,6 +2082,24 @@ def run_fusion_experiment(
     torch.save(model.state_dict(), model_path)
     log_saved(run_logger, model_path, f"model_{tag}")
 
+    if not no_archive:
+        artifacts = [log_path, curve_path, cm_path, report_path, model_path]
+        if attention_curve_path is not None:
+            artifacts.append(attention_curve_path)
+        archive_path = _archive_run_artifacts(
+            output_dir=output_dir,
+            artifacts=artifacts,
+            run_label=tag,
+            dataset_name=dataset_name,
+            method_name=fusion_mode,
+            archive_dir=archive_dir,
+            archive_tag=archive_tag,
+            move_files=archive_move,
+            logger_obj=run_logger,
+        )
+        if archive_path is not None:
+            run_logger.info("🗂️ 本次训练归档目录: %s", archive_path)
+
     run_logger.info("🏁 训练完成 mode=%s, log=%s", fusion_mode, log_path)
     print(f"[{fusion_mode}] done. acc={eval_result['acc']:.4f}, saved={model_path}, log={log_path}")
 
@@ -1830,6 +2108,7 @@ def run_stacking_experiment(
     *,
     base_fusion_mode: str,
     meta_methods: Iterable[str],
+    dataset_name: str,
     train_image_dir: str,
     train_pcap_dir: str,
     test_image_dir: str,
@@ -1865,11 +2144,22 @@ def run_stacking_experiment(
     grad_clip_norm: float = 0.0,
     val_every: int = 1,
     selected_groups: Optional[List[str]] = None,
+    allow_cic_sampler: bool = False,
+    no_archive: bool = False,
+    archive_dir: Optional[Path] = None,
+    archive_tag: str = "",
+    archive_move: bool = False,
+    output_tag_prefix: str = "",
 ) -> None:
+    if not output_dir.is_absolute():
+        output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_tag = make_tag(base_fusion_mode, attention_dim)
-    ensemble_tag = ensemble_tag or f"{base_tag}_stacking"
+    base_tag = _compose_output_tag(make_tag(base_fusion_mode, attention_dim), output_tag_prefix)
+    if ensemble_tag:
+        ensemble_tag = _compose_output_tag(ensemble_tag, output_tag_prefix)
+    else:
+        ensemble_tag = f"{base_tag}_stacking"
     log_path = output_dir / "logs" / f"{ensemble_tag}_{ts}.log"
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
@@ -1890,6 +2180,7 @@ def run_stacking_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -1906,12 +2197,18 @@ def run_stacking_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        allow_cic_sampler=allow_cic_sampler,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, base_fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        base_fusion_mode,
+        attention_dim=attention_dim,
+        seq_len=max_pcap_length,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
@@ -1936,8 +2233,10 @@ def run_stacking_experiment(
         val_every=val_every,
     )
 
+    artifacts: List[Path] = [log_path]
+    attention_curve_path = None
     if base_fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
@@ -1945,10 +2244,13 @@ def run_stacking_experiment(
             prefix=f"{ensemble_tag}_{ts}",
             logger_obj=run_logger,
         )
+        if attention_curve_path is not None:
+            artifacts.append(attention_curve_path)
 
     curve_path = output_dir / f"metrics_curve_{ensemble_tag}_{ts}.png"
     plot_training_curves(history, curve_path, title=f"Training Curves - {ensemble_tag}")
     log_saved(run_logger, curve_path, f"metrics_curve_{ensemble_tag}")
+    artifacts.append(curve_path)
 
     meta_features, meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, train_loader, device)
     test_meta_features, test_meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, test_loader, device)
@@ -1978,6 +2280,7 @@ def run_stacking_experiment(
         cm_path = output_dir / f"confusion_matrix_{tag}_{ts}.png"
         plot_confusion(cm, train_classes, cm_path, f"Confusion Matrix - {tag}")
         log_saved(run_logger, cm_path, f"confusion_matrix_{tag}")
+        artifacts.append(cm_path)
 
         report_path = output_dir / f"report_{tag}_{ts}.md"
         save_report_md(
@@ -1991,6 +2294,7 @@ def run_stacking_experiment(
             curve_image=curve_path.name,
         )
         log_saved(run_logger, report_path, f"report_{tag}")
+        artifacts.append(report_path)
 
         try:
             import pickle
@@ -1999,12 +2303,29 @@ def run_stacking_experiment(
             with open(meta_path, "wb") as f:
                 pickle.dump(meta_model, f)
             log_saved(run_logger, meta_path, f"meta_model_{tag}")
+            artifacts.append(meta_path)
         except Exception as e:
             run_logger.warning("保存 %s 失败: %s", method, e)
 
     base_path = output_dir / f"fusion_model_{ensemble_tag}_base.pth"
     torch.save(model.state_dict(), base_path)
     log_saved(run_logger, base_path, f"model_{ensemble_tag}_base")
+    artifacts.append(base_path)
+
+    if not no_archive:
+        archive_path = _archive_run_artifacts(
+            output_dir=output_dir,
+            artifacts=artifacts,
+            run_label=ensemble_tag,
+            dataset_name=dataset_name,
+            method_name=ensemble_tag,
+            archive_dir=archive_dir,
+            archive_tag=archive_tag,
+            move_files=archive_move,
+            logger_obj=run_logger,
+        )
+        if archive_path is not None:
+            run_logger.info("🗂️ 本次训练归档目录: %s", archive_path)
 
     run_logger.info("🏁 stacking 完成, log=%s", log_path)
     print(f"[{ensemble_tag}] done. saved_base={base_path}, log={log_path}")

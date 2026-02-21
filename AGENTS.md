@@ -14,8 +14,8 @@
 ## 仓库协作约束
 
 - 不在原仓库直接修改代码：
-  - `C:\Repositories\Traffic\Data-Processing`
-  - `C:\Repositories\Traffic\CharBERT-MobileViT`
+  - `/home/shuora/Repositories/Traffic/Data-Processing`
+  - `/home/shuora/Repositories/Traffic/CharBERT-MobileViT`
 - 任何改造先落地到本仓库，再进行调试与验证。
 - 预处理坚持 RGB 三通道，不使用灰度图。
 - USTC 与 CIC 分开训练/验证，不做交替喂数。
