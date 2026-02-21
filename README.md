@@ -1,9 +1,10 @@
-# FusionModel: MobileViT + CharBERT + Attention（USTC / CIC5）
+# FusionModel: MobileViT + CharBERT + Attention（USTC / CIC5 / MFCP）
 
 本项目在 `FusionModel` 仓库内实现了完整的“预处理 + 训练 + 评估”链路，目标是：
 
 - 保持 USTC 训练效果
 - 提升 CIC 五大类（`Adware, Benign, Ransomware, SMSMalware, Scareware`）效果
+- 新增 MFCP 家族分类实验链路（预处理 + 训练 + 验证）
 - 采用 `MobileViT + CharBERT + Attention` 及 `Attention + Stacking`
 
 说明：
@@ -19,6 +20,7 @@ FusionModel/
 ├─ SourceData/
 │  ├─ USTC-TFC2016/
 │  └─ CICAndMal2017/
+│  └─ MFCP/
 ├─ configs/
 │  ├─ dataset_profiles.yaml
 │  └─ train_profiles.yaml
@@ -81,6 +83,16 @@ python src/pipeline/dataset_builder.py --profile cic5_fullpacket
 python src/pipeline/dataset_builder.py --profile cic5_payload --overwrite
 ```
 
+### 3.5 MFCP（payload）
+
+```powershell
+# 首次构建（会写入预处理索引）
+python src/pipeline/dataset_builder.py --profile mfcp_payload
+
+# 强制重建索引（源数据变更后可用）
+python src/pipeline/dataset_builder.py --profile mfcp_payload --rebuild_index_cache
+```
+
 ## 4. 模型训练（PowerShell）
 
 ### 4.1 CIC5：Attention（单跑）
@@ -137,6 +149,16 @@ python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all
 
 ```powershell
 python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all
+```
+
+运行 MFCP：
+
+```powershell
+# Attention
+python src/fusion/run_attention_suite.py --profile mfcp_baseline --mode attention
+
+# Attention + Stacking
+python src/fusion/run_attention_suite.py --profile mfcp_baseline --mode attention_stacking
 ```
 
 说明：以上两个 profile 已内置 `batch_size=64, num_workers=4, prefetch_factor=2`，适配 4060 Laptop 8GB + 16GB 内存的稳定优先场景。
@@ -290,4 +312,31 @@ python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balance
 # 4) optional: compare with old CIC payload baseline
 python src/fusion/run_attention_suite.py --profile cic5_balanced --mode attention --archive_tag cic5_payload_baseline
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_compare
+```
+
+## 10. MFCP 快速命令
+
+```powershell
+Set-Location C:\Repositories\Traffic\FusionModel
+```
+
+```powershell
+# 1) 预处理（输出到 dataset/mfcp）
+python src/pipeline/dataset_builder.py --profile mfcp_payload
+```
+
+```powershell
+# 2) 训练与验证（attention）
+python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 24 --batch_size 64 --output_tag_prefix mfcp
+```
+
+```powershell
+# 3) 训练与验证（attention + stacking）
+python src/fusion/train_fusion_attention_stacking.py --dataset_name mfcp --preset none --epochs 24 --batch_size 64 --output_tag_prefix mfcp
+```
+
+```powershell
+# 4) 连续运行两次，验证索引命中（第二次应出现“融合索引缓存命中”）
+python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 1 --batch_size 16 --output_tag_prefix mfcp --no_archive
+python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 1 --batch_size 16 --output_tag_prefix mfcp --no_archive
 ```

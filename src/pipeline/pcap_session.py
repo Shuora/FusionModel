@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import random
 import socket
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Dict, Iterable, List, Literal, Tuple
 import dpkt
 
 ByteMode = Literal["payload", "full_packet"]
+LOGGER = logging.getLogger("pcap_session")
 
 
 @dataclass(frozen=True)
@@ -95,7 +97,25 @@ def _collect_session_chunks_from_pcap(
     sessions: Dict[SessionKey, List[Tuple[float, bytes]]] = {}
     with pcap_path.open("rb") as f:
         pcap = dpkt.pcap.Reader(f)
-        for ts, raw_buf in pcap:
+        packet_count = 0
+        while True:
+            try:
+                ts, raw_buf = next(pcap)
+            except StopIteration:
+                break
+            except dpkt.NeedData as exc:
+                # Keep already parsed packets when only the tail record is truncated.
+                if packet_count > 0:
+                    LOGGER.warning(
+                        "PCAP尾部数据不完整，已保留前序可解析包: file=%s packets=%s err=%s",
+                        pcap_path,
+                        packet_count,
+                        exc,
+                    )
+                    break
+                raise
+
+            packet_count += 1
             try:
                 eth = dpkt.ethernet.Ethernet(raw_buf)
             except (dpkt.UnpackError, ValueError):
@@ -264,3 +284,22 @@ def collect_cic_pcaps(
         if pcaps:
             class_to_pcaps.setdefault(major_name, []).extend(pcaps)
     return class_to_pcaps
+
+
+def collect_mfcp_pcaps(
+    source_dir: Path,
+    *,
+    include_families: Iterable[str] | None = None,
+    label_map: Dict[str, str] | None = None,
+) -> Dict[str, List[Path]]:
+    """
+    MFCP 采集入口。
+
+    MFCP 目录结构与 CIC 的分层采集逻辑兼容，这里复用同一实现，
+    仅在语义上区分参数名（families）。
+    """
+    return collect_cic_pcaps(
+        source_dir,
+        include_majors=include_families,
+        label_map=label_map,
+    )

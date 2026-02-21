@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import time
@@ -15,6 +16,7 @@ from feature_rgb import build_rgb_image, save_rgb_image
 from pcap_session import (
     SessionRecord,
     collect_cic_pcaps,
+    collect_mfcp_pcaps,
     collect_ustc_pcaps,
     extract_session_records_from_pcap,
     normalize_session_bytes,
@@ -43,6 +45,9 @@ class BuildStats:
     duplicate_session: int = 0
     empty_session: int = 0
     skipped_existing: int = 0
+    index_cache_path: str = ""
+    index_cache_hit: bool = False
+    index_cache_rebuilt: bool = False
     split_counts: Dict[str, Dict[str, int]] | None = None
 
 
@@ -84,6 +89,101 @@ def _sanitize_name(name: str) -> str:
     return "".join(out)
 
 
+@dataclass
+class SourceIndexMeta:
+    cache_path: Path
+    cache_hit: bool = False
+    cache_rebuilt: bool = False
+
+
+def _normalize_list(values: object) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, (list, tuple, set)):
+        seq = [str(v).strip() for v in values if str(v).strip()]
+    else:
+        text = str(values).strip()
+        seq = [text] if text else []
+    return sorted(seq, key=lambda x: x.lower())
+
+
+def _normalize_label_map(values: object) -> Dict[str, str]:
+    if not isinstance(values, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for key, value in values.items():
+        key_text = str(key).strip()
+        value_text = str(value).strip()
+        if key_text and value_text:
+            normalized[key_text] = value_text
+    return dict(sorted(normalized.items(), key=lambda item: item[0].lower()))
+
+
+def _profile_cache_context(profile: dict, dataset_type: str, source_dir: Path) -> dict:
+    return {
+        "dataset_type": dataset_type,
+        "source_dir": str(source_dir),
+        "include_majors": _normalize_list(profile.get("include_majors")),
+        "include_families": _normalize_list(profile.get("include_families")),
+        "label_map": _normalize_label_map(profile.get("label_map")),
+    }
+
+
+def _iter_pcap_files(source_dir: Path, dataset_type: str) -> List[Path]:
+    if dataset_type == "ustc_flat":
+        return sorted(source_dir.glob("*.pcap"))
+    return sorted(source_dir.rglob("*.pcap"))
+
+
+def _compute_source_signature(source_dir: Path, dataset_type: str) -> dict:
+    files = _iter_pcap_files(source_dir, dataset_type)
+    latest_mtime_ns = 0
+    total_size = 0
+    rel_paths: List[str] = []
+    for pcap_path in files:
+        try:
+            stat = pcap_path.stat()
+        except FileNotFoundError:
+            continue
+        latest_mtime_ns = max(latest_mtime_ns, int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9))))
+        total_size += int(stat.st_size)
+        rel_paths.append(str(pcap_path.relative_to(source_dir)).replace("\\", "/"))
+    h = hashlib.sha1()
+    for rel in rel_paths:
+        h.update(rel.encode("utf-8", errors="ignore"))
+        h.update(b"\n")
+    return {
+        "pcap_count": len(rel_paths),
+        "latest_mtime_ns": int(latest_mtime_ns),
+        "total_size": int(total_size),
+        "path_sha1": h.hexdigest(),
+    }
+
+
+def _source_index_path(dataset_dir: Path, profile_name: str) -> Path:
+    report_dir = dataset_dir / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return report_dir / f"pcap_index_{_sanitize_name(profile_name)}.json"
+
+
+def _decode_cached_class_to_pcaps(class_to_pcaps_raw: object, source_dir: Path) -> Dict[str, List[Path]]:
+    if not isinstance(class_to_pcaps_raw, dict):
+        return {}
+    decoded: Dict[str, List[Path]] = {}
+    for class_name, rel_files in class_to_pcaps_raw.items():
+        if not isinstance(rel_files, list):
+            continue
+        files: List[Path] = []
+        for rel in rel_files:
+            rel_text = str(rel).replace("\\", "/").strip("/")
+            if not rel_text:
+                continue
+            files.append((source_dir / rel_text).resolve())
+        if files:
+            decoded[str(class_name)] = sorted(files)
+    return decoded
+
+
 def _validate_pairs(dataset_dir: Path) -> Dict[str, Dict[str, int]]:
     split_counts: Dict[str, Dict[str, int]] = {}
     for split in ("Train", "Test"):
@@ -110,11 +210,68 @@ def _validate_pairs(dataset_dir: Path) -> Dict[str, Dict[str, int]]:
     return split_counts
 
 
-def _collect_pcaps(profile: dict) -> Dict[str, List[Path]]:
+def _assert_output_isolation(dataset_name: str, dataset_type: str) -> None:
+    """
+    防止 MFCP 配置误写到既有 USTC/CIC 目录，降低回归风险。
+    """
+    if dataset_type != "mfcp_hierarchical":
+        return
+    protected = {
+        "ustc-tfc2016",
+        "ustc-tfc2016-strict-nofallback",
+        "ustc-tfc2016-strict-time80",
+        "cic5_payload",
+        "cic5_fullpacket",
+        "cic4_fullpacket_l1024_hraw",
+    }
+    if dataset_name.strip().lower() in protected:
+        raise ValueError(
+            f"MFCP profile 不能输出到既有数据集目录: dataset_name={dataset_name}. "
+            "请使用独立目录（例如 MFCP）。"
+        )
+
+
+def _collect_pcaps(
+    profile_name: str,
+    profile: dict,
+    *,
+    dataset_dir: Path,
+    use_index_cache: bool,
+    rebuild_index_cache: bool,
+) -> Tuple[Dict[str, List[Path]], SourceIndexMeta]:
     dataset_type = str(profile.get("dataset_type", "")).strip().lower()
     source_dir = Path(profile["source_dir"]).resolve()
     if not source_dir.exists():
         raise FileNotFoundError(f"source_dir does not exist: {source_dir}")
+
+    cache_path = _source_index_path(dataset_dir, profile_name)
+    index_meta = SourceIndexMeta(cache_path=cache_path)
+    cache_ctx = _profile_cache_context(profile, dataset_type, source_dir)
+    source_signature = _compute_source_signature(source_dir, dataset_type)
+
+    if use_index_cache and (not rebuild_index_cache) and cache_path.exists():
+        try:
+            with cache_path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            valid = (
+                int(payload.get("cache_version", -1)) == 1
+                and payload.get("context") == cache_ctx
+                and payload.get("source_signature") == source_signature
+            )
+            if valid:
+                cached = _decode_cached_class_to_pcaps(payload.get("class_to_pcaps"), source_dir)
+                cached = {
+                    cls: [p for p in files if p.exists()]
+                    for cls, files in cached.items()
+                }
+                cached = {cls: files for cls, files in cached.items() if files}
+                if cached:
+                    index_meta.cache_hit = True
+                    LOGGER.info("预处理索引缓存命中: %s", cache_path)
+                    return cached, index_meta
+        except Exception as exc:
+            LOGGER.warning("读取预处理索引缓存失败 %s, err=%s", cache_path, exc)
 
     if dataset_type == "ustc_flat":
         class_to_pcaps = collect_ustc_pcaps(source_dir)
@@ -124,12 +281,43 @@ def _collect_pcaps(profile: dict) -> Dict[str, List[Path]]:
             include_majors=profile.get("include_majors"),
             label_map=profile.get("label_map"),
         )
+    elif dataset_type == "mfcp_hierarchical":
+        class_to_pcaps = collect_mfcp_pcaps(
+            source_dir,
+            include_families=profile.get("include_families"),
+            label_map=profile.get("label_map"),
+        )
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
 
     if not class_to_pcaps:
         raise RuntimeError(f"No pcap found: source_dir={source_dir}, dataset_type={dataset_type}")
-    return class_to_pcaps
+
+    if use_index_cache:
+        try:
+            payload = {
+                "cache_version": 1,
+                "context": cache_ctx,
+                "source_signature": source_signature,
+                "class_to_pcaps": {
+                    cls: [
+                        str(path.resolve().relative_to(source_dir)).replace("\\", "/")
+                        for path in sorted(files)
+                    ]
+                    for cls, files in sorted(class_to_pcaps.items(), key=lambda item: item[0].lower())
+                },
+                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            tmp_path.replace(cache_path)
+            index_meta.cache_rebuilt = True
+            LOGGER.info("预处理索引缓存已更新: %s", cache_path)
+        except Exception as exc:
+            LOGGER.warning("写入预处理索引缓存失败 %s, err=%s", cache_path, exc)
+
+    return class_to_pcaps, index_meta
 
 
 def _parse_fallback_strategy(profile: dict) -> SessionFallbackStrategy:
@@ -232,6 +420,9 @@ def _write_summary(stats: BuildStats, dataset_dir: Path, log_path: Path) -> Path
         "duplicate_session": stats.duplicate_session,
         "empty_session": stats.empty_session,
         "skipped_existing": stats.skipped_existing,
+        "index_cache_path": stats.index_cache_path,
+        "index_cache_hit": stats.index_cache_hit,
+        "index_cache_rebuilt": stats.index_cache_rebuilt,
         "split_counts": stats.split_counts or {},
         "log_file": str(log_path),
     }
@@ -240,17 +431,39 @@ def _write_summary(stats: BuildStats, dataset_dir: Path, log_path: Path) -> Path
     return report_path
 
 
-def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrite: bool) -> None:
+def build_dataset(
+    profile_name: str,
+    profile: dict,
+    dataset_root: Path,
+    overwrite: bool,
+    *,
+    use_index_cache: bool,
+    rebuild_index_cache: bool,
+) -> None:
     dataset_name = str(profile.get("dataset_name", profile_name))
+    dataset_type = str(profile.get("dataset_type", "")).strip().lower()
+    _assert_output_isolation(dataset_name, dataset_type)
+
     dataset_dir = dataset_root / dataset_name
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = _setup_logging(dataset_name, dataset_dir)
     LOGGER.info("Build dataset profile=%s dataset=%s", profile_name, dataset_name)
+    LOGGER.info(
+        "index_cache use=%s rebuild=%s",
+        bool(use_index_cache),
+        bool(rebuild_index_cache),
+    )
     LOGGER.info("source_dir=%s", profile.get("source_dir"))
     LOGGER.info("output_dir=%s", dataset_dir)
 
-    class_to_pcaps = _collect_pcaps(profile)
+    class_to_pcaps, index_meta = _collect_pcaps(
+        profile_name,
+        profile,
+        dataset_dir=dataset_dir,
+        use_index_cache=bool(use_index_cache),
+        rebuild_index_cache=bool(rebuild_index_cache),
+    )
     split_ratio = float(profile.get("train_ratio", 0.8))
     seed = int(profile.get("seed", 42))
     allow_session_split_fallback = bool(profile.get("allow_session_split_fallback", True))
@@ -281,6 +494,9 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
         byte_mode=byte_mode,
         session_fallback_strategy=session_fallback_strategy,
         single_pcap_policy=single_pcap_policy,
+        index_cache_path=str(index_meta.cache_path),
+        index_cache_hit=bool(index_meta.cache_hit),
+        index_cache_rebuilt=bool(index_meta.cache_rebuilt),
     )
 
     split_iter: List[Tuple[str, str, Path]] = []
@@ -367,14 +583,21 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
                 stats.skipped_existing += 1
                 continue
 
+            try:
+                rgb = build_rgb_image(
+                    record.payload,
+                    target_length=target_length,
+                    image_size=image_size,
+                )
+            except Exception as exc:
+                LOGGER.warning("构建 RGB 图像失败: sample=%s err=%s", sample_id, exc)
+                continue
+            if rgb.ndim != 3 or int(rgb.shape[-1]) != 3:
+                LOGGER.warning("RGB 校验失败: sample=%s shape=%s", sample_id, tuple(rgb.shape))
+                continue
+
             with bin_out.open("wb") as f:
                 f.write(normalized)
-
-            rgb = build_rgb_image(
-                record.payload,
-                target_length=target_length,
-                image_size=image_size,
-            )
             save_rgb_image(rgb, img_out)
             stats.saved_session += 1
 
@@ -404,8 +627,12 @@ def build_dataset(profile_name: str, profile: dict, dataset_root: Path, overwrit
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build USTC/CIC RGB+BIN fusion datasets.")
-    parser.add_argument("--profile", required=True, help="Profile name, e.g. ustc / cic5_payload / cic5_fullpacket")
+    parser = argparse.ArgumentParser(description="Build USTC/CIC/MFCP RGB+BIN fusion datasets.")
+    parser.add_argument(
+        "--profile",
+        required=True,
+        help="Profile name, e.g. ustc / cic5_payload / cic5_fullpacket / mfcp_payload",
+    )
     parser.add_argument(
         "--profiles",
         default=str(Path("configs") / "dataset_profiles.yaml"),
@@ -421,6 +648,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Overwrite existing image/bin files",
     )
+    parser.add_argument(
+        "--no_index_cache",
+        action="store_true",
+        help="Disable source pcap index cache",
+    )
+    parser.add_argument(
+        "--rebuild_index_cache",
+        action="store_true",
+        help="Force rebuild source pcap index cache",
+    )
     return parser.parse_args()
 
 
@@ -434,7 +671,14 @@ def main() -> int:
     profile = dict(profiles[args.profile] or {})
     dataset_root = Path(args.dataset_root).resolve()
     dataset_root.mkdir(parents=True, exist_ok=True)
-    build_dataset(args.profile, profile, dataset_root=dataset_root, overwrite=bool(args.overwrite))
+    build_dataset(
+        args.profile,
+        profile,
+        dataset_root=dataset_root,
+        overwrite=bool(args.overwrite),
+        use_index_cache=(not bool(args.no_index_cache)),
+        rebuild_index_cache=bool(args.rebuild_index_cache),
+    )
     return 0
 
 

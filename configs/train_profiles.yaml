@@ -119,3 +119,25 @@ profiles:
     pin_memory: true
     persistent_workers: true
     prefetch_factor: 2
+
+  mfcp_baseline:
+    dataset_root: dataset
+    dataset_name: mfcp
+    preset: none
+    batch_size: 64
+    image_size: 28
+    max_pcap_length: 784
+    epochs: 24
+    lr: 0.001
+    patience: 8
+    class_balance: weighted_loss
+    loss_type: ce
+    attention_dim: 256
+    output_dir: outputs
+    output_tag_prefix: mfcp
+    device: auto
+    seed: 42
+    num_workers: 4
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2

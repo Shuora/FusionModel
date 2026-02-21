@@ -118,3 +118,20 @@ profiles:
     min_session_bytes: 1
     target_length: 1024
     image_size: 32
+
+  mfcp_payload:
+    dataset_name: mfcp
+    dataset_type: mfcp_hierarchical
+    source_dir: SourceData/MFCP
+    train_ratio: 0.8
+    seed: 42
+    allow_session_split_fallback: true
+    session_fallback_strategy: hash
+    single_pcap_policy: train_only
+    byte_mode: payload
+    merge_bidirectional: true
+    sanitize_headers: true
+    min_chunk_bytes: 1
+    min_session_bytes: 1
+    target_length: 784
+    image_size: 28

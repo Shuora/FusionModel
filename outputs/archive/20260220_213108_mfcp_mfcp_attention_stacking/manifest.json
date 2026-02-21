@@ -1,0 +1,19 @@
+{
+  "run_label": "mfcp_attention_stacking",
+  "dataset_name": "mfcp",
+  "method_name": "mfcp_attention_stacking",
+  "created_at": "2026-02-20T21:31:08",
+  "output_dir": "C:\\Repositories\\Traffic\\FusionModel\\outputs",
+  "archive_dir": "C:\\Repositories\\Traffic\\FusionModel\\outputs\\archive\\20260220_213108_mfcp_mfcp_attention_stacking",
+  "move_files": false,
+  "file_count": 7,
+  "files": [
+    "logs\\mfcp_attention_stacking_20260220_210842.log",
+    "attention_curve_mfcp_attention_stacking_20260220_210842.png",
+    "metrics_curve_mfcp_attention_stacking_20260220_210842.png",
+    "confusion_matrix_mfcp_attention_stacking_xgboost_20260220_210842.png",
+    "report_mfcp_attention_stacking_xgboost_20260220_210842.md",
+    "meta_model_mfcp_attention_stacking_xgboost.pkl",
+    "fusion_model_mfcp_attention_stacking_base.pth"
+  ]
+}

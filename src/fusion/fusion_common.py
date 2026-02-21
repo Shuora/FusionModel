@@ -13,6 +13,7 @@ import re
 import shutil
 import sys
 import copy
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Tuple
@@ -374,7 +375,7 @@ class FusionDataset(Dataset):
     融合数据集类，同时加载图像数据和Pcap数据
     """
 
-    CACHE_VERSION = 1
+    CACHE_VERSION = 2
 
     def __init__(
         self,
@@ -478,6 +479,49 @@ class FusionDataset(Dataset):
         filename = f".fusion_index_cache_v{cls.CACHE_VERSION}_{image_key[:28]}_{pcap_key[:28]}.json"
         return os.path.join(image_dir, filename)
 
+    @staticmethod
+    def _safe_mtime_ns(path: str) -> int:
+        stat = os.stat(path)
+        return int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9)))
+
+    @staticmethod
+    def _list_class_dirs(root_dir: str) -> dict:
+        out = {}
+        if not os.path.isdir(root_dir):
+            return out
+        for entry in os.scandir(root_dir):
+            if not entry.is_dir():
+                continue
+            out[entry.name] = FusionDataset._safe_mtime_ns(entry.path)
+        return out
+
+    def _cache_is_stale(self, payload: dict, cache_path: str) -> bool:
+        cache_ns = int(payload.get("cache_created_at_ns", 0))
+        if cache_ns <= 0:
+            cache_ns = self._safe_mtime_ns(cache_path)
+
+        image_dirs = self._list_class_dirs(self.image_dir)
+        pcap_dirs = self._list_class_dirs(self.pcap_dir)
+        image_classes = set(image_dirs.keys())
+        pcap_classes = set(pcap_dirs.keys())
+        payload_classes = set(str(x) for x in payload.get("classes", []))
+        current_classes = image_classes & pcap_classes
+
+        if payload_classes != current_classes:
+            logger.info("融合索引缓存失效: 类别集合变化 cache=%s current=%s", sorted(payload_classes), sorted(current_classes))
+            return True
+
+        changed_dirs = [
+            cls
+            for cls in sorted(current_classes)
+            if max(image_dirs.get(cls, 0), pcap_dirs.get(cls, 0)) > cache_ns
+        ]
+        if changed_dirs:
+            logger.info("融合索引缓存失效: 检测到目录更新 classes=%s", changed_dirs[:8])
+            return True
+
+        return False
+
     def _load_index_cache(self, cache_path: str) -> Optional[dict]:
         try:
             if not os.path.isfile(cache_path):
@@ -494,6 +538,8 @@ class FusionDataset(Dataset):
             samples = payload.get("samples", [])
             if not isinstance(classes, list) or not isinstance(samples, list):
                 return None
+            if self._cache_is_stale(payload, cache_path):
+                return None
             return payload
         except Exception as e:
             logger.warning("读取融合索引缓存失败 %s: %s", cache_path, e)
@@ -507,6 +553,7 @@ class FusionDataset(Dataset):
                 "pcap_dir": os.path.abspath(self.pcap_dir),
                 "classes": self.classes,
                 "samples": self.samples,
+                "cache_created_at_ns": int(time.time_ns()),
             }
             tmp_path = cache_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -1668,7 +1715,7 @@ def add_common_args(p):
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     p.add_argument("--seed", type=int, default=42)
 
-    p.add_argument("--num_workers", type=int, default=8)
+    p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--pin_memory", action="store_true")
     p.add_argument("--persistent_workers", action="store_true")
     p.add_argument("--prefetch_factor", type=int, default=4)
@@ -1704,12 +1751,28 @@ def add_common_args(p):
     p.add_argument("--archive_dir", default="", help="Archive root directory, default <output_dir>/archive")
     p.add_argument("--archive_tag", default="", help="Archive folder name, default <timestamp>_<dataset>_<method>")
     p.add_argument("--archive_move", action="store_true", help="Move artifacts into archive instead of copy")
+    p.add_argument(
+        "--output_tag_prefix",
+        default="",
+        help="Optional filename prefix for outputs, e.g. mfcp",
+    )
     p.add_argument("--attention_dim", type=int, default=256)
     return p
 
 
 def _arg_explicitly_set(flag: str) -> bool:
     return any(token == flag or token.startswith(f"{flag}=") for token in sys.argv[1:])
+
+
+def _should_force_single_worker_on_windows(num_workers: int) -> bool:
+    if os.name != "nt":
+        return False
+    if int(num_workers) <= 0:
+        return False
+    if os.getenv("FUSIONMODEL_ALLOW_WIN_MULTIPROC", "0") == "1":
+        return False
+    # Windows spawn workers may repeatedly load CUDA DLLs and trigger WinError 1455.
+    return bool(getattr(torch.version, "cuda", None))
 
 
 def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
@@ -1754,10 +1817,6 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
 def build_common_kwargs(args):
     device = device_from_arg(args.device)
     set_seed(args.seed)
-    if device.type == "cuda" and not args.pin_memory:
-        args.pin_memory = True
-    if int(args.num_workers) > 0 and not args.persistent_workers:
-        args.persistent_workers = True
     if device.type == "cuda":
         try:
             torch.backends.cudnn.benchmark = True
@@ -1769,6 +1828,18 @@ def build_common_kwargs(args):
         args.dataset_name or None,
     )
     _apply_preset_defaults(args, resolved_dataset_name)
+    if _should_force_single_worker_on_windows(args.num_workers):
+        logger.warning(
+            "检测到 Windows + CUDA 版 PyTorch 且 num_workers=%s，自动降级为 num_workers=0 以规避 WinError 1455。"
+            "如需强制启用多进程，请设置环境变量 FUSIONMODEL_ALLOW_WIN_MULTIPROC=1。",
+            args.num_workers,
+        )
+        args.num_workers = 0
+        args.persistent_workers = False
+    if device.type == "cuda" and not args.pin_memory:
+        args.pin_memory = True
+    if int(args.num_workers) > 0 and not args.persistent_workers:
+        args.persistent_workers = True
     logger.info("Using dataset: %s (root=%s)", resolved_dataset_name, args.dataset_root)
     print(f"[Data] dataset={resolved_dataset_name}")
     print(f"[Data] dataset_root={args.dataset_root}")
@@ -1827,6 +1898,7 @@ def build_common_kwargs(args):
         archive_dir=archive_dir,
         archive_tag=args.archive_tag,
         archive_move=bool(args.archive_move),
+        output_tag_prefix=args.output_tag_prefix,
     )
 
 
@@ -1834,6 +1906,13 @@ def make_tag(fusion_mode: str, attention_dim: int) -> str:
     if fusion_mode == "attention":
         return f"attention_dim{attention_dim}"
     return fusion_mode
+
+
+def _compose_output_tag(base_tag: str, output_tag_prefix: str = "") -> str:
+    prefix = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(output_tag_prefix).strip()).strip("._-")
+    if not prefix:
+        return base_tag
+    return f"{prefix}_{base_tag}"
 
 
 def run_fusion_experiment(
@@ -1879,15 +1958,16 @@ def run_fusion_experiment(
     archive_dir: Optional[Path] = None,
     archive_tag: str = "",
     archive_move: bool = False,
+    output_tag_prefix: str = "",
 ) -> None:
     if not output_dir.is_absolute():
         output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag = make_tag(fusion_mode, attention_dim)
+    tag = _compose_output_tag(make_tag(fusion_mode, attention_dim), output_tag_prefix)
     log_path = output_dir / "logs" / f"{tag}_{ts}.log"
     setup_logging(log_path, force=True)
-    run_logger = logging.getLogger(f"run_{fusion_mode}")
+    run_logger = logging.getLogger(f"run_{tag}")
     run_logger.info("🚀 开始训练模式=%s, outputs=%s", fusion_mode, output_dir)
 
     train_loader, train_classes = load_fusion_data(
@@ -2069,13 +2149,17 @@ def run_stacking_experiment(
     archive_dir: Optional[Path] = None,
     archive_tag: str = "",
     archive_move: bool = False,
+    output_tag_prefix: str = "",
 ) -> None:
     if not output_dir.is_absolute():
         output_dir = (PROJECT_ROOT / output_dir).resolve()
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_tag = make_tag(base_fusion_mode, attention_dim)
-    ensemble_tag = ensemble_tag or f"{base_tag}_stacking"
+    base_tag = _compose_output_tag(make_tag(base_fusion_mode, attention_dim), output_tag_prefix)
+    if ensemble_tag:
+        ensemble_tag = _compose_output_tag(ensemble_tag, output_tag_prefix)
+    else:
+        ensemble_tag = f"{base_tag}_stacking"
     log_path = output_dir / "logs" / f"{ensemble_tag}_{ts}.log"
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
