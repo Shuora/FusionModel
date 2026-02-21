@@ -2,8 +2,8 @@
 
 ## 1. 目标与边界
 - 在 `FusionModel` 仓库内落地一套独立流程，不修改原仓库：
-  - `C:\Repositories\Traffic\Data-Processing`
-  - `C:\Repositories\Traffic\CharBERT-MobileViT`
+  - `/home/shuora/Repositories/Traffic/Data-Processing`
+  - `/home/shuora/Repositories/Traffic/CharBERT-MobileViT`
 - 模型主线固定为：`MobileViT + CharBERT + Attention fusion`，保留 `Attention + Stacking`。
 - USTC 与 CIC 分开训练与验证，不做交替喂数据。
 - CIC 任务固定为 5 类：`Adware, Benign, Ransomware, SMSMalware, Scareware`。
@@ -92,11 +92,11 @@
 - 给出版本下限或建议版本区间，避免环境漂移导致复现失败。
 - 按模块分组写注释（训练、预处理、可视化、工具）。
 
-### 7.2 README.md 编写（重点补充 PowerShell 指令）
+### 7.2 README.md 编写（重点补充 Ubuntu/bash 指令）
 - 项目概述：目标、模型结构、数据集范围（USTC/CIC5）。
-- 环境搭建：Windows + PowerShell 下的创建环境、安装依赖指令。
+- 环境搭建：Ubuntu + bash 下的创建环境、安装依赖指令。
 - 数据准备：目录结构示例与注意事项（Benign 放置规则）。
-- 运行指令（PowerShell）：
+- 运行指令（bash）：
   - 预处理命令示例
   - 训练命令示例
   - 评估与结果查看命令示例

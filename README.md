@@ -38,21 +38,21 @@ FusionModel/
 └─ outputs/
 ```
 
-## 2. 环境准备（PowerShell）
+## 2. 环境准备（Ubuntu）
 
-```powershell
-Set-Location C:\Repositories\Traffic\FusionModel
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+```bash
+cd /home/shuora/Repositories/Traffic/FusionModel
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 3. 数据预处理（PowerShell）
+## 3. 数据预处理（Ubuntu）
 
 ### 3.1 USTC
 
-```powershell
+```bash
 python src/pipeline/dataset_builder.py --profile ustc
 ```
 
@@ -65,13 +65,13 @@ python src/pipeline/dataset_builder.py --profile ustc
 
 ### 3.2 CIC5（payload 轨）
 
-```powershell
+```bash
 python src/pipeline/dataset_builder.py --profile cic5_payload
 ```
 
 ### 3.3 CIC5（full_packet 轨）
 
-```powershell
+```bash
 python src/pipeline/dataset_builder.py --profile cic5_fullpacket
 ```
 
@@ -79,13 +79,13 @@ python src/pipeline/dataset_builder.py --profile cic5_fullpacket
 
 默认遇到已有样本会跳过；如果你要重建：
 
-```powershell
+```bash
 python src/pipeline/dataset_builder.py --profile cic5_payload --overwrite
 ```
 
 ### 3.5 MFCP（payload）
 
-```powershell
+```bash
 # 首次构建（会写入预处理索引）
 python src/pipeline/dataset_builder.py --profile mfcp_payload
 
@@ -93,29 +93,29 @@ python src/pipeline/dataset_builder.py --profile mfcp_payload
 python src/pipeline/dataset_builder.py --profile mfcp_payload --rebuild_index_cache
 ```
 
-## 4. 模型训练（PowerShell）
+## 4. 模型训练（Ubuntu）
 
 ### 4.1 CIC5：Attention（单跑）
 
-```powershell
+```bash
 python src/fusion/train_fusion_attention.py --dataset_name CIC5_payload --preset cic_balanced --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
 ### 4.2 CIC5：Attention + Stacking（单跑）
 
-```powershell
+```bash
 python src/fusion/train_fusion_attention_stacking.py --dataset_name CIC5_payload --preset cic_balanced --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
 ### 4.3 USTC：Attention（单跑）
 
-```powershell
+```bash
 python src/fusion/train_fusion_attention.py --dataset_name USTC-TFC2016 --preset none --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
 ### 4.4 USTC：Attention + Stacking（单跑）
 
-```powershell
+```bash
 python src/fusion/train_fusion_attention_stacking.py --dataset_name USTC-TFC2016 --preset none --batch_size 64 --num_workers 4 --prefetch_factor 2
 ```
 
@@ -124,7 +124,7 @@ python src/fusion/train_fusion_attention_stacking.py --dataset_name USTC-TFC2016
 
 ### 4.5 CIC5（full_packet 轨）
 
-```powershell
+```bash
 # Attention（单跑）
 python src/fusion/train_fusion_attention.py --dataset_name CIC5_fullpacket --preset cic_balanced --batch_size 64 --num_workers 4 --prefetch_factor 2
 
@@ -141,19 +141,19 @@ python src/fusion/run_attention_suite.py --profile cic5_balanced --dataset_name 
 
 运行 CIC5：
 
-```powershell
+```bash
 python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all
 ```
 
 运行 USTC：
 
-```powershell
+```bash
 python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all
 ```
 
 运行 MFCP：
 
-```powershell
+```bash
 # Attention
 python src/fusion/run_attention_suite.py --profile mfcp_baseline --mode attention
 
@@ -166,7 +166,7 @@ python src/fusion/run_attention_suite.py --profile mfcp_baseline --mode attentio
 
 常用归档参数：
 
-```powershell
+```bash
 # 指定归档目录名（便于实验管理）
 python src/fusion/run_attention_suite.py --profile ustc_baseline --mode all --archive_tag ustc_try_01
 
@@ -194,10 +194,7 @@ python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all --no
 
 - 训练时如果出现 `CharBERT 加载失败，已禁止静默降级`，说明当前环境无法导入 `src/CharBERT/src`。先检查该目录是否完整，再重跑。
 - CIC 当前没有 `Benign` 文件夹时，`cic5_*` profile 会只处理现有类别；后续加入 `Benign` 后可直接重跑。
-- 如果 PowerShell 禁止脚本执行，可先运行：
-  ```powershell
-  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-  ```
+- Ubuntu 下无需额外设置脚本执行策略。
 - Windows 路径建议避免中文和空格，减少第三方库路径问题。
 
 ## 7. USTC strict split check (commands)
@@ -205,13 +202,13 @@ python src/fusion/run_attention_suite.py --profile cic5_balanced --mode all --no
 下面这组命令用于验证 USTC 高分是否受切分口径影响。  
 不会改动原数据集 `dataset/USTC-TFC2016`，只会在 `dataset/` 下新建目录。
 
-```powershell
-Set-Location C:\Repositories\Traffic\FusionModel
+```bash
+cd /home/shuora/Repositories/Traffic/FusionModel
 ```
 
 ### 7.1 Build strict datasets (new folders only)
 
-```powershell
+```bash
 # A) no fallback: single-pcap class -> Train only
 python src/pipeline/dataset_builder.py --profile ustc_strict_nofallback --dataset_root dataset
 
@@ -221,7 +218,7 @@ python src/pipeline/dataset_builder.py --profile ustc_strict_time80 --dataset_ro
 
 ### 7.2 Audit split leakage
 
-```powershell
+```bash
 python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016 --output outputs/split_audit_USTC-TFC2016.json
 python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016-strict-nofallback --output outputs/split_audit_USTC-TFC2016-strict-nofallback.json
 python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016-strict-time80 --output outputs/split_audit_USTC-TFC2016-strict-time80.json
@@ -229,7 +226,7 @@ python src/pipeline/split_audit.py --dataset_dir dataset/USTC-TFC2016-strict-tim
 
 ### 7.3 Fair model comparison (same model/hparams, different split)
 
-```powershell
+```bash
 # baseline split
 python src/fusion/run_attention_suite.py --profile ustc_baseline --mode attention --archive_tag ustc_baseline_splitcheck
 
@@ -239,7 +236,7 @@ python src/fusion/run_attention_suite.py --profile ustc_strict_time80_eval --mod
 
 ### 7.4 Optional: stacking comparison
 
-```powershell
+```bash
 python src/fusion/run_attention_suite.py --profile ustc_baseline --mode attention_stacking --archive_tag ustc_baseline_splitcheck_stack
 python src/fusion/run_attention_suite.py --profile ustc_strict_time80_eval --mode attention_stacking --archive_tag ustc_strict_time80_splitcheck_stack
 ```
@@ -253,13 +250,13 @@ python src/fusion/run_attention_suite.py --profile ustc_strict_time80_eval --mod
 
 本方案只改 CIC，不改 USTC。
 
-```powershell
-Set-Location C:\Repositories\Traffic\FusionModel
+```bash
+cd /home/shuora/Repositories/Traffic/FusionModel
 ```
 
 ### 8.1 Build dataset (new folder)
 
-```powershell
+```bash
 python src/pipeline/dataset_builder.py --profile cic4_fullpacket_l1024_hraw --dataset_root dataset
 ```
 
@@ -267,19 +264,19 @@ python src/pipeline/dataset_builder.py --profile cic4_fullpacket_l1024_hraw --da
 
 ### 8.2 Train attention (new train profile)
 
-```powershell
+```bash
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_attn
 ```
 
 ### 8.3 Optional: attention + stacking
 
-```powershell
+```bash
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention_stacking --archive_tag cic4_fp_l1024_stack
 ```
 
 ### 8.4 Compare with previous CIC baseline
 
-```powershell
+```bash
 # old CIC payload baseline
 python src/fusion/run_attention_suite.py --profile cic5_balanced --mode attention --archive_tag cic5_payload_baseline
 
@@ -289,26 +286,26 @@ python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balance
 
 ## 9. CIC only runbook (copy and run)
 
-```powershell
-Set-Location C:\Repositories\Traffic\FusionModel
+```bash
+cd /home/shuora/Repositories/Traffic/FusionModel
 ```
 
-```powershell
+```bash
 # 1) build / resume CIC4 full_packet dataset (safe to rerun; existing files will be skipped)
 python src/pipeline/dataset_builder.py --profile cic4_fullpacket_l1024_hraw --dataset_root dataset
 ```
 
-```powershell
+```bash
 # 2) train attention (primary)
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_attn
 ```
 
-```powershell
+```bash
 # 3) optional: attention + stacking
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention_stacking --archive_tag cic4_fp_l1024_stack
 ```
 
-```powershell
+```bash
 # 4) optional: compare with old CIC payload baseline
 python src/fusion/run_attention_suite.py --profile cic5_balanced --mode attention --archive_tag cic5_payload_baseline
 python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balanced --mode attention --archive_tag cic4_fp_l1024_compare
@@ -316,26 +313,26 @@ python src/fusion/run_attention_suite.py --profile cic4_fullpacket_l1024_balance
 
 ## 10. MFCP 快速命令
 
-```powershell
-Set-Location C:\Repositories\Traffic\FusionModel
+```bash
+cd /home/shuora/Repositories/Traffic/FusionModel
 ```
 
-```powershell
+```bash
 # 1) 预处理（输出到 dataset/mfcp）
 python src/pipeline/dataset_builder.py --profile mfcp_payload
 ```
 
-```powershell
+```bash
 # 2) 训练与验证（attention）
 python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 24 --batch_size 64 --output_tag_prefix mfcp
 ```
 
-```powershell
+```bash
 # 3) 训练与验证（attention + stacking）
 python src/fusion/train_fusion_attention_stacking.py --dataset_name mfcp --preset none --epochs 24 --batch_size 64 --output_tag_prefix mfcp
 ```
 
-```powershell
+```bash
 # 4) 连续运行两次，验证索引命中（第二次应出现“融合索引缓存命中”）
 python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 1 --batch_size 16 --output_tag_prefix mfcp --no_archive
 python src/fusion/train_fusion_attention.py --dataset_name mfcp --preset none --epochs 1 --batch_size 16 --output_tag_prefix mfcp --no_archive
