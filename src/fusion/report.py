@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from src.common.logging_utils import build_file_logger
+
 
 def generate_report(
     metrics: Dict[str, Any],
@@ -43,6 +45,11 @@ def generate_report(
 
 
 def run_report(run_dir: Path) -> Path:
+    outputs_root = run_dir.parent.parent if run_dir.parent.name == "runs" else run_dir.parent
+    log_path = outputs_root / "logs" / "report" / f"{run_dir.name}.log"
+    logger = build_file_logger(log_path, name="fusion.report")
+    logger.info("start report run_dir=%s", run_dir)
+
     eval_file = run_dir / "evaluation.json"
     if eval_file.exists():
         payload = json.loads(eval_file.read_text(encoding="utf-8"))
@@ -52,7 +59,9 @@ def run_report(run_dir: Path) -> Path:
         metrics = {}
         figures = {}
 
-    return generate_report(metrics, figures, run_dir / "report.md", run_info={"run_id": run_dir.name})
+    report_path = generate_report(metrics, figures, run_dir / "report.md", run_info={"run_id": run_dir.name})
+    logger.info("finish report report_path=%s", report_path)
+    return report_path
 
 
 def main(argv: List[str] | None = None) -> Path:

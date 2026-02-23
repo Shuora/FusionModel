@@ -25,6 +25,10 @@
 - 全量测试已扩展到 12 个用例并全部通过，主线 Task 1-12 的“失败测试 -> 最小实现 -> 回归通过”链路完整闭环。
 - 可选 Task 13 已完成 smoke 级实现：MoE 路由器与蒸馏损失函数，并新增独立冒烟测试。
 - 可选任务的性能退出条件（F1 提升/推理提速、蒸馏精度损失阈值）尚未在真实数据训练上验证。
+- 用户反馈“预处理无控制台输出”，已补齐实时可观测性：数据集级/样本级进度条 + 摘要输出 + 预处理日志。
+- `build_dataset` 在缺少 `samples` 时可基于 `source_root` 自动扫描 `*.pcap|*.pcapng|*.cap` 生成样本。
+- 日志路径统一为 `outputs/logs/<category>/`，其中 `<category>` 包含 `preprocess`、`train`、`evaluate`、`report`。
+- 当前真实数据目录可直接复现多数据集预处理：`CICAndMal2017`（2126）、`MFCP`（7）、`USTC-TFC2016`（10）。
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -39,6 +43,7 @@
 | 第三批将融合模型实现限定为可验证最小骨架 | 先锁定模块接口与产物格式，再迭代真实训练细节 |
 | 第四批优先保证产物可落盘与接口闭合 | 先满足 run/report/ablation 的工程可复现性，再细化指标质量 |
 | 可选 Task 13 先以 smoke 验证接口正确性 | 真实收益评估留给后续基于数据集的长跑实验 |
+| 日志根目录统一到 `outputs/logs/` | 满足“预处理与训练验证日志统一归档且分类摆放”的运维需求 |
 
 ## Issues Encountered
 | Issue | Resolution |

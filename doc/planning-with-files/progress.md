@@ -146,6 +146,30 @@
   - `src/fusion/distill.py`
   - `tests/fusion/test_moe_distill_smoke.py`
 
+### Phase 9: 可观测性增强（进度条 + 分类日志）
+- **Status:** complete
+- **Started:** 2026-02-23 12:20 CST
+- **Completed:** 2026-02-23 12:40 CST
+- Actions taken:
+  - 重构 `build_dataset`：支持多 `--config`、实时进度条（datasets/samples）、自动 `source_root` 扫描样本。
+  - 预处理结束输出摘要（config、dataset_root、样本计数、log_path）。
+  - 新增预处理日志分类输出：`outputs/logs/preprocess/<dataset>.log`。
+  - 训练模块新增集中日志：`outputs/logs/train/<run_name>.log`，并保留 run 目录日志。
+  - 评估/报告新增集中日志：`outputs/logs/evaluate/<run_name>.log` 与 `outputs/logs/report/<run_name>.log`。
+  - 新增并更新测试，覆盖自动发现样本、多配置运行、分类日志产出。
+  - 更新 README，所有运行阶段按 3 数据集拆分命令并补充日志分类说明。
+- Files created/modified:
+  - `src/common/logging_utils.py`
+  - `src/pipeline/build_dataset.py`
+  - `src/fusion/train_stagewise.py`
+  - `src/fusion/evaluate.py`
+  - `src/fusion/report.py`
+  - `tests/integration/test_build_dataset_smoke.py`
+  - `tests/integration/test_build_dataset_progress_and_discovery.py`
+  - `tests/fusion/test_training_smoke.py`
+  - `tests/integration/test_evaluate_logging.py`
+  - `README.md`
+
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
@@ -184,6 +208,10 @@
 | Task 13 fail check | `python -m pytest tests/fusion/test_moe_distill_smoke.py -v` | 失败（模块缺失） | `ModuleNotFoundError` | ✓ |
 | Task 13 pass check | `python -m pytest tests/fusion/test_moe_distill_smoke.py -v` | 通过 | 1 passed | ✓ |
 | Full regression (optional) | `python -m pytest tests -q` | 全通过 | 13 passed | ✓ |
+| Phase 9 targeted tests | `python -m pytest tests/integration/test_build_dataset_smoke.py tests/integration/test_build_dataset_progress_and_discovery.py tests/fusion/test_training_smoke.py tests/integration/test_evaluate_logging.py -v` | 全通过 | 5 passed | ✓ |
+| Full regression (phase 9) | `python -m pytest tests -q` | 全通过 | 16 passed | ✓ |
+| Runtime check (USTC preprocess) | `python -m src.pipeline.build_dataset --config configs/dataset_ustc_tfc2016.yaml` | 显示进度与计数 | `image_count=10 pcap_count=10` | ✓ |
+| Runtime check (multi-dataset preprocess) | `python -m src.pipeline.build_dataset --config configs/dataset_cicandmal2017.yaml --config configs/dataset_mfcp.yaml --config configs/dataset_ustc_tfc2016.yaml` | 显示 datasets/samples 进度条 | 3 datasets 成功 | ✓ |
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |

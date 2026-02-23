@@ -18,3 +18,4 @@ def test_training_creates_run_artifacts(tmp_path: Path):
     assert (run_dir / "checkpoints").is_dir()
     assert (run_dir / "checkpoints" / "best.pt").exists()
     assert (run_dir / "metrics.csv").exists()
+    assert (tmp_path / "logs" / "train" / "smoke_train.log").exists()

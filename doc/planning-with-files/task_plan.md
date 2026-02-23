@@ -4,7 +4,7 @@
 基于 `doc/恶意tls家族分类方案计划书.md` 输出可直接执行的端到端详细计划，覆盖数据、建模、训练、评估、交付与风险控制。
 
 ## Current Phase
-Phase 8（Task 1-12 + Optional Task 13 complete, waiting branch integration decision）
+Phase 9（进度条与日志分类增强，已完成）
 
 ## Phases
 ### Phase 1: 需求提取与约束确认
@@ -60,6 +60,14 @@ Phase 8（Task 1-12 + Optional Task 13 complete, waiting branch integration deci
 - [x] 输出批次报告并等待 review 反馈
 - **Status:** complete
 
+### Phase 9: 可观测性增强（用户反馈闭环）
+- [x] 预处理支持实时进度条（数据集级 + 样本级）
+- [x] 预处理支持自动扫描 `source_root` 构建样本
+- [x] 日志统一输出到 `outputs/logs/` 并按类别分类
+- [x] README 更新为三数据集命令 + 日志目录说明
+- [x] 回归验证通过
+- **Status:** complete
+
 ## Key Questions
 1. 当前 `SourceData` 中最终纳入的恶意家族名单与最小样本阈值是否固定（建议先锁定家族名单后再生成最终 split）。
 2. 训练资源上限（单卡显存、可用时长）是多少（将直接影响 BERT 序列长度与集成复杂度）。
@@ -78,6 +86,7 @@ Phase 8（Task 1-12 + Optional Task 13 complete, waiting branch integration deci
 |-------|---------|------------|
 | `pytest` 在 `FusionModel` conda 环境缺失 | 1 | 使用 `conda activate FusionModel && python -m pip install pytest` 补齐 |
 | 沙箱网络限制导致 pip 安装失败 | 2 | 请求提权后完成依赖安装 |
+| 预处理命令执行后无控制台反馈 | 1 | 在 `build_dataset` 增加进度条与摘要输出，并补充日志 |
 
 ## Notes
 - 每完成一个阶段立即更新 `task_plan.md`、`findings.md`、`progress.md`。
