@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, Iterator, List, Sequence, Tuple
 
 import torch
 import yaml
@@ -11,6 +11,11 @@ import yaml
 from src.common.config import load_yaml
 from src.common.logging_utils import build_multi_file_logger
 from src.fusion.datasets import DummyFusionDataset
+
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency fallback
+    tqdm = None
 
 
 def _infer_log_root_from_output_root(output_root: Path) -> Path:
@@ -27,7 +32,42 @@ def _write_metrics_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def run_train(cfg: Dict[str, Any]) -> Path:
+def _build_epoch_schedule(stage_names: Sequence[str], num_epochs: int) -> List[Tuple[int, str, int]]:
+    schedule: List[Tuple[int, str, int]] = []
+    global_epoch = 0
+    for stage in stage_names:
+        for stage_epoch in range(1, num_epochs + 1):
+            global_epoch += 1
+            schedule.append((global_epoch, stage, stage_epoch))
+    return schedule
+
+
+def _iter_schedule(
+    schedule: Sequence[Tuple[int, str, int]],
+    run_name: str,
+    show_progress: bool,
+) -> Iterator[Tuple[int, str, int]]:
+    if not show_progress:
+        yield from schedule
+        return
+
+    if tqdm is not None:
+        yield from tqdm(
+            schedule,
+            total=len(schedule),
+            desc=f"{run_name} epochs",
+            unit="epoch",
+            dynamic_ncols=True,
+        )
+        return
+
+    total = len(schedule)
+    for idx, row in enumerate(schedule, start=1):
+        print(f"[train][progress] {idx}/{total}")
+        yield row
+
+
+def run_train(cfg: Dict[str, Any], show_progress: bool = False) -> Path:
     run_name = str(cfg.get("run_name", "fusion_run"))
     output_root = Path(str(cfg.get("output_root", "outputs/runs")))
     run_dir = output_root / run_name
@@ -53,20 +93,28 @@ def run_train(cfg: Dict[str, Any]) -> Path:
     logger.info("central_log_path=%s", central_log_path)
 
     metrics_rows: List[Dict[str, Any]] = []
-    stages = ["stage1_branch_warmup", "stage2_fusion_train", "stage3_pre_stacking"]
-    for epoch, stage in enumerate(stages, start=1):
-        loss = round(1.0 / epoch, 6)
-        metrics_rows.append({"epoch": epoch, "stage": stage, "loss": loss})
-        logger.info("%s loss=%.6f", stage, loss)
+    stages = [str(x) for x in cfg.get("stagewise", ["stage1_branch_warmup", "stage2_fusion_train", "stage3_pre_stacking"])]
+    num_epochs = max(1, int(cfg.get("num_epochs", 1)))
+    stage_index = {name: idx + 1 for idx, name in enumerate(stages)}
+    schedule = _build_epoch_schedule(stages, num_epochs)
+
+    logger.info("stages=%s num_epochs=%d total_steps=%d", stages, num_epochs, len(schedule))
+
+    for global_epoch, stage, stage_epoch in _iter_schedule(schedule, run_name=run_name, show_progress=show_progress):
+        denom = max(1, stage_epoch * stage_index[stage])
+        loss = round(1.0 / denom, 6)
+        metrics_rows.append({"epoch": global_epoch, "stage": stage, "loss": loss})
+        logger.info("%s epoch=%d loss=%.6f", stage, stage_epoch, loss)
 
     _write_metrics_csv(run_dir / "metrics.csv", metrics_rows)
 
+    best_row = min(metrics_rows, key=lambda row: row["loss"])
     torch.save(
         {
-            "best_stage": "stage2_fusion_train",
+            "best_stage": best_row["stage"],
             "num_classes": num_classes,
             "metric": "loss",
-            "value": min(row["loss"] for row in metrics_rows),
+            "value": best_row["loss"],
         },
         checkpoints_dir / "best.pt",
     )
@@ -82,7 +130,9 @@ def main(argv: List[str] | None = None) -> Path:
     args = parser.parse_args(argv)
 
     cfg = load_yaml(args.config)
-    return run_train(cfg)
+    run_dir = run_train(cfg, show_progress=True)
+    print(f"[train_stagewise] run_dir={run_dir}")
+    return run_dir
 
 
 if __name__ == "__main__":
