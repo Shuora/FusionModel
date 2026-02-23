@@ -319,3 +319,107 @@
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
 | 2026-02-23 16:11 | `write_ablation_summary` 不存在导致收集失败 | 1 | 在 `src/ablation.py` 实现 summary 聚合与 CLI 模式 |
+
+### Batch 10: Session Full 论文口径计划固化
+- **Status:** complete
+- **Started:** 2026-02-23 18:35
+- **Finished:** 2026-02-23 18:48
+- Actions taken:
+  - 完成 brainstorming 多轮决策确认，明确 `session_full` 命名、数据链路、自动清理、抽检图保留与两阶段评估协议。
+  - 新增设计文档 `docs/plans/2026-02-23-session-full-mvtba-design.md`。
+  - 使用 `writing-plans` 生成可执行实施计划 `docs/plans/2026-02-23-session-full-mvtba-implementation-plan.md`，拆分为 8 个 TDD 任务。
+  - 更新 `doc/planning-with-files/task_plan.md` 与 `findings.md`，将当前阶段切换为 Phase 6。
+- Files created/modified:
+  - `docs/plans/2026-02-23-session-full-mvtba-design.md`
+  - `docs/plans/2026-02-23-session-full-mvtba-implementation-plan.md`
+  - `doc/planning-with-files/task_plan.md`
+  - `doc/planning-with-files/findings.md`
+  - `doc/planning-with-files/progress.md`
+
+## Test Results (Batch 10)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Plan Lint | 手工检查文档路径与任务完整性 | 计划可执行、路径准确 | 通过 | ✓ |
+
+## Error Log (Batch 10)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-02-23 18:42 | 无 | 1 | 无需修复 |
+
+### Batch 11: Session Full 实施落地（TDD）
+- **Status:** complete
+- **Started:** 2026-02-23 18:48
+- **Finished:** 2026-02-23 19:02
+- Actions taken:
+  - Task1: 增加 `session_full` policy 映射，`session_manifest` 增加 `is_tls_ssl/tls_ssl_reason` 字段。
+  - Task2: 新增 `src/data/session_splitcap.py`，支持 session pcap 切分与清理。
+  - Task3: `session_full` 模式下保留 non-TLS 会话（不丢弃，仅打标）。
+  - Task4: 特征后默认清理 `tmp_sessions`，并保留 `debug/preview_png` 抽检图像。
+  - Task5: `preprocess_runner` 与 `preprocess` CLI 新增 `--keep-sessions`、`--preview-per-family`，默认清理。
+  - Task6: 新增 `src/experiments/stage1_binary.py`，严格校验 4 数据集并生成二分类清单。
+  - Task7: 新增 `src/experiments/stage2_multiclass.py`，固化三任务多分类清单。
+  - Task8: 新增 `docs/commands/session-full-experiments.md`，并在 `README.md` 增加入口。
+  - 兼容修复：为 `src/data/preprocess_runner.py` 与 `src/data/preprocess.py` 增加脚本直跑导入兜底，支持 `python src/data/preprocess_runner.py ...`。
+- Files created/modified:
+  - `src/data/build_dataset.py`
+  - `src/data/preprocess.py`
+  - `src/data/preprocess_runner.py`
+  - `src/data/feature_encoder.py`
+  - `src/data/session_splitcap.py`
+  - `src/experiments/__init__.py`
+  - `src/experiments/stage1_binary.py`
+  - `src/experiments/stage2_multiclass.py`
+  - `tests/data/test_preprocess_runner.py`
+  - `tests/data/test_session_full_schema.py`
+  - `tests/data/test_session_splitcap.py`
+  - `tests/data/test_session_full_filtering.py`
+  - `tests/data/test_preview_and_cleanup.py`
+  - `tests/pipeline/test_stage1_binary_protocol.py`
+  - `tests/pipeline/test_stage2_multiclass_protocol.py`
+  - `docs/commands/session-full-experiments.md`
+  - `README.md`
+  - `doc/planning-with-files/task_plan.md`
+  - `doc/planning-with-files/findings.md`
+  - `doc/planning-with-files/progress.md`
+
+## Test Results (Batch 11)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Task1 RED | `pytest -q tests/data/test_session_full_schema.py::test_session_full_policy_emits_tls_flags` | 字段缺失失败 | 失败（符合预期） | ✓ |
+| Task1 GREEN | `pytest -q tests/data/test_session_full_schema.py tests/data/test_preprocess_runner.py::test_run_preprocess_policies_supports_session_full` | 通过 | 通过 | ✓ |
+| Task2 GREEN | `pytest -q tests/data/test_session_splitcap.py` | 通过 | 通过 | ✓ |
+| Task3 RED | `pytest -q tests/data/test_session_full_filtering.py::test_session_full_keeps_non_tls_and_marks_reason` | accepted=1 导致失败 | 失败（符合预期） | ✓ |
+| Task3 GREEN | `pytest -q tests/data/test_session_full_filtering.py` | 通过 | 通过 | ✓ |
+| Task4 RED | `pytest -q tests/data/test_preview_and_cleanup.py::test_session_full_cleanup_and_preview_png` | 参数缺失失败 | 失败（符合预期） | ✓ |
+| Task4 GREEN | `pytest -q tests/data/test_preview_and_cleanup.py` | 通过 | 通过 | ✓ |
+| Task5 GREEN | `pytest -q tests/data/test_preprocess_runner.py` | 通过 | 通过 | ✓ |
+| Task6 GREEN | `pytest -q tests/pipeline/test_stage1_binary_protocol.py` | 通过 | 通过 | ✓ |
+| Task7 GREEN | `pytest -q tests/pipeline/test_stage2_multiclass_protocol.py` | 通过 | 通过 | ✓ |
+| Script Entry | `python src/data/preprocess_runner.py --help` | 可运行 | 通过 | ✓ |
+| Full Regression | `pytest -q` | 全绿 | 41 passed | ✓ |
+
+## Error Log (Batch 11)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-02-23 18:50 | `session_full` manifest 缺字段 | 1 | `make_manifest_row` + `preprocess` 注入 `is_tls_ssl/tls_ssl_reason` |
+| 2026-02-23 18:52 | 缺少 `src.data.session_splitcap` 模块 | 1 | 新增模块并实现 split/cleanup |
+| 2026-02-23 18:55 | `session_full` 仍丢弃 non-TLS | 1 | `split_tls_and_non_tls(mode=session_full)` 改为全量保留+打标 |
+| 2026-02-23 18:57 | `preprocess_source` 无 cleanup 参数 | 1 | 增加 `cleanup_sessions/preview_per_family` 并透传 |
+| 2026-02-23 19:04 | 脚本路径运行 `preprocess_runner.py` 可能触发 `ModuleNotFoundError: src` | 1 | 在入口注入项目根路径到 `sys.path` |
+
+### Batch 12: README 详细命令补全 + 分支收尾检查
+- **Status:** complete
+- **Started:** 2026-02-23 19:05
+- **Finished:** 2026-02-23 19:09
+- Actions taken:
+  - 重写 `README.md`，补齐 `session_full`、阶段1/2协议、三数据集分开训练与评估命令。
+  - 执行 `pytest -q` 验证当前分支可用。
+  - 进入 `finishing-a-development-branch` 流程，收集基线分支信息与当前工作区状态。
+- Files created/modified:
+  - `README.md`
+  - `doc/planning-with-files/progress.md`
+
+## Test Results (Batch 12)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Full Regression | `pytest -q` | 全绿 | 41 passed | ✓ |

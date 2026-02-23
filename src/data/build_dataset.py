@@ -26,8 +26,10 @@ def make_manifest_row(
     split: str,
     policy: str,
     flow_stats: Dict[str, Any] | None = None,
+    is_tls_ssl: bool | None = None,
+    tls_ssl_reason: str | None = None,
 ) -> Dict[str, Any]:
-    return {
+    row = {
         "session_id": session_id,
         "dataset": dataset,
         "family": family,
@@ -36,6 +38,10 @@ def make_manifest_row(
         "policy": policy,
         "flow_stats": flow_stats or {},
     }
+    if is_tls_ssl is not None:
+        row["is_tls_ssl"] = bool(is_tls_ssl)
+        row["tls_ssl_reason"] = tls_ssl_reason or ""
+    return row
 
 
 def split_tls_and_non_tls(
@@ -43,6 +49,22 @@ def split_tls_and_non_tls(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     accepted: List[Dict[str, Any]] = []
     dropped: List[Dict[str, Any]] = []
+    if mode == "session_full":
+        for session in sessions:
+            is_tls, reason = classify_session_as_tls(
+                payload_chunks=session.get("payload_chunks", []),
+                protocol=session.get("protocol", "TCP"),
+                mode="relaxed",
+            )
+            accepted.append(
+                {
+                    **session,
+                    "tls_reason": "tls" if is_tls else reason,
+                    "is_tls_ssl": bool(is_tls),
+                    "tls_ssl_reason": "tls" if is_tls else reason,
+                }
+            )
+        return accepted, []
 
     for session in sessions:
         ok, reason = classify_session_as_tls(

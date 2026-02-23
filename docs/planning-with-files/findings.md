@@ -3,6 +3,7 @@
 ## Requirements
 - 用户要求按 `executing-plans` 开始实施，按批次交付并等待反馈。
 - 当前批次目标：完成 Day4~Day6 核心功能并补齐训练日志/进度条规范。
+- 新增目标：引入论文口径 `session_full` 预处理与两阶段评估（阶段1混合二分类 + 阶段2三数据集独立多分类）。
 
 ## Research Findings
 - 当前 worktree 基于已提交快照，不包含主工作区的未跟踪 `SourceData` 与 `doc/plans`。
@@ -15,6 +16,13 @@
 - `MultiheadAttention` 在当前 CPU 环境可稳定运行，满足 Tiny 融合模型单测与 smoke test。
 - `xgboost` 在 `FusionModel` conda 环境可用，满足 stacking 元学习器训练。
 - `pytest -q` 在 `FusionModel` conda 环境全量通过（31 passed, warnings 非阻塞）。
+- 现有 `preprocess` 仅支持 `strict/relaxed` 过滤语义，`full` 仍映射到 strict，不满足“非 TLS 保留”。
+- 现有流水线不落盘 session pcap，也没有自动清理 `tmp_sessions` 机制。
+- 现有输出虽然有 `debug/preview_png` 目录约定，但尚未在编码阶段真实写入抽检 PNG。
+- `session_full` 落地后，预处理将为每个原始 pcap 先生成 `tmp_sessions/<capture>/...pcap`，提特征后默认自动清理。
+- `session_full` manifest 已新增 `is_tls_ssl` 与 `tls_ssl_reason` 字段，可追踪非TLS保留样本。
+- 入口兼容性：`python src/data/preprocess_runner.py ...` 在无 `PYTHONPATH` 时会导入失败，需要在脚本入口兜底 `sys.path`。
+- 原 `README` 中存在与当前 `load_policy_multimodal_data` 目录约定不一致的命令（`--processed-root` 指向数据集子目录）；已统一为“指向包含数据集目录的一层根目录”。
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -41,6 +49,17 @@
 | 引入 NaN/梯度异常显式处理 | 满足“异常显式报错并终止或降级处理”要求 |
 | `stage=stacking|moe` 在 train 结束后自动调度子流程 | 对齐计划中的统一入口设计 `src/train.py --stage ...` |
 | `ablation` 新增 summary 模式，自动聚合各 run 指标 | 对齐计划“消融输出自动汇总总表”要求 |
+| 新增策略名 `session_full` | 明确表达“按会话全量保留”的论文口径，不与 `full` 混淆 |
+| `session_full` 数据链采用 `PCAP -> Session PCAP -> 特征提取` | 与论文处理链保持一致，并满足用户要求真实落盘 session pcap |
+| `session_full` 默认 `cleanup_sessions=True` | 提特征后清理 session pcap，降低磁盘占用 |
+| 保留抽检 `preview_png` | 保障可解释性和质量抽检，不做全量图像存储 |
+| 阶段1标签固定：`ISCX=normal`，`MFCP/MTA/USTC=malicious` | 与已确认协议一致，缺任一数据集直接失败 |
+| 阶段2固定三任务：`MTA-7`、`MFCP-6`、`USTC-10` | 避免动态口径导致论文复现实验不可比 |
+| 新增 `src.data.session_splitcap` | 独立封装 Session PCAP 切分与清理，避免在 `preprocess.py` 堆积复杂逻辑 |
+| `save_feature_shards` 增加 preview 抽样落盘能力 | 满足“保留抽检RGB图像”并限制每类样本数 |
+| 新增 `src.experiments.stage1_binary/stage2_multiclass` | 将两阶段协议固化为可执行 CLI，而非仅文档描述 |
+| 在 `preprocess_runner.py/preprocess.py` 添加脚本入口 `sys.path` 兜底 | 兼容用户常用的脚本路径运行方式，消除 `ModuleNotFoundError: src` |
+| 重写 `README` 为 `session_full` 主线命令手册 | 保证用户按文档可直接复现，不再混淆 strict/full 老口径 |
 
 ## Issues Encountered
 | Issue | Resolution |
@@ -75,3 +94,15 @@
 - `tests/pipeline/test_moe_pipeline.py`
 - `tests/pipeline/test_ablation_plan.py`
 - `tests/pipeline/test_train_stage_dispatch.py`
+- `docs/plans/2026-02-23-session-full-mvtba-design.md`
+- `docs/plans/2026-02-23-session-full-mvtba-implementation-plan.md`
+- `src/data/session_splitcap.py`
+- `tests/data/test_session_splitcap.py`
+- `tests/data/test_session_full_schema.py`
+- `tests/data/test_session_full_filtering.py`
+- `tests/data/test_preview_and_cleanup.py`
+- `src/experiments/stage1_binary.py`
+- `src/experiments/stage2_multiclass.py`
+- `tests/pipeline/test_stage1_binary_protocol.py`
+- `tests/pipeline/test_stage2_multiclass_protocol.py`
+- `docs/commands/session-full-experiments.md`
