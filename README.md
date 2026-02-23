@@ -29,11 +29,26 @@
 
 ```text
 configs/
+  # 通用配置
   ablation.yaml
   dataset_tls_full.yaml
   dataset_tls_leakage_reduced.yaml
   train_fusion.yaml
   train_stacking.yaml
+
+  # 按数据集拆分的配置（新增）
+  dataset_cicandmal2017.yaml
+  dataset_mfcp.yaml
+  dataset_ustc_tfc2016.yaml
+  train_fusion_cicandmal2017.yaml
+  train_fusion_mfcp.yaml
+  train_fusion_ustc_tfc2016.yaml
+  train_stacking_cicandmal2017.yaml
+  train_stacking_mfcp.yaml
+  train_stacking_ustc_tfc2016.yaml
+  ablation_cicandmal2017.yaml
+  ablation_mfcp.yaml
+  ablation_ustc_tfc2016.yaml
 
 src/
   common/
@@ -107,71 +122,125 @@ conda activate FusionModel
 - `outputs/`：训练、评估、报告、消融结果输出目录。
 - `doc/`：方案文档、执行计划、过程记录。
 
+当前识别到的 3 个数据集目录：
+
+- `SourceData/CICAndMal2017`
+- `SourceData/MFCP`
+- `SourceData/USTC-TFC2016`
+
 ---
 
-## 5. 运行命令（正式链路）
+## 5. 运行命令（按数据集拆分，3 套独立）
 
-> 以下命令与当前代码入口一一对应。
+> 下面每个部分都给了 3 套分开的命令：每个数据集一套。
 
 ### 5.1 数据构建
 
+#### CICAndMal2017
+
 ```bash
-python -m src.pipeline.build_dataset --config configs/dataset_tls_full.yaml
-python -m src.pipeline.build_dataset --config configs/dataset_tls_leakage_reduced.yaml
+python -m src.pipeline.build_dataset --config configs/dataset_cicandmal2017.yaml
 ```
 
-默认会在 `dataset/<dataset_name>/` 下生成：
+#### MFCP
+
+```bash
+python -m src.pipeline.build_dataset --config configs/dataset_mfcp.yaml
+```
+
+#### USTC-TFC2016
+
+```bash
+python -m src.pipeline.build_dataset --config configs/dataset_ustc_tfc2016.yaml
+```
+
+默认在 `dataset/<dataset_name>/` 下生成：
 
 - `image_data/*.npy`
 - `pcap_data/*.json`
 
 ### 5.2 主模型训练
 
+#### CICAndMal2017
+
 ```bash
-python -m src.fusion.train_stagewise --config configs/train_fusion.yaml
+python -m src.fusion.train_stagewise --config configs/train_fusion_cicandmal2017.yaml
 ```
 
-默认 `run_name: fusion_baseline`，产物位于：
+#### MFCP
 
-- `outputs/runs/fusion_baseline/config.yaml`
-- `outputs/runs/fusion_baseline/train.log`
-- `outputs/runs/fusion_baseline/metrics.csv`
-- `outputs/runs/fusion_baseline/checkpoints/best.pt`
+```bash
+python -m src.fusion.train_stagewise --config configs/train_fusion_mfcp.yaml
+```
+
+#### USTC-TFC2016
+
+```bash
+python -m src.fusion.train_stagewise --config configs/train_fusion_ustc_tfc2016.yaml
+```
 
 ### 5.3 集成训练（stacking）
 
+#### CICAndMal2017
+
 ```bash
-python -m src.fusion.stacking --config configs/train_stacking.yaml
+python -m src.fusion.stacking --config configs/train_stacking_cicandmal2017.yaml
 ```
 
-默认输出：
+#### MFCP
 
-- `outputs/runs/stacking_baseline/stacking/meta_features.csv`
-- `outputs/runs/stacking_baseline/stacking/meta_summary.yaml`
+```bash
+python -m src.fusion.stacking --config configs/train_stacking_mfcp.yaml
+```
+
+#### USTC-TFC2016
+
+```bash
+python -m src.fusion.stacking --config configs/train_stacking_ustc_tfc2016.yaml
+```
 
 ### 5.4 评估与报告
 
+#### CICAndMal2017
+
 ```bash
-python -m src.fusion.evaluate --run-dir outputs/runs/fusion_baseline
-python -m src.fusion.report --run-dir outputs/runs/fusion_baseline
+python -m src.fusion.evaluate --run-dir outputs/runs/fusion_cicandmal2017
+python -m src.fusion.report --run-dir outputs/runs/fusion_cicandmal2017
 ```
 
-输出：
+#### MFCP
 
-- `outputs/runs/fusion_baseline/evaluation.json`
-- `outputs/runs/fusion_baseline/figures/confusion_matrix_smoke.png`
-- `outputs/runs/fusion_baseline/figures/metrics_curve_smoke.png`
-- `outputs/runs/fusion_baseline/report.md`
+```bash
+python -m src.fusion.evaluate --run-dir outputs/runs/fusion_mfcp
+python -m src.fusion.report --run-dir outputs/runs/fusion_mfcp
+```
+
+#### USTC-TFC2016
+
+```bash
+python -m src.fusion.evaluate --run-dir outputs/runs/fusion_ustc_tfc2016
+python -m src.fusion.report --run-dir outputs/runs/fusion_ustc_tfc2016
+```
 
 ### 5.5 消融实验
 
+#### CICAndMal2017
+
 ```bash
-python -m src.fusion.run_ablation --config configs/ablation.yaml
+python -m src.fusion.run_ablation --config configs/ablation_cicandmal2017.yaml
 ```
 
-默认输出：
+#### MFCP
 
-- `outputs/runs/ablation_baseline/ablation/ablation_summary.csv`
+```bash
+python -m src.fusion.run_ablation --config configs/ablation_mfcp.yaml
+```
+
+#### USTC-TFC2016
+
+```bash
+python -m src.fusion.run_ablation --config configs/ablation_ustc_tfc2016.yaml
+```
 
 ---
 
@@ -200,24 +269,42 @@ python -m pytest tests/fusion/test_moe_distill_smoke.py -v
 python -m pytest tests -q
 ```
 
-### 7.2 推荐最小验证链路
+### 7.2 推荐最小验证链路（以 CICAndMal2017 为例）
 
 ```bash
-python -m src.pipeline.build_dataset --config configs/dataset_tls_full.yaml
-python -m src.fusion.train_stagewise --config configs/train_fusion.yaml
-python -m src.fusion.evaluate --run-dir outputs/runs/fusion_baseline
-python -m src.fusion.report --run-dir outputs/runs/fusion_baseline
+python -m src.pipeline.build_dataset --config configs/dataset_cicandmal2017.yaml
+python -m src.fusion.train_stagewise --config configs/train_fusion_cicandmal2017.yaml
+python -m src.fusion.evaluate --run-dir outputs/runs/fusion_cicandmal2017
+python -m src.fusion.report --run-dir outputs/runs/fusion_cicandmal2017
 ```
 
 ---
 
 ## 8. 关键配置说明
 
-- `configs/dataset_tls_full.yaml`：Full-TLS 数据构建配置。
-- `configs/dataset_tls_leakage_reduced.yaml`：泄漏控制配置（如 SNI 脱敏、证书指纹移除）。
-- `configs/train_fusion.yaml`：三阶段融合训练配置。
-- `configs/train_stacking.yaml`：stacking 元学习器配置。
-- `configs/ablation.yaml`：消融实验组合配置。
+### 8.1 数据集配置
+
+- `configs/dataset_cicandmal2017.yaml`
+- `configs/dataset_mfcp.yaml`
+- `configs/dataset_ustc_tfc2016.yaml`
+
+### 8.2 训练配置
+
+- `configs/train_fusion_cicandmal2017.yaml`
+- `configs/train_fusion_mfcp.yaml`
+- `configs/train_fusion_ustc_tfc2016.yaml`
+
+### 8.3 Stacking 配置
+
+- `configs/train_stacking_cicandmal2017.yaml`
+- `configs/train_stacking_mfcp.yaml`
+- `configs/train_stacking_ustc_tfc2016.yaml`
+
+### 8.4 消融配置
+
+- `configs/ablation_cicandmal2017.yaml`
+- `configs/ablation_mfcp.yaml`
+- `configs/ablation_ustc_tfc2016.yaml`
 
 ---
 
