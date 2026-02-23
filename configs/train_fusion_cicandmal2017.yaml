@@ -1,0 +1,16 @@
+run_name: fusion_cicandmal2017
+dataset_name: cicandmal2017
+seed: 42
+num_epochs: 20
+batch_size: 64
+output_root: outputs/runs
+optimizer:
+  name: adamw
+  lr: 0.0003
+model:
+  attention_dim: 256
+  num_classes: 10
+stagewise:
+  - stage1_branch_warmup
+  - stage2_fusion_train
+  - stage3_pre_stacking

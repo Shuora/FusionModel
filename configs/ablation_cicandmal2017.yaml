@@ -1,0 +1,20 @@
+run_name: ablation_cicandmal2017
+dataset_name: cicandmal2017
+output_root: outputs/runs
+experiments:
+  - name: full
+    use_fusion: true
+    use_rgb: true
+    use_stacking: true
+  - name: no_fusion
+    use_fusion: false
+    use_rgb: true
+    use_stacking: true
+  - name: no_rgb
+    use_fusion: true
+    use_rgb: false
+    use_stacking: true
+  - name: no_stacking
+    use_fusion: true
+    use_rgb: true
+    use_stacking: false
