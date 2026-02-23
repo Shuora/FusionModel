@@ -159,6 +159,15 @@ python -m src.pipeline.build_dataset --config configs/dataset_ustc_tfc2016.yaml
 - `image_data/*.npy`
 - `pcap_data/*.json`
 
+支持一次运行多个数据集（实时显示“datasets/samples”进度条）：
+
+```bash
+python -m src.pipeline.build_dataset \
+  --config configs/dataset_cicandmal2017.yaml \
+  --config configs/dataset_mfcp.yaml \
+  --config configs/dataset_ustc_tfc2016.yaml
+```
+
 ### 5.2 主模型训练
 
 #### CICAndMal2017
@@ -241,6 +250,15 @@ python -m src.fusion.run_ablation --config configs/ablation_mfcp.yaml
 ```bash
 python -m src.fusion.run_ablation --config configs/ablation_ustc_tfc2016.yaml
 ```
+
+### 5.6 日志输出（统一放在 outputs，按类别分类）
+
+- 预处理日志：`outputs/logs/preprocess/<dataset_name>.log`
+- 训练日志：`outputs/logs/train/<run_name>.log`
+- 验证日志：`outputs/logs/evaluate/<run_name>.log`
+- 报告日志：`outputs/logs/report/<run_name>.log`
+
+同时，训练仍会在 run 目录保留一份日志：`outputs/runs/<run_name>/train.log`。
 
 ---
 

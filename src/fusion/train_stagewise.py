@@ -9,8 +9,14 @@ import torch
 import yaml
 
 from src.common.config import load_yaml
-from src.common.logging_utils import build_file_logger
+from src.common.logging_utils import build_multi_file_logger
 from src.fusion.datasets import DummyFusionDataset
+
+
+def _infer_log_root_from_output_root(output_root: Path) -> Path:
+    if output_root.name == "runs":
+        return output_root.parent
+    return output_root
 
 
 def _write_metrics_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -33,7 +39,10 @@ def run_train(cfg: Dict[str, Any]) -> Path:
     with (run_dir / "config.yaml").open("w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 
-    logger = build_file_logger(run_dir / "train.log")
+    run_log_path = run_dir / "train.log"
+    log_root = _infer_log_root_from_output_root(output_root)
+    central_log_path = log_root / "logs" / "train" / f"{run_name}.log"
+    logger = build_multi_file_logger([run_log_path, central_log_path], name="fusion.train")
 
     model_cfg = cfg.get("model", {})
     num_classes = int(model_cfg.get("num_classes", cfg.get("num_classes", 2)))
@@ -41,6 +50,7 @@ def run_train(cfg: Dict[str, Any]) -> Path:
 
     logger.info("start run=%s", run_name)
     logger.info("dataset_size=%d", len(dataset))
+    logger.info("central_log_path=%s", central_log_path)
 
     metrics_rows: List[Dict[str, Any]] = []
     stages = ["stage1_branch_warmup", "stage2_fusion_train", "stage3_pre_stacking"]
@@ -61,6 +71,7 @@ def run_train(cfg: Dict[str, Any]) -> Path:
         checkpoints_dir / "best.pt",
     )
     logger.info("saved checkpoint at %s", checkpoints_dir / "best.pt")
+    logger.info("finish run=%s", run_name)
 
     return run_dir
 

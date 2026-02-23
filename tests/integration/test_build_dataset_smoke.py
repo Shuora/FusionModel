@@ -10,6 +10,7 @@ def test_build_dataset_creates_paired_dirs(tmp_path: Path):
     cfg = {
         "dataset_name": "smoke_dataset",
         "output_root": str(tmp_path),
+        "log_root": str(tmp_path),
         "samples": [{"sample_id": "sample_001"}],
     }
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
@@ -24,3 +25,4 @@ def test_build_dataset_creates_paired_dirs(tmp_path: Path):
     assert pcap_data.is_dir()
     assert (image_data / "sample_001.npy").exists()
     assert (pcap_data / "sample_001.json").exists()
+    assert (tmp_path / "logs" / "preprocess" / "smoke_dataset.log").exists()

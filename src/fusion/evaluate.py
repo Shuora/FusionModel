@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_recall_fscore_support
 
+from src.common.logging_utils import build_file_logger
+
 
 def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
     y_true = np.asarray(y_true)
@@ -60,8 +62,19 @@ def save_basic_figures(run_dir: Path, metrics: Dict[str, Any]) -> Dict[str, str]
     }
 
 
+def _infer_outputs_root(run_dir: Path) -> Path:
+    # Expected run_dir layout: outputs/runs/<run_id>
+    if run_dir.parent.name == "runs":
+        return run_dir.parent.parent
+    return run_dir.parent
+
+
 def run_evaluate(run_dir: Path) -> Dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
+    outputs_root = _infer_outputs_root(run_dir)
+    log_path = outputs_root / "logs" / "evaluate" / f"{run_dir.name}.log"
+    logger = build_file_logger(log_path, name="fusion.evaluate")
+    logger.info("start evaluate run_dir=%s", run_dir)
 
     # Placeholder labels for smoke evaluation.
     y_true = np.array([0, 1, 1, 0])
@@ -72,6 +85,9 @@ def run_evaluate(run_dir: Path) -> Dict[str, Any]:
 
     payload = {"metrics": metrics, "figures": figures}
     (run_dir / "evaluation.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    logger.info("metrics=%s", metrics)
+    logger.info("figures=%s", figures)
+    logger.info("finish evaluate log_path=%s", log_path)
     return payload
 
 
