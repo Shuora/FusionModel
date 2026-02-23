@@ -7,7 +7,7 @@
 - `SourceData/` 放原始 `pcap`，`dataset/` 放可训练输入，`outputs/` 放日志、模型和评估图表，`doc/` 放方案文档。
 
 ## 构建、测试与开发命令
-- 初始化环境：
+- 初始化环境：conda activate FusionModel
 - 数据预处理：
 - 训练命令：
 
