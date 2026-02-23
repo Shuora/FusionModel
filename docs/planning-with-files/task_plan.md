@@ -2,9 +2,10 @@
 
 ## Goal
 按 `doc/plans/2026-02-23-tls-family-classification-delivery-plan.md` 实现可运行的数据预处理与训练工程骨架，当前已完成 Day1~Day6 最小可运行版（含 stacking/moe/消融清单），并补齐训练日志与进度条规范实现。
+在此基础上，新增并落地 `session_full` 论文口径链路（Session PCAP 落盘、非 TLS 保留并标记、两阶段评估编排）。
 
 ## Current Phase
-Phase 5
+Phase 6
 
 ## Phases
 ### Phase 1: Requirements & Discovery
@@ -47,8 +48,20 @@ Phase 5
 
 ### Phase 5: Delivery
 - [x] 提交批次总结与待评审点
-- [ ] 根据反馈执行下一批（如需 Day7 统一复现实验与封版）
-- **Status:** in_progress
+- [x] 根据反馈执行下一批（如需 Day7 统一复现实验与封版）
+- **Status:** complete
+
+### Phase 6: Session Full 论文口径规划与实施
+- [x] 完成 brainstorming 决策确认（命名、数据流、自动清理、抽检图保留、两阶段协议）
+- [x] 输出设计文档：`docs/plans/2026-02-23-session-full-mvtba-design.md`
+- [x] 输出实施计划：`docs/plans/2026-02-23-session-full-mvtba-implementation-plan.md`
+- [x] 进入 `executing-plans` 按任务逐条编码与验收
+- **Status:** complete
+
+### Phase 7: 分支收尾与交付确认
+- [ ] 汇总变更清单与风险点
+- [ ] 根据用户意图执行 `finishing-a-development-branch`
+- **Status:** pending
 
 ## Decisions Made
 | Decision | Rationale |
@@ -60,6 +73,12 @@ Phase 5
 | `policy` 与 `filter_mode` 解耦 | 支持 `strict/full` 双目录与同一过滤策略 |
 | Day3 训练先用线性头做可运行基线 | 先保证端到端链路与日志/产物完整，再替换为融合模型 |
 | Day4 切换到 `TinyFusionClassifier` | 先满足双分支+gate+辅助头训练流程，再扩展更重模型 |
+| 新策略命名为 `session_full` | 避免 `paper_mode` 语义不清，便于 CLI/文档理解 |
+| `session_full` 默认提特征后自动清理 `tmp_sessions` | 降低磁盘占用，避免接近 2x 原始数据长期膨胀 |
+| 保留抽检 RGB 图像 | 支撑可视化审计，不保存全量 PNG 防止 I/O 过大 |
+| 阶段1缺任一数据集直接失败 | 保证论文口径一致，避免 partial-run 指标失真 |
+| `session_full` 采用 `PCAP -> Session PCAP -> classify_pcap_sessions` | 与论文切分链路一致，并复用现有特征编码入口 |
+| 预处理入口与 runner 默认 `cleanup_sessions=True`，`--keep-sessions` 可关闭 | 满足用户“默认自动清理”的要求，同时保留调试开关 |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

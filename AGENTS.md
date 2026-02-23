@@ -10,9 +10,9 @@
 
 1. 阅读技能文档：`cat ~/.codex/skills/planning-with-files/SKILL.md`
 2. 在项目目录中创建以下文件：
-   - doc/planning-with-files/task_plan.md（任务计划）
-   - doc/planning-with-files/findings.md（发现 / 调研结果）
-   - doc/planning-with-files/progress.md（进度）
+   - docs/planning-with-files/task_plan.md（任务计划）
+   - docs/planning-with-files/findings.md（发现 / 调研结果）
+   - docs/planning-with-files/progress.md（进度）
 3. 在整个任务过程中始终遵循这三个文件的模式
 
 </IMPORTANT>

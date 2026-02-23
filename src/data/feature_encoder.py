@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
+from PIL import Image
 
 
 PAD_ID = 0
@@ -143,6 +144,8 @@ def save_feature_shards(
     rgb_path: Path | str,
     seq_path: Path | str,
     token_max_len: int = 256,
+    preview_dir: Path | str | None = None,
+    preview_per_family: int = 20,
 ) -> None:
     rgb_path = Path(rgb_path)
     seq_path = Path(seq_path)
@@ -197,3 +200,39 @@ def save_feature_shards(
         attention_mask=attn_arr,
         segment_ids=seg_arr,
     )
+
+    if preview_dir is not None and rgb_arr.shape[0] > 0 and preview_per_family > 0:
+        _save_preview_png(
+            rgb_arr=rgb_arr,
+            session_ids=session_ids,
+            labels=labels,
+            family_to_idx=family_to_idx,
+            preview_dir=Path(preview_dir),
+            preview_per_family=preview_per_family,
+        )
+
+
+def _save_preview_png(
+    rgb_arr: np.ndarray,
+    session_ids: Sequence[str],
+    labels: Sequence[int],
+    family_to_idx: Dict[str, int],
+    preview_dir: Path,
+    preview_per_family: int,
+) -> None:
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    idx_to_family = {idx: family for family, idx in family_to_idx.items()}
+    family_counts: Dict[str, int] = {}
+
+    for i in range(rgb_arr.shape[0]):
+        label = int(labels[i])
+        family = idx_to_family.get(label, "unknown")
+        count = family_counts.get(family, 0)
+        if count >= preview_per_family:
+            continue
+        family_counts[family] = count + 1
+        family_dir = preview_dir / family
+        family_dir.mkdir(parents=True, exist_ok=True)
+        sid = str(session_ids[i]).replace("/", "_")
+        image = np.transpose(rgb_arr[i], (1, 2, 0)).astype(np.uint8, copy=False)
+        Image.fromarray(image).save(family_dir / f"{sid}.png")
