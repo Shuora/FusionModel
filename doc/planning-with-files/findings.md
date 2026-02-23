@@ -14,6 +14,17 @@
 - 输出要求明确：训练日志、进度条、run_id 目录、自动报告、图表与消融清单。
 - 当前仓库 `src/` 下尚未发现已实现文件，意味着需从骨架开始规划全链路交付。
 - `configs/`、`dataset/`、`outputs/` 目前也未看到现成配置与脚本文件，计划需包含初始化与模板产物创建步骤。
+- 在 `conda activate FusionModel` 环境内，`pytest` 初始缺失；补装后可执行 TDD 流程。
+- 首批 Task 1-3 已完成最小可用实现，并通过对应 3 个单测与一次聚合回归。
+- 第二批 Task 4-6 已完成最小可用实现：泄漏控制双轨、TLS-RGB 编码器、TLS token 编码器。
+- `encode_tls_tokens` 当前实现保持 `[CLS]` 与 `[SEP]` 锚点并以 `PAD` 填充中间位，满足最小测试预期。
+- 第三批 Task 7-9 已完成最小可用实现：数据构建 CLI、跨模态融合前向链路、三阶段训练冒烟链路。
+- `build_dataset` 当前通过 `samples` 字段生成成对 `.npy`/`.json` 占位样本，便于后续替换为真实解析流水线。
+- `run_train` 已确保输出 `config.yaml`、`train.log`、`metrics.csv`、`checkpoints/best.pt`，满足最小产物验收。
+- 第四批 Task 10-12 已完成最小可用实现：stacking 元特征与 meta-learner、评估与报告自动化、消融汇总脚本。
+- 全量测试已扩展到 12 个用例并全部通过，主线 Task 1-12 的“失败测试 -> 最小实现 -> 回归通过”链路完整闭环。
+- 可选 Task 13 已完成 smoke 级实现：MoE 路由器与蒸馏损失函数，并新增独立冒烟测试。
+- 可选任务的性能退出条件（F1 提升/推理提速、蒸馏精度损失阈值）尚未在真实数据训练上验证。
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -22,6 +33,12 @@
 | 采用“主线必做 + 增强可选”双层规划 | 保证先交付可用主模型，再迭代 MoE/蒸馏 |
 | 统一将日志、图表、报告收敛到 `outputs/runs/<run_id>/` | 便于复现实验与后续论文取材 |
 | 详细计划文档使用 `doc/plans/` 而非 `docs/plans/` | 仓库既有文档目录为 `doc/`，保持一致性更利于维护 |
+| 执行环境固定为 `conda activate FusionModel` | 用户明确指定环境依赖，避免 Python 解释器不一致 |
+| 按任务粒度提交 3 个独立 commit | 与计划中“每个 task 单独提交”保持一致，便于回滚和审阅 |
+| 第二批继续保持“先失败测试再最小实现”节奏 | 降低一次性改动规模，便于快速定位回归 |
+| 第三批将融合模型实现限定为可验证最小骨架 | 先锁定模块接口与产物格式，再迭代真实训练细节 |
+| 第四批优先保证产物可落盘与接口闭合 | 先满足 run/report/ablation 的工程可复现性，再细化指标质量 |
+| 可选 Task 13 先以 smoke 验证接口正确性 | 真实收益评估留给后续基于数据集的长跑实验 |
 
 ## Issues Encountered
 | Issue | Resolution |
@@ -29,6 +46,7 @@
 | `src/` 文件扫描为空，无法直接映射现有实现细节 | 将计划按“目录职责 + 新增模块”方式编排，后续实现时再映射到具体文件 |
 | 启动执行前仓库存在大量已暂存删除与未暂存改动（108 files changed） | 切换为 `executing-plans` Step 1 阻塞处理，先确认隔离工作区策略再执行 |
 | 未发现 `.worktrees/` 或 `worktrees/`，且 `.gitignore` 未忽略这两个目录 | 按 `using-git-worktrees` 规则需要用户确认目录选择（或改用全局目录） |
+| 沙箱网络限制导致 pip 安装 `pytest` 失败 | 请求提权安装，依赖补齐后恢复测试流程 |
 
 ## Resources
 - `doc/恶意tls家族分类方案计划书.md`

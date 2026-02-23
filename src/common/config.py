@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+
+
+def load_yaml(path: str) -> Dict[str, Any]:
+    """Load a YAML file into a dict."""
+    with Path(path).open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data or {}
