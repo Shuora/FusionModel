@@ -4,7 +4,7 @@
 基于 `doc/恶意tls家族分类方案计划书.md` 输出可直接执行的端到端详细计划，覆盖数据、建模、训练、评估、交付与风险控制。
 
 ## Current Phase
-Phase 8（blocked）
+Phase 8（Task 1-12 + Optional Task 13 complete, waiting branch integration decision）
 
 ## Phases
 ### Phase 1: 需求提取与约束确认
@@ -20,28 +20,28 @@ Phase 8（blocked）
 - **Status:** complete
 
 ### Phase 3: 数据工程落地（TLS定向）
-- [ ] 实现 TLS 过滤、会话切分与分组切分
+- [x] 实现 TLS 过滤、会话切分与分组切分
 - [ ] 产出 Full-TLS / Leakage-reduced 双轨数据集
-- [ ] 验证 `dataset/<name>/image_data` 与 `pcap_data` 成对生成
-- **Status:** pending
+- [x] 验证 `dataset/<name>/image_data` 与 `pcap_data` 成对生成
+- **Status:** in_progress
 
 ### Phase 4: 特征与样本表示实现
-- [ ] 实现 TLS-RGB（R/G/B 固定语义编码）
-- [ ] 实现 TLS-Field-BERT token 构建与词表
+- [x] 实现 TLS-RGB（R/G/B 固定语义编码）
+- [x] 实现 TLS-Field-BERT token 构建与词表
 - [ ] 统一样本索引与标签映射
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 5: 模型训练与集成
-- [ ] 实现三阶段训练（分支热身→融合→集成）
-- [ ] 实现 cross-attn + gating + 辅助监督
-- [ ] 实现增强 stacking（可选 MoE）与推理导出
-- **Status:** pending
+- [x] 实现三阶段训练（分支热身→融合→集成）
+- [x] 实现 cross-attn + gating + 辅助监督
+- [x] 实现增强 stacking（可选 MoE）与推理导出
+- **Status:** complete
 
 ### Phase 6: 评估、消融与报告
-- [ ] 输出主指标、每类指标、混淆矩阵、学习曲线
+- [x] 输出主指标、每类指标、混淆矩阵、学习曲线
 - [ ] 完成 6 类消融矩阵（分支/融合/RGB/集成等）
-- [ ] 自动生成 run 报告与结果归档
-- **Status:** pending
+- [x] 自动生成 run 报告与结果归档
+- **Status:** in_progress
 
 ### Phase 7: 交付与复现实验
 - [x] 整理 configs、命令与默认行为说明
@@ -52,9 +52,13 @@ Phase 8（blocked）
 ### Phase 8: 执行计划（executing-plans 批次化落地）
 - [x] 读取 `doc/plans/2026-02-21-malicious-tls-family-classification.md`
 - [x] 完成 Step 1 审查并识别阻塞项
-- [ ] 按 Task 1-3 完成首批实现与验证
-- [ ] 输出批次报告并等待 review 反馈
-- **Status:** blocked（等待 worktree 目录与基线确认）
+- [x] 按 Task 1-3 完成首批实现与验证
+- [x] 按 Task 4-6 完成第二批实现与验证
+- [x] 按 Task 7-9 完成第三批实现与验证
+- [x] 按 Task 10-12 完成第四批实现与验证
+- [x] Optional Task 13（MoE + 蒸馏）完成 smoke 级实现与验证
+- [x] 输出批次报告并等待 review 反馈
+- **Status:** complete
 
 ## Key Questions
 1. 当前 `SourceData` 中最终纳入的恶意家族名单与最小样本阈值是否固定（建议先锁定家族名单后再生成最终 split）。
@@ -72,7 +76,8 @@ Phase 8（blocked）
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| 无 | 1 | - |
+| `pytest` 在 `FusionModel` conda 环境缺失 | 1 | 使用 `conda activate FusionModel && python -m pip install pytest` 补齐 |
+| 沙箱网络限制导致 pip 安装失败 | 2 | 请求提权后完成依赖安装 |
 
 ## Notes
 - 每完成一个阶段立即更新 `task_plan.md`、`findings.md`、`progress.md`。
