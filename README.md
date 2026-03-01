@@ -10,6 +10,7 @@
 
 ```bash
 cd /home/shuora/Repositories/Traffic/FusionModel
+conda env create -f environment.yml
 conda activate FusionModel
 ```
 
@@ -18,7 +19,7 @@ conda activate FusionModel
 - `SourceData/CICAndMal2017`
 - `SourceData/MFCP`
 - `SourceData/USTC-TFC2016`
-- `SourceData/ISCX`（若要跑阶段1二分类必须存在）
+- `SourceData/ISCX` 或 `SourceData/ISCX-VPN-NonVPN-2016`（若要跑阶段1二分类必须存在其一）
 - `SourceData/MTA`（若要跑阶段1二分类必须存在）
 
 ## 1. 预处理命令（session_full）
@@ -81,6 +82,8 @@ python src/data/preprocess_runner.py --help
 - `MFCP/MTA/USTC-TFC2016 -> malicious (1)`
 
 严格要求：缺任一数据集会直接报错退出。
+兼容性：代码会把 `ISCX-VPN-NonVPN-2016` 视为 `ISCX` 的目录别名。
+输出说明：阶段1清单中的 `dataset` 为标准化名称，`dataset_raw` 记录原始目录名（用于追溯）。
 
 ```bash
 python -m src.experiments.stage1_binary \
@@ -367,4 +370,3 @@ python -m src.ablation \
   --run-root runs \
   --output runs/ablation/ablation_summary.csv
 ```
-
