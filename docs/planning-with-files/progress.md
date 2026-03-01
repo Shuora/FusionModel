@@ -423,3 +423,62 @@
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
 | Full Regression | `pytest -q` | 全绿 | 41 passed | ✓ |
+
+## Session: 2026-03-01（仓库运行标准体检）
+
+### Batch A: 基线盘点与计划接管
+- **Status:** in_progress
+- **Started:** 2026-03-01
+- Actions taken:
+  - 读取并应用 `using-superpowers` 与 `planning-with-files` 技能规范。
+  - 复用并更新 `docs/planning-with-files` 三文件，新增本次体检任务分阶段计划。
+  - 盘点仓库根目录、源码入口、README 运行命令。
+- Preliminary findings:
+  - 缺少标准化依赖锁定文件（requirements/environment/pyproject）。
+  - 运行说明主要依赖 README 与现有 conda 环境。
+
+### Batch B: 环境/数据/代码可运行性核验
+- **Status:** complete
+- **Actions taken:**
+  - 核验 `SourceData` 目录与 pcap 文件数量，确认核心数据集存在。
+  - 核验 Python 环境与关键依赖导入。
+  - 核验全部核心 CLI 的 `--help` 可运行。
+  - 执行全量测试 `pytest -q`。
+  - 执行真实链路 smoke：`preprocess(MTA)` -> `train(warmup,1 epoch)` -> `evaluate` -> `report`。
+- **Key result:**
+  - 代码运行链路通过，但发现阶段1数据集命名存在阻塞风险（`ISCX` vs `ISCX-VPN-NonVPN-2016`）。
+
+## Test Results (2026-03-01)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Full Regression | `pytest -q` | 全绿 | 41 passed, 15 warnings | ✓ |
+| Smoke Preprocess | `python -m src.data.preprocess_runner ... --datasets MTA` | 生成预处理产物 | 成功生成 manifest/rgb/seq | ✓ |
+| Smoke Train | `python -m src.train ... --epochs 1` | 生成训练产物 | 成功生成 checkpoints/metrics/train.log | ✓ |
+| Smoke Evaluate | `python -m src.evaluate ...` | 生成评估结果 | 成功生成 `eval_test.json` | ✓ |
+| Smoke Report | `python -m src.report ...` | 生成报告 | 成功生成 `report.md` 与 `learning_curve.png` | ✓ |
+
+## Error Log (2026-03-01)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-03-01 | `stage1 missing datasets: ['ISCX', ...]` 风险确认 | 1 | 定位到 `stage1_binary.py` 硬编码 `ISCX`，与实际目录命名不一致，待修复 |
+
+### Batch C: 命名兼容与环境文件补齐
+- **Status:** complete
+- **Actions taken:**
+  - TDD: 新增 `tests/pipeline/test_stage1_binary_protocol.py::test_stage1_accepts_iscx_alias_directory` 并先验证 RED。
+  - 实现 `src/experiments/stage1_binary.py` 的数据集别名解析与标准化。
+  - 新增根目录 `environment.yml`，固化当前可运行环境关键依赖。
+  - 更新 `README.md` 的环境创建命令与 ISCX 别名说明。
+- **Verification:**
+  - `pytest -q tests/pipeline/test_stage1_binary_protocol.py` -> `3 passed`
+  - `pytest -q` -> `42 passed`
+  - `python` 解析 `environment.yml` 成功。
+
+### Batch D: review问题闭环（忽略torch）
+- **Status:** complete
+- **Actions taken:**
+  - 新增 `test_stage1_prefers_primary_iscx_directory_when_both_present`。
+  - 更新 `README` 阶段1输出字段说明（`dataset`/`dataset_raw`）。
+- **Verification:**
+  - `pytest -q tests/pipeline/test_stage1_binary_protocol.py` -> `4 passed`
+  - `pytest -q` -> `43 passed`

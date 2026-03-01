@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 
 REQUIRED_STAGE1_DATASETS = ("ISCX", "MFCP", "MTA", "USTC-TFC2016")
+DATASET_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "ISCX": ("ISCX", "ISCX-VPN-NonVPN-2016"),
+    "MFCP": ("MFCP",),
+    "MTA": ("MTA",),
+    "USTC-TFC2016": ("USTC-TFC2016",),
+}
 
 
 def _load_session_manifest(dataset_dir: Path, policy: str) -> pd.DataFrame:
@@ -22,6 +28,25 @@ def _load_session_manifest(dataset_dir: Path, policy: str) -> pd.DataFrame:
     raise FileNotFoundError(f"missing manifest for dataset={dataset_dir.name} policy={policy}")
 
 
+def _resolve_dataset_manifest(processed_root: Path, dataset: str, policy: str) -> pd.DataFrame:
+    aliases = DATASET_ALIASES.get(dataset, (dataset,))
+    for alias in aliases:
+        dataset_dir = processed_root / alias
+        if not dataset_dir.exists():
+            continue
+        try:
+            df = _load_session_manifest(dataset_dir, policy)
+        except FileNotFoundError:
+            continue
+        raw_name = alias
+        if "dataset" in df.columns and not df.empty:
+            raw_name = str(df["dataset"].iloc[0])
+        df["dataset_raw"] = raw_name
+        df["dataset"] = dataset
+        return df
+    raise FileNotFoundError(f"missing manifest for dataset={dataset} aliases={aliases} policy={policy}")
+
+
 def build_stage1_manifest(
     processed_root: Path | str,
     policy: str = "session_full",
@@ -32,17 +57,11 @@ def build_stage1_manifest(
     frames: List[pd.DataFrame] = []
 
     for dataset in required_datasets:
-        dataset_dir = processed_root / dataset
-        if not dataset_dir.exists():
-            missing.append(dataset)
-            continue
         try:
-            df = _load_session_manifest(dataset_dir, policy)
+            df = _resolve_dataset_manifest(processed_root=processed_root, dataset=dataset, policy=policy)
         except FileNotFoundError:
             missing.append(dataset)
             continue
-        if "dataset" not in df.columns:
-            df["dataset"] = dataset
         frames.append(df)
 
     if missing:
@@ -72,4 +91,3 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

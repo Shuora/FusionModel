@@ -106,3 +106,62 @@
 - `tests/pipeline/test_stage1_binary_protocol.py`
 - `tests/pipeline/test_stage2_multiclass_protocol.py`
 - `docs/commands/session-full-experiments.md`
+
+---
+
+## 2026-03-01 仓库运行标准体检（进行中）
+
+### 新发现
+- 根目录未发现 `requirements.txt`、`environment.yml`、`pyproject.toml` 等依赖锁定文件。
+- `README.md` 已提供完整运行命令，当前项目默认依赖 `conda activate FusionModel`。
+- `src/` 下训练与预处理入口均存在：`src.data.preprocess_runner`、`src.train`、`src.evaluate`、`src.report`。
+- `SourceData` 已存在且包含 ISCX 相关目录（此前核验为 `ISCX-VPN-NonVPN-2016`）。
+
+### 待确认
+- README 里的 `SourceData/ISCX` 与实际目录命名是否一致（可能存在别名或不一致风险）。
+- 当前 shell 所在环境是否确为 `FusionModel` conda 环境，及关键依赖版本是否满足。
+
+### 运行体检结果（已验证）
+- `python` 实际解释器：`/home/shuora/miniconda3/envs/FusionModel/bin/python`（3.9.23）。
+- 关键依赖均可导入：`dpkt/numpy/pandas/PIL/torch/sklearn/matplotlib/yaml/xgboost/tqdm`。
+- 关键 CLI 均可启动：
+  - `python -m src.data.preprocess_runner --help`
+  - `python -m src.train --help`
+  - `python -m src.evaluate --help`
+  - `python -m src.report --help`
+  - `python -m src.experiments.stage1_binary --help`
+  - `python -m src.experiments.stage2_multiclass --help`
+  - `python -m src.stacking --help`
+  - `python -m src.moe --help`
+  - `python -m src.ablation --help`
+- 全量测试通过：`pytest -q` -> `41 passed`（存在非阻塞 warning）。
+- 真实 smoke（数据+训练链路）通过：
+  1) `preprocess_runner` 在 `MTA` 上成功生成 `manifest/rgb/seq`；
+  2) `train --stage warmup`（1 epoch）成功产出 checkpoint 和 metrics；
+  3) `evaluate` 成功生成 `eval_test.json`；
+  4) `report` 成功生成 `report.md` 与 `learning_curve.png`。
+
+### 关键风险/不一致
+- **数据目录命名不一致（高优先级）**：
+  - README 声明阶段1需要 `SourceData/ISCX`；
+  - 实际目录为 `SourceData/ISCX-VPN-NonVPN-2016`；
+  - `src/experiments/stage1_binary.py` 中 `REQUIRED_STAGE1_DATASETS` 硬编码为 `("ISCX", "MFCP", "MTA", "USTC-TFC2016")`。
+- 结论：若不做“目录别名/重命名/代码映射”，阶段1流程在真实全量运行时会因 `ISCX` 缺失失败。
+
+### 数据集现状快照
+- `SourceData` 子目录：`CICAndMal2017`、`MFCP`、`MTA`、`USTC-TFC2016`、`ISCX-VPN-NonVPN-2016`。
+- `SourceData/ISCX` 不存在。
+
+### 2026-03-01 修复落地：ISCX 兼容 + 环境锁定
+- `stage1_binary` 已支持目录别名：`ISCX` 与 `ISCX-VPN-NonVPN-2016`。
+- 别名加载后会标准化 `dataset=ISCX`，并保留 `dataset_raw` 追溯原始目录名。
+- 新增测试 `test_stage1_accepts_iscx_alias_directory`，验证仅存在 `ISCX-VPN-NonVPN-2016` 目录时阶段1仍可构建清单。
+- 新增 `environment.yml`（`python=3.9 + pip` 依赖列表），用于跨环境复现。
+- `README` 已同步：
+  - 环境准备增加 `conda env create -f environment.yml`；
+  - 数据目录说明增加 `ISCX-VPN-NonVPN-2016` 别名；
+  - 阶段1章节注明 ISCX 别名兼容。
+
+### 2026-03-01 review后修正（torch项忽略）
+- README 已补充阶段1输出字段说明：`dataset` 标准化、`dataset_raw` 原始目录追溯。
+- 新增测试覆盖别名优先级：当 `ISCX` 与 `ISCX-VPN-NonVPN-2016` 同时存在时，优先使用 `ISCX`。

@@ -90,3 +90,101 @@ Phase 6
 | matplotlib 与 torch 在本机触发非阻塞 warning | 1 | 保留 warning，不影响测试通过与主流程执行 |
 | 融合模型接入后需兼容 warmup/fusion 两种损失路径 | 1 | 用 `_loss_and_logits` 统一分支逻辑 |
 | 训练入口 `stage=stacking|moe` 未实际调度子流程 | 1 | 在 `train.py` 增加 stage dispatch，自动调用 `src/stacking.py` 或 `src/moe.py` |
+
+---
+
+# Task Plan: 仓库运行标准体检（2026-03-01）
+
+## Goal
+核验当前仓库是否满足“可运行标准”，覆盖环境、数据集、代码入口、测试与最小执行链路，并给出结论与修复建议。
+
+## Current Phase
+Phase 1
+
+## Phases
+### Phase 1: 基线盘点
+- [x] 读取技能规范并启用 planning-with-files
+- [x] 盘点仓库结构、README 运行命令与入口脚本
+- [ ] 同步数据集命名与目录一致性
+- **Status:** in_progress
+
+### Phase 2: 环境与依赖核验
+- [ ] 核验 Python/关键库可导入
+- [ ] 核验 CLI 入口可启动（--help）
+- **Status:** pending
+
+### Phase 3: 代码可执行性核验
+- [ ] 运行测试集（至少全量 pytest）
+- [ ] 运行最小链路 smoke（preprocess/train/eval/report 中至少一段）
+- **Status:** pending
+
+### Phase 4: 结论与整改建议
+- [ ] 输出通过/风险分级
+- [ ] 给出优先级修复项
+- **Status:** pending
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| 以 README 作为“运行标准”主准绳 | 仓库中未发现 requirements/environment 锁定文件 |
+| 先做只读核验，再做命令执行核验 | 降低对现有数据和产物的扰动 |
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| N/A | N/A | N/A |
+
+## 2026-03-01 体检结论更新
+
+### Phase 1: 基线盘点
+- [x] 读取技能规范并启用 planning-with-files
+- [x] 盘点仓库结构、README 运行命令与入口脚本
+- [x] 同步数据集命名与目录一致性
+- **Status:** complete
+
+### Phase 2: 环境与依赖核验
+- [x] 核验 Python/关键库可导入
+- [x] 核验 CLI 入口可启动（--help）
+- **Status:** complete
+
+### Phase 3: 代码可执行性核验
+- [x] 运行测试集（至少全量 pytest）
+- [x] 运行最小链路 smoke（preprocess/train/eval/report 中至少一段）
+- **Status:** complete
+
+### Phase 4: 结论与整改建议
+- [x] 输出通过/风险分级
+- [x] 给出优先级修复项
+- **Status:** complete
+
+## Decisions Made (2026-03-01)
+| Decision | Rationale |
+|----------|-----------|
+| 以 MTA 做 smoke 数据集 | 体量适中，能快速验证真实链路 |
+| 判定“部分达标而非完全达标” | 关键阶段1流程存在 ISCX 命名阻塞风险 |
+
+## Errors Encountered (2026-03-01)
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| 阶段1要求 `ISCX`，而原始目录为 `ISCX-VPN-NonVPN-2016` | 1 | 定位为代码与数据命名契约不一致，需目录别名或代码映射修复 |
+
+## 2026-03-01 修复闭环
+
+### Phase 5: 运行标准修复项执行
+- [x] 修复 stage1 的 ISCX 数据集命名兼容
+- [x] 补充环境锁定文件并更新 README
+- [x] 完成回归验证
+- **Status:** complete
+
+## Decisions Made (修复项)
+| Decision | Rationale |
+|----------|-----------|
+| 采用代码别名映射，而非强制重命名目录 | 避免改动大体积原始数据目录，兼容历史产物 |
+| `environment.yml` 采用 `python+pip` 最小锁定方案 | 当前环境主要包来自 pip，先保证可复现与可安装 |
+
+### Phase 6: review反馈收敛（2026-03-01）
+- [x] 忽略 torch 环境项（按用户确认）
+- [x] 补充 stage1 输出字段文档说明
+- [x] 增加 ISCX 主目录优先级测试覆盖
+- [x] 完成回归验证
+- **Status:** complete
