@@ -18,8 +18,8 @@ def test_build_output_paths_follow_plan_layout():
     assert paths["rgb_shard"] == Path(
         "outputs/processed/USTC-TFC2016/strict/rgb/rgb_shard_00000.npz"
     )
-    assert paths["seq_shard"] == Path(
-        "outputs/processed/USTC-TFC2016/strict/seq/seq_shard_00000.npz"
+    assert paths["etbert_shard"] == Path(
+        "outputs/processed/USTC-TFC2016/strict/etbert/etbert_shard_00000.npz"
     )
     assert paths["manifest"] == Path(
         "outputs/processed/USTC-TFC2016/strict/manifest/session_manifest.parquet"

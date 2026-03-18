@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-import hashlib
-import math
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -9,11 +6,6 @@ import numpy as np
 from PIL import Image
 
 from src.data.etbert_tokenizer import encode_etbert_tokens
-
-
-PAD_ID = 0
-CLS_ID = 1
-SEP_ID = 2
 
 
 def _parse_tls_records(payload_chunks: Sequence[bytes]) -> List[Tuple[int, int, int, bytes]]:
@@ -90,54 +82,6 @@ def encode_session_rgb(session: Dict[str, Any], image_size: int = 28) -> np.ndar
     g = _resize_u8(g_values, size).reshape(image_size, image_size)
     b = _resize_u8(b_values, size).reshape(image_size, image_size)
     return np.stack([r, g, b], axis=0).astype(np.uint8, copy=False)
-
-
-def _hash_token(text: str, vocab_size: int) -> int:
-    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
-    value = int(digest[:8], 16)
-    return 3 + (value % max(1, vocab_size - 3))
-
-
-def encode_tls_tokens(
-    session: Dict[str, Any],
-    max_len: int = 256,
-    vocab_size: int = 8192,
-    max_records: int = 64,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    records = _parse_tls_records(session.get("payload_chunks", []))
-    token_ids: List[int] = [CLS_ID]
-    segment_ids: List[int] = [0]
-
-    versions = sorted({version for _, version, _, _ in records})
-    for version in versions[:2]:
-        token_ids.append(_hash_token(f"VER_{version}", vocab_size))
-        segment_ids.append(0)
-
-    for content_type, _, length, _ in records[:max_records]:
-        len_bin = int(min(63, math.log2(max(1, length))))
-        token_ids.append(_hash_token(f"RT_{content_type}", vocab_size))
-        segment_ids.append(1 if content_type == 23 else 0)
-        token_ids.append(_hash_token(f"RL_{len_bin}", vocab_size))
-        segment_ids.append(1 if content_type == 23 else 0)
-
-    token_ids.append(SEP_ID)
-    segment_ids.append(0)
-
-    token_ids = token_ids[:max_len]
-    segment_ids = segment_ids[:max_len]
-    attention = [1] * len(token_ids)
-
-    pad_count = max_len - len(token_ids)
-    if pad_count > 0:
-        token_ids.extend([PAD_ID] * pad_count)
-        segment_ids.extend([0] * pad_count)
-        attention.extend([0] * pad_count)
-
-    return (
-        np.asarray(token_ids, dtype=np.int32),
-        np.asarray(attention, dtype=np.uint8),
-        np.asarray(segment_ids, dtype=np.uint8),
-    )
 
 
 def save_feature_shards(
