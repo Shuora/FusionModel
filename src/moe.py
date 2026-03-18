@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score, f1_score, recall_score
 from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
-from src.models.fusion_model import TinyFusionClassifier
+from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 
 
@@ -82,11 +82,18 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     run_dir = Path(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    data = load_policy_multimodal_data(cfg["processed_root"], cfg["policy"])
+    data = load_policy_multimodal_data(
+        cfg["processed_root"],
+        cfg["policy"],
+        datasets=cfg.get("datasets") or None,
+        label_mode=str(cfg.get("label_mode", "multiclass")),
+        session_filter_manifest=cfg.get("session_filter_manifest"),
+    )
 
     rgb = data["rgb"]
-    token_ids = data["token_ids"]
+    input_ids = data["input_ids"]
     attention = data["attention_mask"]
+    token_type_ids = data["token_type_ids"]
     y = data["y"]
     split = data["split"]
     if rgb.shape[0] == 0:
@@ -100,20 +107,21 @@ def main(argv: Iterable[str] | None = None) -> int:
         test_mask = np.ones_like(train_mask, dtype=bool)
 
     rgb_train = torch.from_numpy(rgb[train_mask]).float()
-    tok_train = torch.from_numpy(token_ids[train_mask]).long()
+    input_train = torch.from_numpy(input_ids[train_mask]).long()
     att_train = torch.from_numpy(attention[train_mask]).long()
+    type_train = torch.from_numpy(token_type_ids[train_mask]).long()
     y_train = torch.from_numpy(y[train_mask]).long()
 
     rgb_test = torch.from_numpy(rgb[test_mask]).float()
-    tok_test = torch.from_numpy(token_ids[test_mask]).long()
+    input_test = torch.from_numpy(input_ids[test_mask]).long()
     att_test = torch.from_numpy(attention[test_mask]).long()
+    type_test = torch.from_numpy(token_type_ids[test_mask]).long()
     y_test = y[test_mask]
 
-    model = TinyFusionClassifier(
+    model = MobileViTETBertFusionClassifier(
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
-        vocab_size=int(cfg.get("vocab_size", 8192)),
-        num_heads=int(cfg.get("num_heads", 4)),
+        vocab_size=int(cfg.get("vocab_size", 30522)),
     )
     best_ckpt = torch.load(run_dir / "checkpoints" / "best.ckpt", map_location="cpu")
     model.load_state_dict(best_ckpt["model_state"])
@@ -123,19 +131,19 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     router = RouterMLP(in_dim=7, hidden_dim=16, num_experts=3)
     opt = torch.optim.Adam(router.parameters(), lr=args.lr)
-    ds = TensorDataset(rgb_train, tok_train, att_train, y_train)
+    ds = TensorDataset(rgb_train, input_train, att_train, type_train, y_train)
     loader = DataLoader(ds, batch_size=max(1, args.batch_size), shuffle=True)
 
     for _ in range(max(1, args.epochs)):
         router.train()
-        for rgb_b, tok_b, att_b, y_b in loader:
+        for rgb_b, input_b, att_b, type_b, y_b in loader:
             with torch.no_grad():
-                out = model(rgb_b, tok_b, att_b)
+                out = model(rgb_b, input_b, att_b, type_b)
                 f = _router_features(out)
             opt.zero_grad()
             logits = router(f)
             with torch.no_grad():
-                out = model(rgb_b, tok_b, att_b)
+                out = model(rgb_b, input_b, att_b, type_b)
             mix_p = _mixture_probs(out, logits)
             loss = nn.NLLLoss()(torch.log(mix_p.clamp_min(1e-8)), y_b)
             loss.backward()
@@ -143,7 +151,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     router.eval()
     with torch.no_grad():
-        out_test = model(rgb_test, tok_test, att_test)
+        out_test = model(rgb_test, input_test, att_test, type_test)
         f_test = _router_features(out_test)
         logits_test = router(f_test)
         p_test = _mixture_probs(out_test, logits_test).cpu().numpy()

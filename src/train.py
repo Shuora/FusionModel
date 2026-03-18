@@ -18,7 +18,7 @@ from tqdm import tqdm
 import yaml
 
 from src.common.structured_logging import format_log_line
-from src.models.fusion_model import TinyFusionClassifier
+from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 
 
@@ -103,8 +103,8 @@ def _evaluate_loader(
         leave=False,
     )
     with torch.no_grad():
-        for rgb_b, tok_b, attn_b, y_b in iterator:
-            out = model(rgb_b, tok_b, attn_b)
+        for rgb_b, input_ids_b, attn_b, token_type_b, y_b in iterator:
+            out = model(rgb_b, input_ids_b, attn_b, token_type_b)
             loss, pred_logits = _loss_and_logits(out, y_b, stage, ce, alpha, beta)
             pred = pred_logits.argmax(dim=1)
             batch_acc = float((pred == y_b).float().mean().item())
@@ -125,6 +125,70 @@ def _evaluate_loader(
     val_macro_f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
     val_gate_mean = float(np.mean(gate_means)) if gate_means else 0.0
     return val_loss, val_acc, val_macro_f1, val_gate_mean
+
+
+def _derive_validation_mask_from_train(
+    train_mask: np.ndarray,
+    seed: int,
+    val_fraction: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    idx = np.where(train_mask)[0]
+    if idx.size < 2:
+        raise ValueError("cannot derive validation split from fewer than 2 training samples")
+    rng = np.random.default_rng(seed)
+    shuffled = idx.copy()
+    rng.shuffle(shuffled)
+    n_val = int(round(float(idx.size) * float(val_fraction)))
+    n_val = max(1, n_val)
+    n_val = min(n_val, idx.size - 1)
+    val_idx = shuffled[:n_val]
+
+    new_train_mask = train_mask.copy()
+    new_train_mask[val_idx] = False
+    val_mask = np.zeros_like(train_mask, dtype=bool)
+    val_mask[val_idx] = True
+    return new_train_mask, val_mask
+
+
+def _limit_training_samples(
+    train_mask: np.ndarray,
+    y: np.ndarray,
+    seed: int,
+    max_samples: int,
+) -> np.ndarray:
+    idx = np.where(train_mask)[0]
+    if idx.size <= max_samples:
+        return train_mask
+    if max_samples < 1:
+        raise ValueError("max_samples must be >= 1")
+
+    rng = np.random.default_rng(seed)
+    labels = y[idx]
+    selected: List[int] = []
+    classes = np.unique(labels)
+    per_class_target = max(1, max_samples // max(1, len(classes)))
+
+    for cls in classes:
+        cls_idx = idx[labels == cls]
+        if cls_idx.size == 0:
+            continue
+        take = min(cls_idx.size, per_class_target)
+        picked = rng.choice(cls_idx, size=take, replace=False)
+        selected.extend(int(x) for x in picked.tolist())
+
+    if len(selected) > max_samples:
+        selected = rng.choice(np.asarray(selected, dtype=np.int64), size=max_samples, replace=False).tolist()
+    elif len(selected) < max_samples:
+        selected_set = set(selected)
+        remaining = [int(i) for i in idx.tolist() if int(i) not in selected_set]
+        need = max_samples - len(selected)
+        if need > 0 and remaining:
+            add = rng.choice(np.asarray(remaining, dtype=np.int64), size=min(need, len(remaining)), replace=False)
+            selected.extend(int(x) for x in add.tolist())
+
+    new_mask = np.zeros_like(train_mask, dtype=bool)
+    new_mask[np.asarray(selected, dtype=np.int64)] = True
+    return new_mask
 
 
 def _dispatch_stage(
@@ -169,6 +233,8 @@ def _dispatch_stage(
                 str(args.moe_epochs),
                 "--batch-size",
                 str(args.batch_size),
+                "--lr",
+                str(args.lr),
                 "--seed",
                 str(args.seed),
             ]
@@ -189,6 +255,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--stage", default="warmup", choices=["warmup", "fusion", "stacking", "moe"])
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--datasets", nargs="+")
+    parser.add_argument("--session-filter-manifest", default=None)
+    parser.add_argument("--label-mode", default="multiclass", choices=["multiclass", "binary"])
+    parser.add_argument("--num-classes", type=int, default=None)
+    parser.add_argument("--val-fraction", type=float, default=0.1)
+    parser.add_argument("--train-max-samples", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -228,28 +300,42 @@ def main(argv: Iterable[str] | None = None) -> int:
         with log_path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-    data = load_policy_multimodal_data(args.processed_root, args.policy)
+    data = load_policy_multimodal_data(
+        args.processed_root,
+        args.policy,
+        datasets=args.datasets,
+        label_mode=args.label_mode,
+        session_filter_manifest=args.session_filter_manifest,
+    )
     rgb = data["rgb"]
-    token_ids = data["token_ids"]
+    input_ids = data["input_ids"]
     attention_mask = data["attention_mask"]
+    token_type_ids = data["token_type_ids"]
     y = data["y"]
     split = data["split"]
     if rgb.shape[0] == 0:
         log("error", "data", "empty_dataset", {"processed_root": args.processed_root, "policy": args.policy})
         return 2
 
-    num_classes = int(np.max(y)) + 1
-    vocab_size = int(max(8192, int(token_ids.max()) + 1))
+    inferred_classes = int(np.max(y)) + 1
+    if args.num_classes is not None and args.num_classes < inferred_classes:
+        log("error", "data", "invalid_num_classes", {"configured": args.num_classes, "required": inferred_classes})
+        return 2
+    num_classes = int(args.num_classes) if args.num_classes is not None else inferred_classes
+    vocab_size = int(max(30522, int(input_ids.max()) + 1)) if input_ids.size > 0 else 30522
     cfg = {
         "run_id": run_id,
         "processed_root": args.processed_root,
         "policy": args.policy,
+        "datasets": list(args.datasets) if args.datasets else [],
+        "session_filter_manifest": args.session_filter_manifest,
+        "label_mode": args.label_mode,
         "stage": args.stage,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "lr": args.lr,
         "seed": args.seed,
-        "model_type": "TinyFusionClassifier",
+        "model_type": "MobileViTETBertFusionClassifier",
         "hidden_dim": args.hidden_dim,
         "num_heads": args.num_heads,
         "vocab_size": vocab_size,
@@ -258,6 +344,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "beta": args.beta,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
+        "val_fraction": args.val_fraction,
+        "train_max_samples": args.train_max_samples,
     }
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
@@ -285,43 +373,82 @@ def main(argv: Iterable[str] | None = None) -> int:
             "samples": int(rgb.shape[0]),
             "families": int(len(np.unique(y))),
             "class_dist": _class_dist_text(y, num_classes),
+            "label_mode": args.label_mode,
+            "datasets": ",".join(args.datasets) if args.datasets else "all",
         },
     )
 
     train_mask = split == "train"
     val_mask = split == "val"
     if not np.any(train_mask):
-        log("warning", "data", "empty_train_split_fallback", {"fallback": "all_samples"})
-        train_mask = np.ones_like(val_mask, dtype=bool)
+        log("error", "data", "empty_train_split", {"policy": args.policy, "datasets": cfg["datasets"]})
+        return 2
+    if args.train_max_samples is not None:
+        try:
+            limited_train_mask = _limit_training_samples(
+                train_mask=train_mask,
+                y=y,
+                seed=args.seed,
+                max_samples=args.train_max_samples,
+            )
+        except ValueError as exc:
+            log("error", "data", "invalid_train_max_samples", {"error": str(exc)})
+            return 2
+        if int(limited_train_mask.sum()) < int(train_mask.sum()):
+            log(
+                "info",
+                "data",
+                "train_samples_limited",
+                {"before": int(train_mask.sum()), "after": int(limited_train_mask.sum())},
+            )
+        train_mask = limited_train_mask
     if not np.any(val_mask):
-        log("warning", "data", "empty_val_split_fallback", {"fallback": "train_split"})
-        val_mask = train_mask.copy()
+        try:
+            train_mask, val_mask = _derive_validation_mask_from_train(
+                train_mask=train_mask,
+                seed=args.seed,
+                val_fraction=args.val_fraction,
+            )
+        except ValueError as exc:
+            log("error", "data", "empty_val_split", {"error": str(exc)})
+            return 2
+        log(
+            "warning",
+            "data",
+            "val_split_derived_from_train",
+            {
+                "val_fraction": args.val_fraction,
+                "train_samples": int(train_mask.sum()),
+                "val_samples": int(val_mask.sum()),
+            },
+        )
 
     rgb_train = torch.from_numpy(rgb[train_mask]).float()
-    tok_train = torch.from_numpy(token_ids[train_mask]).long()
+    input_train = torch.from_numpy(input_ids[train_mask]).long()
     attn_train = torch.from_numpy(attention_mask[train_mask]).long()
+    token_type_train = torch.from_numpy(token_type_ids[train_mask]).long()
     y_train = torch.from_numpy(y[train_mask]).long()
 
     rgb_val = torch.from_numpy(rgb[val_mask]).float()
-    tok_val = torch.from_numpy(token_ids[val_mask]).long()
+    input_val = torch.from_numpy(input_ids[val_mask]).long()
     attn_val = torch.from_numpy(attention_mask[val_mask]).long()
+    token_type_val = torch.from_numpy(token_type_ids[val_mask]).long()
     y_val = torch.from_numpy(y[val_mask]).long()
 
     if rgb_train.shape[0] == 0:
         log("error", "data", "empty_train_dataset", {"policy": args.policy, "stage": args.stage})
         return 2
 
-    train_dataset = TensorDataset(rgb_train, tok_train, attn_train, y_train)
+    train_dataset = TensorDataset(rgb_train, input_train, attn_train, token_type_train, y_train)
     train_loader = DataLoader(train_dataset, batch_size=max(1, args.batch_size), shuffle=True)
 
-    val_dataset = TensorDataset(rgb_val, tok_val, attn_val, y_val)
+    val_dataset = TensorDataset(rgb_val, input_val, attn_val, token_type_val, y_val)
     val_loader = DataLoader(val_dataset, batch_size=max(1, args.batch_size), shuffle=False)
 
-    model = TinyFusionClassifier(
+    model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=args.hidden_dim,
         vocab_size=vocab_size,
-        num_heads=args.num_heads,
     )
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
     ce = nn.CrossEntropyLoss()
@@ -362,9 +489,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             position=0,
             leave=False,
         )
-        for rgb_b, tok_b, attn_b, y_b in iterator:
+        for rgb_b, input_ids_b, attn_b, token_type_b, y_b in iterator:
             optim.zero_grad()
-            out = model(rgb_b, tok_b, attn_b)
+            out = model(rgb_b, input_ids_b, attn_b, token_type_b)
             loss, pred_logits = _loss_and_logits(out, y_b, loss_stage, ce, args.alpha, args.beta)
             if not torch.isfinite(loss):
                 log("error", "model", "nan_loss", {"epoch": epoch, "stage": args.stage})

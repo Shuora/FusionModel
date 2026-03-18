@@ -13,7 +13,7 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
-from src.models.fusion_model import TinyFusionClassifier
+from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 
 try:
@@ -60,30 +60,31 @@ def _compute_meta_features(out: dict) -> np.ndarray:
 
 def _train_base_model(
     rgb: np.ndarray,
-    token_ids: np.ndarray,
+    input_ids: np.ndarray,
     attention: np.ndarray,
+    token_type_ids: np.ndarray,
     y: np.ndarray,
     num_classes: int,
     vocab_size: int,
     epochs: int,
     batch_size: int,
     seed: int,
-) -> TinyFusionClassifier:
+) -> MobileViTETBertFusionClassifier:
     torch.manual_seed(seed)
     np.random.seed(seed)
-    model = TinyFusionClassifier(
+    model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=128,
         vocab_size=vocab_size,
-        num_heads=4,
     )
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     ce = nn.CrossEntropyLoss()
     loader = DataLoader(
         TensorDataset(
             torch.from_numpy(rgb).float(),
-            torch.from_numpy(token_ids).long(),
+            torch.from_numpy(input_ids).long(),
             torch.from_numpy(attention).long(),
+            torch.from_numpy(token_type_ids).long(),
             torch.from_numpy(y).long(),
         ),
         batch_size=max(1, batch_size),
@@ -92,9 +93,9 @@ def _train_base_model(
 
     for _ in range(max(1, epochs)):
         model.train()
-        for rgb_b, tok_b, att_b, y_b in loader:
+        for rgb_b, input_b, att_b, type_b, y_b in loader:
             optim.zero_grad()
-            out = model(rgb_b, tok_b, att_b)
+            out = model(rgb_b, input_b, att_b, type_b)
             loss = ce(out["logits_fuse"], y_b) + 0.3 * ce(out["logits_img"], y_b) + 0.3 * ce(
                 out["logits_tls"], y_b
             )
@@ -104,10 +105,11 @@ def _train_base_model(
 
 
 def _predict_meta(
-    model: TinyFusionClassifier,
+    model: MobileViTETBertFusionClassifier,
     rgb: np.ndarray,
-    token_ids: np.ndarray,
+    input_ids: np.ndarray,
     attention: np.ndarray,
+    token_type_ids: np.ndarray,
     batch_size: int,
 ) -> np.ndarray:
     if rgb.shape[0] == 0:
@@ -115,14 +117,15 @@ def _predict_meta(
     model.eval()
     ds = TensorDataset(
         torch.from_numpy(rgb).float(),
-        torch.from_numpy(token_ids).long(),
+        torch.from_numpy(input_ids).long(),
         torch.from_numpy(attention).long(),
+        torch.from_numpy(token_type_ids).long(),
     )
     loader = DataLoader(ds, batch_size=max(1, batch_size), shuffle=False)
     feats = []
     with torch.no_grad():
-        for rgb_b, tok_b, att_b in loader:
-            out = model(rgb_b, tok_b, att_b)
+        for rgb_b, input_b, att_b, type_b in loader:
+            out = model(rgb_b, input_b, att_b, type_b)
             feats.append(_compute_meta_features(out))
     return np.concatenate(feats, axis=0) if feats else np.zeros((0, 1), dtype=np.float32)
 
@@ -157,11 +160,18 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     run_dir = Path(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    data = load_policy_multimodal_data(cfg["processed_root"], cfg["policy"])
+    data = load_policy_multimodal_data(
+        cfg["processed_root"],
+        cfg["policy"],
+        datasets=cfg.get("datasets") or None,
+        label_mode=str(cfg.get("label_mode", "multiclass")),
+        session_filter_manifest=cfg.get("session_filter_manifest"),
+    )
 
     rgb = data["rgb"]
-    token_ids = data["token_ids"]
+    input_ids = data["input_ids"]
     attention = data["attention_mask"]
+    token_type_ids = data["token_type_ids"]
     y = data["y"]
     split = data["split"]
     if rgb.shape[0] == 0:
@@ -175,17 +185,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         test_mask = np.ones_like(train_mask, dtype=bool)
 
     rgb_tv = rgb[train_mask]
-    tok_tv = token_ids[train_mask]
+    input_tv = input_ids[train_mask]
     att_tv = attention[train_mask]
+    type_tv = token_type_ids[train_mask]
     y_tv = y[train_mask]
 
     rgb_test = rgb[test_mask]
-    tok_test = token_ids[test_mask]
+    input_test = input_ids[test_mask]
     att_test = attention[test_mask]
+    type_test = token_type_ids[test_mask]
     y_test = y[test_mask]
 
     num_classes = int(np.max(y)) + 1
-    vocab_size = int(max(8192, int(token_ids.max()) + 1))
+    vocab_size = int(max(30522, int(input_ids.max()) + 1))
 
     # OOF meta features
     n_splits = min(args.n_splits, int(np.bincount(y_tv).min()) if len(y_tv) > 0 else 2)
@@ -195,8 +207,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     for fold_id, (tr_idx, va_idx) in enumerate(skf.split(rgb_tv, y_tv)):
         model = _train_base_model(
             rgb_tv[tr_idx],
-            tok_tv[tr_idx],
+            input_tv[tr_idx],
             att_tv[tr_idx],
+            type_tv[tr_idx],
             y_tv[tr_idx],
             num_classes=num_classes,
             vocab_size=vocab_size,
@@ -205,14 +218,20 @@ def main(argv: Iterable[str] | None = None) -> int:
             seed=args.seed + fold_id,
         )
         oof_x[va_idx] = _predict_meta(
-            model, rgb_tv[va_idx], tok_tv[va_idx], att_tv[va_idx], batch_size=args.batch_size
+            model,
+            rgb_tv[va_idx],
+            input_tv[va_idx],
+            att_tv[va_idx],
+            type_tv[va_idx],
+            batch_size=args.batch_size,
         )
 
     # Final model for test meta features
     final_model = _train_base_model(
         rgb_tv,
-        tok_tv,
+        input_tv,
         att_tv,
+        type_tv,
         y_tv,
         num_classes=num_classes,
         vocab_size=vocab_size,
@@ -220,7 +239,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         batch_size=args.batch_size,
         seed=args.seed + 999,
     )
-    test_x = _predict_meta(final_model, rgb_test, tok_test, att_test, batch_size=args.batch_size)
+    test_x = _predict_meta(
+        final_model,
+        rgb_test,
+        input_test,
+        att_test,
+        type_test,
+        batch_size=args.batch_size,
+    )
 
     meta_model = _fit_meta_learner(oof_x, y_tv, num_classes=num_classes)
     pred = meta_model.predict(test_x)

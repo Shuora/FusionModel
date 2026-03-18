@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.experiments.stage1_binary import build_stage1_manifest
+from src.experiments.stage1_binary import build_stage1_manifest, main
 
 
 def _write_manifest(root: Path, dataset: str, policy: str, rows: list[dict]) -> None:
@@ -37,7 +37,7 @@ def test_stage1_requires_all_datasets(tmp_path: Path):
 def test_stage1_label_mapping(tmp_path: Path):
     processed_root = tmp_path / "processed"
     policy = "session_full"
-    datasets = ["ISCX", "MFCP", "MTA", "USTC-TFC2016"]
+    datasets = ["ISCX", "MFCP", "MTA"]
     for dataset in datasets:
         _write_manifest(
             processed_root,
@@ -79,7 +79,7 @@ def test_stage1_accepts_iscx_alias_directory(tmp_path: Path):
             }
         ],
     )
-    for dataset in ("MFCP", "MTA", "USTC-TFC2016"):
+    for dataset in ("MFCP", "MTA"):
         _write_manifest(
             processed_root,
             dataset,
@@ -134,7 +134,7 @@ def test_stage1_prefers_primary_iscx_directory_when_both_present(tmp_path: Path)
             }
         ],
     )
-    for dataset in ("MFCP", "MTA", "USTC-TFC2016"):
+    for dataset in ("MFCP", "MTA"):
         _write_manifest(
             processed_root,
             dataset,
@@ -156,3 +156,143 @@ def test_stage1_prefers_primary_iscx_directory_when_both_present(tmp_path: Path)
     assert "iscx_primary_1" in set(iscx_rows["session_id"].tolist())
     assert "iscx_alias_1" not in set(iscx_rows["session_id"].tolist())
     assert (iscx_rows["dataset_raw"] == "ISCX").all()
+
+
+def test_stage1_rejects_empty_required_dataset_manifest(tmp_path: Path):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+    for dataset in ("ISCX", "MFCP", "MTA"):
+        _write_manifest(processed_root, dataset, policy, [])
+
+    with pytest.raises((FileNotFoundError, ValueError)):
+        build_stage1_manifest(processed_root=processed_root, policy=policy)
+
+
+def test_stage1_does_not_require_ustc_dataset(tmp_path: Path):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+    for dataset in ("ISCX", "MFCP", "MTA"):
+        _write_manifest(
+            processed_root,
+            dataset,
+            policy,
+            [
+                {
+                    "session_id": f"{dataset}_1",
+                    "dataset": dataset,
+                    "family": "F1",
+                    "capture_id": "c1.pcap",
+                    "split": "train",
+                    "policy": policy,
+                }
+            ],
+        )
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    assert len(manifest) == 3
+
+
+def test_stage1_manifest_filters_to_mvtba_paper_subset(tmp_path: Path):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+
+    _write_manifest(
+        processed_root,
+        "ISCX",
+        policy,
+        [
+            {
+                "session_id": "iscx_keep",
+                "dataset": "ISCX",
+                "family": "F1",
+                "capture_id": "vpn_facebook_chat1a.pcap",
+                "split": "train",
+                "policy": policy,
+            },
+            {
+                "session_id": "iscx_drop",
+                "dataset": "ISCX",
+                "family": "F1",
+                "capture_id": "vpn_bittorrent.pcap",
+                "split": "train",
+                "policy": policy,
+            },
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MFCP",
+        policy,
+        [
+            {
+                "session_id": "mfcp_keep",
+                "dataset": "MFCP",
+                "family": "Artemis",
+                "capture_id": "a.pcap",
+                "split": "train",
+                "policy": policy,
+            },
+            {
+                "session_id": "mfcp_drop",
+                "dataset": "MFCP",
+                "family": "PUA",
+                "capture_id": "b.pcap",
+                "split": "train",
+                "policy": policy,
+            },
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MTA",
+        policy,
+        [
+            {
+                "session_id": "mta_keep",
+                "dataset": "MTA",
+                "family": "Dridex",
+                "capture_id": "c.pcap",
+                "split": "train",
+                "policy": policy,
+            }
+        ],
+    )
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    assert set(manifest["session_id"].tolist()) == {"iscx_keep", "mfcp_keep", "mta_keep"}
+
+
+def test_stage1_main_emits_progress_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+    for dataset in ("ISCX", "MFCP", "MTA"):
+        _write_manifest(
+            processed_root,
+            dataset,
+            policy,
+            [
+                {
+                    "session_id": f"{dataset}_1",
+                    "dataset": dataset,
+                    "family": "F1",
+                    "capture_id": "c1.pcap",
+                    "split": "train",
+                    "policy": policy,
+                }
+            ],
+        )
+
+    output = tmp_path / "stage1_binary_manifest.csv"
+    exit_code = main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            policy,
+            "--output",
+            str(output),
+        ]
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Stage1Binary" in captured.out
+    assert "Manifest saved" in captured.out

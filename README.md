@@ -1,36 +1,44 @@
-# FusionModel 运行命令手册
+# FusionModel
 
-本文档按当前代码实现整理可直接执行的命令，覆盖：
+面向流量分类的多模态实验工程，当前主线为 `session_full`：`PCAP -> Session PCAP -> RGB + ET-BERT 输入三元组`，并支持阶段1二分类与阶段2多分类协议执行。
 
-- `session_full` 预处理流程（`PCAP -> Session PCAP -> RGB+时序特征`）
-- 阶段协议命令（阶段1二分类清单、阶段2多分类任务清单）
-- 三个数据集分开训练命令（`CICAndMal2017`、`MFCP`、`USTC-TFC2016`）
+## 当前架构（与代码一致）
 
-## 0. 环境准备
+- 图像分支：`src/models/mobilevit_backbone.py`
+  - 使用 `transformers.MobileViTForImageClassification` 的 `mobilevit` 主干抽特征。
+  - 默认尝试复用本地 checkpoint：`/tmp/Shuora-MobileViT/malicious_traffic_mobilevit_model.pth`。
+  - 当前行为：仅在本地 checkpoint 存在时尝试加载；文件缺失或 `torch.load` 返回非 `dict` 时会跳过加载；其他参数不兼容情况可能在加载阶段抛错。
+- 文本分支：`src/models/etbert_backbone.py`
+  - ET-BERT 风格适配器，支持 `vocab/config/checkpoint` 接入与 checkpoint 映射加载报告。
+  - 支持按 `num_layers` 对 encoder 层数截断（不超过配置层数）。
+  - 兼容多种外部 key 风格并输出 `last_checkpoint_report/checkpoint_report` 诊断信息。
+- 融合头：`src/models/fusion_model.py`
+  - `MobileViTETBertFusionClassifier` 输出 `logits_fuse/logits_img/logits_tls/gate`，供 train/evaluate/stacking/moe 全链路复用。
+
+说明：当前 ET-BERT 侧是“ET-BERT 风格兼容适配器”，并非原始 UER ET-BERT 预训练模型的完整等价实现。
+
+## 环境准备
 
 ```bash
-cd /home/shuora/Repositories/Traffic/FusionModel
+cd /home/shuora/Traffic/FusionModel
 conda env create -f environment.yml
 conda activate FusionModel
+pip install -r requirements.txt
 ```
 
-默认数据目录（无需复制）：
+`environment.yml` 提供基础依赖；`requirements.txt` 补充了当前 MobileViT 所需的 `transformers` 等包。
+
+## 数据目录约定
 
 - `SourceData/CICAndMal2017`
 - `SourceData/MFCP`
 - `SourceData/USTC-TFC2016`
-- `SourceData/ISCX` 或 `SourceData/ISCX-VPN-NonVPN-2016`（若要跑阶段1二分类必须存在其一）
-- `SourceData/MTA`（若要跑阶段1二分类必须存在）
+- `SourceData/ISCX` 或 `SourceData/ISCX-VPN-NonVPN-2016`（阶段1需要）
+- `SourceData/MTA`（阶段1需要；默认阶段2任务也包含 MTA）
 
-## 1. 预处理命令（session_full）
+## 最小流程命令
 
-说明：
-
-- 默认会在特征提取后清理 `tmp_sessions`
-- 默认保留抽检图 `debug/preview_png`（每类上限由 `--preview-per-family` 控制）
-- 如需保留切分后的 session pcap，使用 `--keep-sessions`
-
-### 1.1 全数据集一次预处理
+预处理：
 
 ```bash
 python -m src.data.preprocess_runner \
@@ -42,331 +50,37 @@ python -m src.data.preprocess_runner \
   --preview-per-family 20
 ```
 
-### 1.2 仅处理指定数据集
-
-```bash
-python -m src.data.preprocess_runner \
-  --source-root SourceData \
-  --output-root outputs/processed \
-  --policies session_full \
-  --datasets MFCP USTC-TFC2016 \
-  --seed 42 \
-  --cleanup-sessions \
-  --preview-per-family 20
-```
-
-### 1.3 调试模式（保留 session pcap）
-
-```bash
-python -m src.data.preprocess_runner \
-  --source-root SourceData \
-  --output-root outputs/processed \
-  --policies session_full \
-  --keep-sessions \
-  --preview-per-family 20
-```
-
-兼容脚本路径启动：
-
-```bash
-python src/data/preprocess_runner.py --help
-```
-
-## 2. 阶段协议命令
-
-### 2.1 阶段1（混合二分类）清单生成
-
-标签定义：
-
-- `ISCX -> normal (0)`
-- `MFCP/MTA/USTC-TFC2016 -> malicious (1)`
-
-严格要求：缺任一数据集会直接报错退出。
-兼容性：代码会把 `ISCX-VPN-NonVPN-2016` 视为 `ISCX` 的目录别名。
-输出说明：阶段1清单中的 `dataset` 为标准化名称，`dataset_raw` 记录原始目录名（用于追溯）。
+阶段1（ISCX=normal，MFCP/MTA=malicious）：
 
 ```bash
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
-  --output outputs/protocol/stage1_binary_manifest.csv
+  --output outputs/protocol/stage1_binary_manifest.csv \
+  --execute \
+  --run-root runs \
+  --run-id stage1-binary \
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 64 \
+  --lr 1e-3 \
+  --seed 42
 ```
 
-### 2.2 阶段2（三任务多分类）清单生成
-
-固定任务：
-
-- `MTA` 7类
-- `MFCP` 6类
-- `USTC-TFC2016` 10类
+阶段2（`stage2_tasks.json` 仅写入 3 个基础任务：MTA-7 / MFCP-6 / USTC-10；`--execute` 时才会额外触发 USTC 4000/3000/2000 限样任务，这些额外任务不会写入该 JSON）：
 
 ```bash
 python -m src.experiments.stage2_multiclass \
-  --output outputs/protocol/stage2_tasks.json
-```
-
-## 3. 三个数据集分开训练命令
-
-训练入口统一为：
-
-- `python -m src.train`（`--stage warmup|fusion|stacking|moe`）
-- `python -m src.evaluate`
-- `python -m src.report`
-
-注意：`--processed-root` 应指向“包含数据集目录的一层根目录”。
-
-### 3.1 CICAndMal2017
-
-#### 3.1.1 预处理
-
-```bash
-python -m src.data.preprocess_runner \
-  --source-root SourceData \
-  --output-root outputs/processed-cicandmal2017 \
-  --policies session_full \
-  --datasets CICAndMal2017 \
-  --seed 42 \
-  --cleanup-sessions \
-  --preview-per-family 20
-```
-
-#### 3.1.2 warmup
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-cicandmal2017 \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
   --policy session_full \
-  --stage warmup \
-  --run-root runs/CICAndMal2017 \
-  --run-id cicandmal2017-sessionfull-warmup \
-  --epochs 10 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.1.3 fusion
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-cicandmal2017 \
-  --policy session_full \
-  --stage fusion \
-  --run-root runs/CICAndMal2017 \
-  --run-id cicandmal2017-sessionfull-fusion \
-  --epochs 30 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.1.4 stacking / moe（可选）
-
-```bash
-python -m src.stacking \
-  --run-dir runs/CICAndMal2017/cicandmal2017-sessionfull-fusion \
-  --n-splits 3 \
-  --oof-epochs 2 \
-  --batch-size 32 \
-  --seed 42
-```
-
-```bash
-python -m src.moe \
-  --run-dir runs/CICAndMal2017/cicandmal2017-sessionfull-fusion \
-  --epochs 5 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.1.5 评估与报告
-
-```bash
-python -m src.evaluate \
-  --run-dir runs/CICAndMal2017/cicandmal2017-sessionfull-fusion \
-  --split test \
-  --checkpoint best
-```
-
-```bash
-python -m src.report \
-  --run-dir runs/CICAndMal2017/cicandmal2017-sessionfull-fusion
-```
-
-### 3.2 MFCP
-
-#### 3.2.1 预处理
-
-```bash
-python -m src.data.preprocess_runner \
-  --source-root SourceData \
-  --output-root outputs/processed-mfcp \
-  --policies session_full \
-  --datasets MFCP \
-  --seed 42 \
-  --cleanup-sessions \
-  --preview-per-family 20
-```
-
-#### 3.2.2 warmup
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-mfcp \
-  --policy session_full \
-  --stage warmup \
-  --run-root runs/MFCP \
-  --run-id mfcp-sessionfull-warmup \
-  --epochs 10 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.2.3 fusion
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-mfcp \
-  --policy session_full \
-  --stage fusion \
-  --run-root runs/MFCP \
-  --run-id mfcp-sessionfull-fusion \
-  --epochs 30 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.2.4 stacking / moe（可选）
-
-```bash
-python -m src.stacking \
-  --run-dir runs/MFCP/mfcp-sessionfull-fusion \
-  --n-splits 3 \
-  --oof-epochs 2 \
-  --batch-size 32 \
-  --seed 42
-```
-
-```bash
-python -m src.moe \
-  --run-dir runs/MFCP/mfcp-sessionfull-fusion \
-  --epochs 5 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.2.5 评估与报告
-
-```bash
-python -m src.evaluate \
-  --run-dir runs/MFCP/mfcp-sessionfull-fusion \
-  --split test \
-  --checkpoint best
-```
-
-```bash
-python -m src.report \
-  --run-dir runs/MFCP/mfcp-sessionfull-fusion
-```
-
-### 3.3 USTC-TFC2016
-
-#### 3.3.1 预处理
-
-```bash
-python -m src.data.preprocess_runner \
-  --source-root SourceData \
-  --output-root outputs/processed-ustc \
-  --policies session_full \
-  --datasets USTC-TFC2016 \
-  --seed 42 \
-  --cleanup-sessions \
-  --preview-per-family 20
-```
-
-#### 3.3.2 warmup
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-ustc \
-  --policy session_full \
-  --stage warmup \
-  --run-root runs/USTC-TFC2016 \
-  --run-id ustc-sessionfull-warmup \
-  --epochs 10 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.3.3 fusion
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed-ustc \
-  --policy session_full \
-  --stage fusion \
-  --run-root runs/USTC-TFC2016 \
-  --run-id ustc-sessionfull-fusion \
-  --epochs 30 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.3.4 stacking / moe（可选）
-
-```bash
-python -m src.stacking \
-  --run-dir runs/USTC-TFC2016/ustc-sessionfull-fusion \
-  --n-splits 3 \
-  --oof-epochs 2 \
-  --batch-size 32 \
-  --seed 42
-```
-
-```bash
-python -m src.moe \
-  --run-dir runs/USTC-TFC2016/ustc-sessionfull-fusion \
-  --epochs 5 \
-  --batch-size 32 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-#### 3.3.5 评估与报告
-
-```bash
-python -m src.evaluate \
-  --run-dir runs/USTC-TFC2016/ustc-sessionfull-fusion \
-  --split test \
-  --checkpoint best
-```
-
-```bash
-python -m src.report \
-  --run-dir runs/USTC-TFC2016/ustc-sessionfull-fusion
-```
-
-## 4. 消融（可选）
-
-生成消融矩阵：
-
-```bash
-python -m src.ablation \
-  --mode plan \
-  --output runs/ablation/ablation_plan.csv
-```
-
-汇总消融结果：
-
-```bash
-python -m src.ablation \
-  --mode summary \
   --run-root runs \
-  --output runs/ablation/ablation_summary.csv
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 64 \
+  --lr 1e-3 \
+  --seed 42
 ```
+
+完整命令集合见：`docs/commands/session-full-experiments.md`。
