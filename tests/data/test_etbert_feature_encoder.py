@@ -28,7 +28,7 @@ def _sample_session() -> dict:
 
 def test_save_feature_shards_writes_etbert_inputs(tmp_path: Path):
     rgb_path = tmp_path / "rgb" / "rgb_shard_00000.npz"
-    seq_path = tmp_path / "seq" / "seq_shard_00000.npz"
+    seq_path = tmp_path / "etbert" / "etbert_shard_00000.npz"
 
     save_feature_shards(
         sessions=[_sample_session()],

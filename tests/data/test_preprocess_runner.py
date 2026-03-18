@@ -68,8 +68,8 @@ def test_run_preprocess_policies_outputs_strict_and_full(tmp_path: Path):
     )
 
     assert set(results.keys()) == {"strict", "full"}
-    assert (output_root / "DemoSet" / "strict" / "rgb" / "rgb_shard_00000.npz").exists()
-    assert (output_root / "DemoSet" / "full" / "rgb" / "rgb_shard_00000.npz").exists()
+    assert len(list((output_root / "DemoSet" / "strict" / "rgb").glob("rgb_shard_*.npz"))) == 1
+    assert len(list((output_root / "DemoSet" / "full" / "rgb").glob("rgb_shard_*.npz"))) == 1
 
 
 def test_run_preprocess_policies_with_dataset_filter(tmp_path: Path):
@@ -93,8 +93,8 @@ def test_run_preprocess_policies_with_dataset_filter(tmp_path: Path):
 
     assert set(results.keys()) == {"strict"}
     assert results["strict"]["total_pcaps"] == 1
-    assert (output_root / "DataB" / "strict" / "rgb" / "rgb_shard_00000.npz").exists()
-    assert not (output_root / "DataA" / "strict" / "rgb" / "rgb_shard_00000.npz").exists()
+    assert len(list((output_root / "DataB" / "strict" / "rgb").glob("rgb_shard_*.npz"))) == 1
+    assert len(list((output_root / "DataA" / "strict" / "rgb").glob("rgb_shard_*.npz"))) == 0
 
 
 def test_run_preprocess_policies_supports_session_full(tmp_path: Path):
@@ -109,10 +109,12 @@ def test_run_preprocess_policies_supports_session_full(tmp_path: Path):
         output_root=output_root,
         policies=["session_full"],
         seed=42,
+        resume=True,
         show_progress=False,
     )
 
     assert set(results.keys()) == {"session_full"}
+    assert results["session_full"]["resume"] is True
 
 
 def test_run_preprocess_policies_passes_cleanup_and_preview_flags(tmp_path: Path):

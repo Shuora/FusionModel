@@ -8,35 +8,51 @@ import pandas as pd
 from src.ablation import build_ablation_grid, write_ablation_plan, write_ablation_summary
 
 
-def test_ablation_grid_contains_required_groups_and_variants():
+UNSUPPORTED_FLAGS = ("--temporal", "--fusion-variant", "--rgb-variant", "--legacy-prob-only")
+
+
+def test_ablation_grid_uses_supported_entrypoints_and_flags():
     grid = build_ablation_grid()
     groups = {}
     for row in grid:
         groups.setdefault(row["group"], set()).add(row["name"])
+        run_cmd = row["run_cmd"]
+        assert "python -m src." in run_cmd
+        assert "python src/" not in run_cmd
+        for flag in UNSUPPORTED_FLAGS:
+            assert flag not in run_cmd
+        assert "--processed-root <processed_root>" in run_cmd
+        assert f"--run-root runs/ablation/{row['group']}" in run_cmd
+        assert f"--run-id {row['name']}" in run_cmd
 
-    assert groups["temporal_branch"] == {"bilstm_att", "tls_field_bert", "byte_bert"}
-    assert groups["fusion_mechanism"] == {
-        "linear_w",
-        "learnable_weight",
-        "cross_attn_gating",
-        "cross_attn_gating_no_aux",
+    assert groups == {
+        "backbone_stage": {"warmup_eval", "fusion_eval"},
+        "sample_budget": {"train4000", "train2000", "train1000"},
+        "ensemble_complexity": {"fusion_eval", "stacking_meta", "moe_router"},
     }
-    assert groups["rgb_channels"] == {"r_only", "g_only", "b_only", "rgb", "g_no_sni"}
-    assert groups["ensemble_complexity"] == {"xgboost_prob", "stacking_enhanced", "moe_router"}
 
 
-def test_write_ablation_plan_outputs_csv(tmp_path: Path):
+def test_write_ablation_plan_outputs_csv_with_consistent_run_layout(tmp_path: Path):
     out_csv = tmp_path / "ablation_plan.csv"
     write_ablation_plan(out_csv)
     assert out_csv.exists()
     df = pd.read_csv(out_csv)
     assert {"group", "name", "notes", "run_cmd"}.issubset(df.columns)
-    assert len(df) >= 15
+    assert len(df) == 8
+
+    for row in df.to_dict(orient="records"):
+        run_cmd = row["run_cmd"]
+        expected_group_root = f"runs/ablation/{row['group']}"
+        expected_run_dir = f"{expected_group_root}/{row['name']}"
+        assert f"--run-root {expected_group_root}" in run_cmd
+        assert f"--run-id {row['name']}" in run_cmd
+        if "src.evaluate" in run_cmd or "src.stacking" in run_cmd or "src.moe" in run_cmd:
+            assert expected_run_dir in run_cmd
 
 
 def test_write_ablation_summary_collects_run_metrics(tmp_path: Path):
     run_root = tmp_path / "runs"
-    run_a = run_root / "ablation" / "temporal_branch" / "run-a"
+    run_a = run_root / "ablation" / "backbone_stage" / "run-a"
     run_b = run_root / "ablation" / "ensemble_complexity" / "run-b"
     run_a.mkdir(parents=True, exist_ok=True)
     run_b.mkdir(parents=True, exist_ok=True)

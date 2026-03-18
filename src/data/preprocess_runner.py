@@ -29,6 +29,7 @@ def run_preprocess_policies(
     seed: int = 42,
     cleanup_sessions: bool = True,
     preview_per_family: int = 20,
+    resume: bool = False,
     show_progress: bool = True,
     log_fn: Callable[[str], None] = print,
 ) -> Dict[str, Dict[str, object]]:
@@ -49,6 +50,7 @@ def run_preprocess_policies(
                     "datasets": ",".join(datasets) if datasets else "all",
                     "cleanup_sessions": cleanup_sessions,
                     "preview_per_family": preview_per_family,
+                    "resume": resume,
                 },
             )
         )
@@ -61,6 +63,7 @@ def run_preprocess_policies(
             seed=seed,
             cleanup_sessions=cleanup_sessions,
             preview_per_family=preview_per_family,
+            resume=resume,
             show_progress=show_progress,
             log_fn=log_fn,
         )
@@ -86,6 +89,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         action="store_false",
     )
     parser.add_argument("--preview-per-family", type=int, default=20)
+    parser.add_argument("--resume", dest="resume", action="store_true", default=False)
+    parser.add_argument("--no-resume", dest="resume", action="store_false")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -97,6 +102,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         seed=args.seed,
         cleanup_sessions=args.cleanup_sessions,
         preview_per_family=args.preview_per_family,
+        resume=args.resume,
         show_progress=not args.no_progress,
     )
     return 0

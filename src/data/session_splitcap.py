@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import socket
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Iterator, List, Sequence, Tuple
 
 import dpkt
 
@@ -27,6 +27,26 @@ def _flow_hash(key: FlowKey) -> str:
     return hashlib.sha1(raw).hexdigest()[:16]
 
 
+def _open_packet_reader(fp):
+    try:
+        return dpkt.pcap.Reader(fp)
+    except (ValueError, dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError):
+        fp.seek(0)
+        return dpkt.pcapng.Reader(fp)
+
+
+def _iter_packets(reader) -> Iterator[PacketRow]:
+    packet_iter = iter(reader)
+    while True:
+        try:
+            yield next(packet_iter)
+        except StopIteration:
+            return
+        except (dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError, ValueError):
+            # Tolerate truncated/corrupted tail records; keep packets parsed so far.
+            return
+
+
 def split_pcap_to_session_pcaps(pcap_path: Path | str, out_dir: Path | str) -> List[Path]:
     pcap_path = Path(pcap_path)
     out_dir = Path(out_dir)
@@ -34,8 +54,8 @@ def split_pcap_to_session_pcaps(pcap_path: Path | str, out_dir: Path | str) -> L
 
     groups: Dict[FlowKey, List[PacketRow]] = {}
     with pcap_path.open("rb") as f:
-        reader = dpkt.pcap.Reader(f)
-        for ts, buf in reader:
+        reader = _open_packet_reader(f)
+        for ts, buf in _iter_packets(reader):
             try:
                 eth = dpkt.ethernet.Ethernet(buf)
             except Exception:
@@ -75,4 +95,3 @@ def cleanup_session_pcaps(paths: Sequence[Path | str]) -> int:
             p.unlink()
             removed += 1
     return removed
-

@@ -83,9 +83,54 @@ def _write_demo_pcap(path: Path) -> None:
         writer.close()
 
 
+def _write_demo_pcapng(path: Path) -> None:
+    tls_pkt1 = _make_eth_tcp(
+        "10.0.0.1",
+        "10.0.0.2",
+        12345,
+        443,
+        _tls_record(22, bytes([1]) + b"\x00" * 8),
+    )
+    tls_pkt2 = _make_eth_tcp(
+        "10.0.0.2",
+        "10.0.0.1",
+        443,
+        12345,
+        _tls_record(23, b"abcd"),
+    )
+    http_pkt = _make_eth_tcp(
+        "10.0.0.3",
+        "10.0.0.4",
+        23456,
+        80,
+        b"GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+    udp_pkt = _make_eth_udp("10.0.0.5", "10.0.0.6", 9999, 53, b"\x12\x34")
+
+    with path.open("wb") as f:
+        writer = dpkt.pcapng.Writer(f)
+        writer.writepkt(tls_pkt1, ts=1.0)
+        writer.writepkt(tls_pkt2, ts=2.0)
+        writer.writepkt(http_pkt, ts=3.0)
+        writer.writepkt(udp_pkt, ts=4.0)
+        writer.close()
+
+
 def test_read_tcp_sessions_aggregates_bidirectional_and_ignores_udp(tmp_path: Path):
     pcap_path = tmp_path / "demo.pcap"
     _write_demo_pcap(pcap_path)
+
+    sessions = read_tcp_sessions(pcap_path)
+
+    assert len(sessions) == 2
+    sizes = sorted(len(s["payload_chunks"]) for s in sessions)
+    assert sizes == [1, 2]
+    assert all(s["protocol"] == "TCP" for s in sessions)
+
+
+def test_read_tcp_sessions_supports_pcapng(tmp_path: Path):
+    pcap_path = tmp_path / "demo.pcapng"
+    _write_demo_pcapng(pcap_path)
 
     sessions = read_tcp_sessions(pcap_path)
 

@@ -82,4 +82,9 @@ def test_session_full_keeps_non_tls_and_marks_reason(tmp_path: Path):
     manifest_df = pd.read_csv(manifest_csv)
     assert set(manifest_df["is_tls_ssl"].astype(int).tolist()) == {0, 1}
     assert "tls_ssl_reason" in set(manifest_df.columns)
+    assert set(manifest_df["split"]) == {"train", "test"}
 
+    split_manifest_csv = output_root / "manifest" / "split_manifest.csv"
+    split_df = pd.read_csv(split_manifest_csv)
+    assert "session_id" in set(split_df.columns)
+    assert set(split_df["split"]) == {"train", "test"}
