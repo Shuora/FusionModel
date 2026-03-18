@@ -10,7 +10,7 @@ def build_output_paths(base_output_dir: str, dataset: str, policy: str) -> Dict[
     root = Path(base_output_dir) / dataset / policy
     return {
         "rgb_shard": root / "rgb" / "rgb_shard_00000.npz",
-        "seq_shard": root / "seq" / "seq_shard_00000.npz",
+        "etbert_shard": root / "etbert" / "etbert_shard_00000.npz",
         "manifest": root / "manifest" / "session_manifest.parquet",
         "tls_manifest": root / "manifest" / "tls_sessions.parquet",
         "non_tls_manifest": root / "manifest" / "non_tls_dropped.parquet",
