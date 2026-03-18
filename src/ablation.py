@@ -9,77 +9,151 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_PROCESSED_ROOT = "<processed_root>"
+DEFAULT_POLICY = "session_full"
+DEFAULT_DATASET = "USTC-TFC2016"
+DEFAULT_LABEL_MODE = "multiclass"
+DEFAULT_NUM_CLASSES = 10
+DEFAULT_EPOCHS = 5
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_SEED = 42
+ABLATION_RUN_ROOT = "runs/ablation"
+
+
+def _run_root(group: str) -> str:
+    return f"{ABLATION_RUN_ROOT}/{group}"
+
+
+def _run_dir(group: str, name: str) -> str:
+    return f"{_run_root(group)}/{name}"
+
+
+def _train_cmd(
+    *,
+    group: str,
+    name: str,
+    stage: str,
+    train_max_samples: int | None = None,
+) -> str:
+    parts = [
+        "python -m src.train",
+        f"--processed-root {DEFAULT_PROCESSED_ROOT}",
+        f"--policy {DEFAULT_POLICY}",
+        f"--datasets {DEFAULT_DATASET}",
+        f"--label-mode {DEFAULT_LABEL_MODE}",
+        f"--num-classes {DEFAULT_NUM_CLASSES}",
+        f"--stage {stage}",
+        f"--epochs {DEFAULT_EPOCHS}",
+        f"--batch-size {DEFAULT_BATCH_SIZE}",
+        f"--seed {DEFAULT_SEED}",
+        f"--run-root {_run_root(group)}",
+        f"--run-id {name}",
+    ]
+    if train_max_samples is not None:
+        parts.append(f"--train-max-samples {train_max_samples}")
+    return " ".join(parts)
+
+
+def _evaluate_cmd(*, group: str, name: str) -> str:
+    return f"python -m src.evaluate --run-dir {_run_dir(group, name)} --split test"
+
+
+def _stacking_cmd(*, group: str, name: str) -> str:
+    return f"python -m src.stacking --run-dir {_run_dir(group, name)}"
+
+
+def _moe_cmd(*, group: str, name: str) -> str:
+    return f"python -m src.moe --run-dir {_run_dir(group, name)}"
+
+
 def build_ablation_grid() -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
 
-    temporal = [
-        ("bilstm_att", "BiLSTM-Att baseline"),
-        ("tls_field_bert", "TLS-Field-BERT main"),
-        ("byte_bert", "Byte-BERT enhanced"),
-    ]
-    for name, notes in temporal:
+    backbone_group = "backbone_stage"
+    rows.append(
+        {
+            "group": backbone_group,
+            "name": "warmup_eval",
+            "notes": "Warmup stage baseline with test evaluation",
+            "run_cmd": " && ".join(
+                [
+                    _train_cmd(group=backbone_group, name="warmup_eval", stage="warmup"),
+                    _evaluate_cmd(group=backbone_group, name="warmup_eval"),
+                ]
+            ),
+        }
+    )
+    rows.append(
+        {
+            "group": backbone_group,
+            "name": "fusion_eval",
+            "notes": "Fusion stage baseline with test evaluation",
+            "run_cmd": " && ".join(
+                [
+                    _train_cmd(group=backbone_group, name="fusion_eval", stage="fusion"),
+                    _evaluate_cmd(group=backbone_group, name="fusion_eval"),
+                ]
+            ),
+        }
+    )
+
+    sample_group = "sample_budget"
+    for limit in (4000, 2000, 1000):
+        name = f"train{limit}"
         rows.append(
             {
-                "group": "temporal_branch",
+                "group": sample_group,
                 "name": name,
-                "notes": notes,
-                "run_cmd": f"python src/train.py --stage fusion --temporal {name}",
+                "notes": f"Fusion stage with train_max_samples={limit}",
+                "run_cmd": " && ".join(
+                    [
+                        _train_cmd(group=sample_group, name=name, stage="fusion", train_max_samples=limit),
+                        _evaluate_cmd(group=sample_group, name=name),
+                    ]
+                ),
             }
         )
 
-    fusion = [
-        ("linear_w", "linear weighted fusion"),
-        ("learnable_weight", "old learnable fusion"),
-        ("cross_attn_gating", "cross-attn + gating"),
-        ("cross_attn_gating_no_aux", "cross-attn + gating without aux loss"),
-    ]
-    for name, notes in fusion:
-        rows.append(
-            {
-                "group": "fusion_mechanism",
-                "name": name,
-                "notes": notes,
-                "run_cmd": f"python src/train.py --stage fusion --fusion-variant {name}",
-            }
-        )
-
-    rgb = [
-        ("r_only", "R channel only"),
-        ("g_only", "G channel only"),
-        ("b_only", "B channel only"),
-        ("rgb", "full RGB"),
-        ("g_no_sni", "G channel remove SNI"),
-    ]
-    for name, notes in rgb:
-        rows.append(
-            {
-                "group": "rgb_channels",
-                "name": name,
-                "notes": notes,
-                "run_cmd": f"python src/train.py --stage fusion --rgb-variant {name}",
-            }
-        )
-
-    ensemble = [
-        ("xgboost_prob", "old probability + XGBoost"),
-        ("stacking_enhanced", "enhanced stacking"),
-        ("moe_router", "moe router"),
-    ]
-    for name, notes in ensemble:
-        if name == "stacking_enhanced":
-            run_cmd = "python src/stacking.py --run-dir runs/<run_id>"
-        elif name == "moe_router":
-            run_cmd = "python src/moe.py --run-dir runs/<run_id>"
-        else:
-            run_cmd = "python src/stacking.py --run-dir runs/<run_id> --legacy-prob-only"
-        rows.append(
-            {
-                "group": "ensemble_complexity",
-                "name": name,
-                "notes": notes,
-                "run_cmd": run_cmd,
-            }
-        )
+    ensemble_group = "ensemble_complexity"
+    rows.append(
+        {
+            "group": ensemble_group,
+            "name": "fusion_eval",
+            "notes": "Fusion model evaluated directly as ensemble baseline",
+            "run_cmd": " && ".join(
+                [
+                    _train_cmd(group=ensemble_group, name="fusion_eval", stage="fusion"),
+                    _evaluate_cmd(group=ensemble_group, name="fusion_eval"),
+                ]
+            ),
+        }
+    )
+    rows.append(
+        {
+            "group": ensemble_group,
+            "name": "stacking_meta",
+            "notes": "Fusion backbone followed by stacking meta-learner",
+            "run_cmd": " && ".join(
+                [
+                    _train_cmd(group=ensemble_group, name="stacking_meta", stage="fusion"),
+                    _stacking_cmd(group=ensemble_group, name="stacking_meta"),
+                ]
+            ),
+        }
+    )
+    rows.append(
+        {
+            "group": ensemble_group,
+            "name": "moe_router",
+            "notes": "Fusion backbone followed by MoE router training",
+            "run_cmd": " && ".join(
+                [
+                    _train_cmd(group=ensemble_group, name="moe_router", stage="fusion"),
+                    _moe_cmd(group=ensemble_group, name="moe_router"),
+                ]
+            ),
+        }
+    )
 
     return rows
 

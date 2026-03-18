@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Tuple
 
 import matplotlib
 
@@ -27,12 +27,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     curve_path = fig_dir / "learning_curve.png"
     _plot_learning_curve(metrics, curve_path)
 
-    eval_payload = {}
-    eval_file = run_dir / "eval_test.json"
-    if eval_file.exists():
-        eval_payload = json.loads(eval_file.read_text(encoding="utf-8"))
-
+    eval_payload, metric_source, metric_path = _discover_metric_payload(run_dir)
     best_row = metrics.sort_values("val_macro_f1", ascending=False).iloc[0]
+
     lines = [
         f"# Run Report: {cfg['run_id']}",
         "",
@@ -49,26 +46,80 @@ def main(argv: Iterable[str] | None = None) -> int:
         "",
     ]
     if eval_payload:
+        num_samples = eval_payload.get("num_samples", eval_payload.get("n_test_samples", 0))
         lines.extend(
             [
-                "## Test Evaluation",
+                "## Evaluation",
+                f"- Metric Source: {metric_source}",
                 f"- Top-1: {eval_payload['top1']:.4f}",
+                f"- Macro-Precision: {float(eval_payload.get('macro_precision', 0.0)):.4f}",
                 f"- Macro-F1: {eval_payload['macro_f1']:.4f}",
                 f"- Macro-Recall: {eval_payload['macro_recall']:.4f}",
-                f"- Num Samples: {eval_payload['num_samples']}",
+                f"- Num Samples: {int(num_samples)}",
+                f"- Metrics File: `{metric_path.as_posix()}`",
                 "",
             ]
         )
-    lines.extend(
-        [
-            "## Artifacts",
-            f"- Metrics: `{(run_dir / 'metrics.csv').as_posix()}`",
-            f"- Learning Curve: `{curve_path.as_posix()}`",
-            f"- Checkpoints: `{(run_dir / 'checkpoints').as_posix()}`",
-        ]
-    )
+
+    artifact_lines = [
+        "## Artifacts",
+        f"- Metrics: `{(run_dir / 'metrics.csv').as_posix()}`",
+        f"- Learning Curve: `{curve_path.as_posix()}`",
+    ]
+
+    effective_split = str(eval_payload.get("effective_split", eval_payload.get("split", "test"))) if eval_payload else "test"
+    confusion_csv = run_dir / "figures" / f"confusion_matrix_{effective_split}.csv"
+    confusion_png = run_dir / "figures" / f"confusion_matrix_{effective_split}.png"
+    if metric_source == "eval" and confusion_csv.exists() and confusion_png.exists():
+        artifact_lines.extend(
+            [
+                f"- Confusion Matrix CSV: `{confusion_csv.as_posix()}`",
+                f"- Confusion Matrix PNG: `{confusion_png.as_posix()}`",
+            ]
+        )
+
+    stacking_metrics = run_dir / "stacking" / "meta_metrics.json"
+    stacking_model = run_dir / "stacking" / "meta_model.json"
+    if stacking_metrics.exists():
+        artifact_lines.append(f"- Stacking Metrics: `{stacking_metrics.as_posix()}`")
+    if stacking_model.exists():
+        artifact_lines.append(f"- Stacking Model: `{stacking_model.as_posix()}`")
+
+    moe_metrics = run_dir / "moe" / "moe_metrics.json"
+    moe_router = run_dir / "moe" / "router.ckpt"
+    if moe_metrics.exists():
+        artifact_lines.append(f"- MoE Metrics: `{moe_metrics.as_posix()}`")
+    if moe_router.exists():
+        artifact_lines.append(f"- MoE Router: `{moe_router.as_posix()}`")
+
+    checkpoints_dir = run_dir / "checkpoints"
+    if checkpoints_dir.exists():
+        artifact_lines.append(f"- Checkpoints: `{checkpoints_dir.as_posix()}`")
+
+    lines.extend(artifact_lines)
     (run_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
     return 0
+
+
+def _discover_metric_payload(run_dir: Path) -> Tuple[dict, str, Path]:
+    eval_test = run_dir / "eval_test.json"
+    if eval_test.exists():
+        return json.loads(eval_test.read_text(encoding="utf-8")), "eval", eval_test
+
+    other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
+    if other_eval_files:
+        path = other_eval_files[0]
+        return json.loads(path.read_text(encoding="utf-8")), "eval", path
+
+    stacking_file = run_dir / "stacking" / "meta_metrics.json"
+    if stacking_file.exists():
+        return json.loads(stacking_file.read_text(encoding="utf-8")), "stacking", stacking_file
+
+    moe_file = run_dir / "moe" / "moe_metrics.json"
+    if moe_file.exists():
+        return json.loads(moe_file.read_text(encoding="utf-8")), "moe", moe_file
+
+    return {}, "none", eval_test
 
 
 def _plot_learning_curve(metrics: pd.DataFrame, output_path: Path) -> None:

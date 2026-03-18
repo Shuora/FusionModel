@@ -60,6 +60,36 @@ def _write_two_session_pcap(path: Path) -> None:
         writer.close()
 
 
+def _write_two_session_pcapng(path: Path) -> None:
+    tls_pkt1 = _make_eth_tcp(
+        "10.0.0.1",
+        "10.0.0.2",
+        12345,
+        443,
+        _tls_record(22, bytes([1]) + b"\x00" * 8),
+    )
+    tls_pkt2 = _make_eth_tcp(
+        "10.0.0.2",
+        "10.0.0.1",
+        443,
+        12345,
+        _tls_record(23, b"abcd"),
+    )
+    http_pkt = _make_eth_tcp(
+        "10.0.0.3",
+        "10.0.0.4",
+        23456,
+        80,
+        b"GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+    with path.open("wb") as f:
+        writer = dpkt.pcapng.Writer(f)
+        writer.writepkt(tls_pkt1, ts=1.0)
+        writer.writepkt(tls_pkt2, ts=2.0)
+        writer.writepkt(http_pkt, ts=3.0)
+        writer.close()
+
+
 def test_split_pcap_to_sessions_and_cleanup(tmp_path: Path):
     pcap_path = tmp_path / "input.pcap"
     tmp_dir = tmp_path / "tmp_sessions"
@@ -74,3 +104,26 @@ def test_split_pcap_to_sessions_and_cleanup(tmp_path: Path):
     assert removed == 2
     assert not any(p.exists() for p in session_files)
 
+
+def test_split_pcapng_to_sessions(tmp_path: Path):
+    pcapng_path = tmp_path / "input.pcap"
+    tmp_dir = tmp_path / "tmp_sessions"
+    _write_two_session_pcapng(pcapng_path)
+
+    session_files = split_pcap_to_session_pcaps(pcapng_path, tmp_dir)
+    assert len(session_files) == 2
+    assert all(p.exists() for p in session_files)
+
+
+def test_split_pcap_tolerates_trailing_truncated_record(tmp_path: Path):
+    pcap_path = tmp_path / "truncated_tail.pcap"
+    tmp_dir = tmp_path / "tmp_sessions"
+    _write_two_session_pcap(pcap_path)
+
+    # Simulate a real-world damaged capture with trailing incomplete bytes.
+    with pcap_path.open("ab") as f:
+        f.write(b"\x00\x01")
+
+    session_files = split_pcap_to_session_pcaps(pcap_path, tmp_dir)
+    assert len(session_files) == 2
+    assert all(p.exists() for p in session_files)

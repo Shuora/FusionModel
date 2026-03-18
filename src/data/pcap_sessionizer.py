@@ -25,12 +25,20 @@ def _flow_hash(key: Tuple[str, int, str, int, str]) -> str:
     return hashlib.sha1(raw).hexdigest()[:16]
 
 
+def _open_packet_reader(fp):
+    try:
+        return dpkt.pcap.Reader(fp)
+    except (ValueError, dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError):
+        fp.seek(0)
+        return dpkt.pcapng.Reader(fp)
+
+
 def read_tcp_sessions(pcap_path: Path | str) -> List[Dict[str, Any]]:
     session_map: Dict[Tuple[str, int, str, int, str], Dict[str, Any]] = {}
     capture_id = Path(pcap_path).name
 
     with Path(pcap_path).open("rb") as f:
-        reader = dpkt.pcap.Reader(f)
+        reader = _open_packet_reader(f)
         for ts, buf in reader:
             try:
                 eth = dpkt.ethernet.Ethernet(buf)
