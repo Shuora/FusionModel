@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 from PIL import Image
 
+from src.data.etbert_tokenizer import encode_etbert_tokens
+
 
 PAD_ID = 0
 CLS_ID = 1
@@ -166,10 +168,10 @@ def save_feature_shards(
         session_ids.append(str(session.get("session_id", "")))
         labels.append(int(family_to_idx[family]))
         rgbs.append(encode_session_rgb(session))
-        token_ids, attention, segment_ids = encode_tls_tokens(session, max_len=token_max_len)
-        token_ids_list.append(token_ids)
+        input_ids, attention, token_type_ids = encode_etbert_tokens(session, max_len=token_max_len)
+        token_ids_list.append(input_ids)
         attn_list.append(attention)
-        seg_list.append(segment_ids)
+        seg_list.append(token_type_ids)
 
     if rgbs:
         rgb_arr = np.stack(rgbs, axis=0).astype(np.uint8, copy=False)
@@ -196,9 +198,9 @@ def save_feature_shards(
     np.savez_compressed(
         seq_path,
         session_id=sid_arr,
-        token_ids=token_arr,
+        input_ids=token_arr,
         attention_mask=attn_arr,
-        segment_ids=seg_arr,
+        token_type_ids=seg_arr,
     )
 
     if preview_dir is not None and rgb_arr.shape[0] > 0 and preview_per_family > 0:
@@ -222,7 +224,7 @@ def _save_preview_png(
 ) -> None:
     preview_dir.mkdir(parents=True, exist_ok=True)
     idx_to_family = {idx: family for family, idx in family_to_idx.items()}
-    family_counts: Dict[str, int] = {}
+    family_counts = _load_existing_preview_counts(preview_dir)
 
     for i in range(rgb_arr.shape[0]):
         label = int(labels[i])
@@ -236,3 +238,14 @@ def _save_preview_png(
         sid = str(session_ids[i]).replace("/", "_")
         image = np.transpose(rgb_arr[i], (1, 2, 0)).astype(np.uint8, copy=False)
         Image.fromarray(image).save(family_dir / f"{sid}.png")
+
+
+def _load_existing_preview_counts(preview_dir: Path) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    if not preview_dir.exists():
+        return counts
+    for family_dir in preview_dir.iterdir():
+        if not family_dir.is_dir():
+            continue
+        counts[family_dir.name] = len(list(family_dir.glob("*.png")))
+    return counts

@@ -66,6 +66,6 @@ def test_save_feature_shards_writes_expected_npz_fields(tmp_path: Path):
     seq_npz = np.load(seq_path, allow_pickle=False)
 
     assert set(rgb_npz.files) == {"session_id", "label", "rgb"}
-    assert set(seq_npz.files) == {"session_id", "token_ids", "attention_mask", "segment_ids"}
+    assert set(seq_npz.files) == {"session_id", "input_ids", "attention_mask", "token_type_ids"}
     assert rgb_npz["rgb"].shape == (1, 3, 28, 28)
-    assert seq_npz["token_ids"].shape == (1, 32)
+    assert seq_npz["input_ids"].shape == (1, 32)
