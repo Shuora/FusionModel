@@ -50,6 +50,33 @@ def _make_eth_udp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: byt
     return bytes(eth)
 
 
+def _make_raw_ip_tcp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: bytes) -> bytes:
+    tcp = dpkt.tcp.TCP(sport=sport, dport=dport, seq=1, flags=dpkt.tcp.TH_ACK, data=payload)
+    ip = dpkt.ip.IP(
+        src=socket.inet_aton(src_ip),
+        dst=socket.inet_aton(dst_ip),
+        p=dpkt.ip.IP_PROTO_TCP,
+        ttl=64,
+        data=tcp,
+    )
+    ip.len = 20 + len(tcp)
+    return bytes(ip)
+
+
+def _make_raw_ip_udp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: bytes) -> bytes:
+    udp = dpkt.udp.UDP(sport=sport, dport=dport, data=payload)
+    udp.ulen = 8 + len(payload)
+    ip = dpkt.ip.IP(
+        src=socket.inet_aton(src_ip),
+        dst=socket.inet_aton(dst_ip),
+        p=dpkt.ip.IP_PROTO_UDP,
+        ttl=64,
+        data=udp,
+    )
+    ip.len = 20 + len(udp)
+    return bytes(ip)
+
+
 def _write_demo_pcap(path: Path) -> None:
     tls_pkt1 = _make_eth_tcp(
         "10.0.0.1",
@@ -116,6 +143,31 @@ def _write_demo_pcapng(path: Path) -> None:
         writer.close()
 
 
+def _write_raw_ip_pcap(path: Path) -> None:
+    tls_pkt1 = _make_raw_ip_tcp(
+        "10.0.0.1",
+        "10.0.0.2",
+        12345,
+        443,
+        _tls_record(22, bytes([1]) + b"\x00" * 8),
+    )
+    tls_pkt2 = _make_raw_ip_tcp(
+        "10.0.0.2",
+        "10.0.0.1",
+        443,
+        12345,
+        _tls_record(23, b"abcd"),
+    )
+    udp_pkt = _make_raw_ip_udp("10.0.0.5", "10.0.0.6", 9999, 53, b"\x12\x34")
+
+    with path.open("wb") as f:
+        writer = dpkt.pcap.Writer(f, linktype=101)
+        writer.writepkt(tls_pkt1, ts=1.0)
+        writer.writepkt(tls_pkt2, ts=2.0)
+        writer.writepkt(udp_pkt, ts=3.0)
+        writer.close()
+
+
 def test_read_tcp_sessions_aggregates_bidirectional_and_ignores_udp(tmp_path: Path):
     pcap_path = tmp_path / "demo.pcap"
     _write_demo_pcap(pcap_path)
@@ -149,3 +201,36 @@ def test_classify_pcap_sessions_returns_tls_and_non_tls(tmp_path: Path):
     assert len(accepted) == 1
     assert len(dropped) == 1
     assert dropped[0]["drop_reason"] == "cleartext_signature"
+
+
+def test_read_tcp_sessions_supports_raw_ip_linktype_for_tcp(tmp_path: Path):
+    pcap_path = tmp_path / "raw_ip.pcap"
+    _write_raw_ip_pcap(pcap_path)
+
+    sessions = read_tcp_sessions(pcap_path)
+
+    assert len(sessions) == 1
+    assert sessions[0]["protocol"] == "TCP"
+
+
+def test_classify_pcap_sessions_session_full_keeps_raw_ip_udp_sessions(tmp_path: Path):
+    pcap_path = tmp_path / "raw_ip.pcap"
+    _write_raw_ip_pcap(pcap_path)
+
+    accepted, dropped = classify_pcap_sessions(pcap_path, mode="session_full")
+
+    assert len(accepted) == 2
+    assert {row["protocol"] for row in accepted} == {"TCP", "UDP"}
+    assert len(dropped) == 0
+
+
+def test_read_tcp_sessions_tolerates_trailing_truncated_record(tmp_path: Path):
+    pcap_path = tmp_path / "truncated_tail_raw_ip.pcap"
+    _write_raw_ip_pcap(pcap_path)
+
+    with pcap_path.open("ab") as f:
+        f.write(b"\x00\x01")
+
+    sessions = read_tcp_sessions(pcap_path, include_udp=True)
+
+    assert len(sessions) == 2
