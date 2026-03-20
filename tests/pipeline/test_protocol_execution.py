@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+import src.experiments.stage1_binary as stage1_module
 from src.experiments.stage1_binary import main as stage1_main
 from src.experiments.stage2_multiclass import main as stage2_main
 
@@ -65,10 +66,29 @@ def _write_processed_dataset(
         writer.writerows(rows)
 
 
-def test_stage1_binary_execute_runs_train_eval_report(tmp_path: Path):
+def _patch_minimal_stage1_execute_specs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_ISCX_SPECS",
+        [{"name": "toy_iscx", "capture_prefixes": ("cap_",), "train": 1, "test": 1}],
+    )
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_MTA_SPECS",
+        [{"family": "D", "train": 1, "test": 1}],
+    )
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_MFCP_SPECS",
+        [{"family": "A", "train": 1, "test": 1}],
+    )
+
+
+def test_stage1_binary_execute_runs_train_eval_report(tmp_path: Path, monkeypatch):
     processed_root = tmp_path / "outputs" / "processed"
     run_root = tmp_path / "runs"
     policy = "session_full"
+    _patch_minimal_stage1_execute_specs(monkeypatch)
 
     _write_processed_dataset(processed_root, "ISCX", policy, np.array([0, 1, 0, 1, 0, 1]), ["Chat", "VoIP"])
     _write_processed_dataset(processed_root, "MFCP", policy, np.array([0, 1, 0, 1, 0, 1]), ["A", "B"])
@@ -95,6 +115,8 @@ def test_stage1_binary_execute_runs_train_eval_report(tmp_path: Path):
             "1",
             "--batch-size",
             "4",
+            "--num-workers",
+            "0",
         ]
     )
     assert code == 0
@@ -111,10 +133,11 @@ def test_stage1_binary_execute_runs_train_eval_report(tmp_path: Path):
     assert str(cfg["session_filter_manifest"]).endswith("stage1_binary_manifest.csv")
 
 
-def test_stage1_binary_execute_stacking_reports_stacking_metrics(tmp_path: Path):
+def test_stage1_binary_execute_stacking_reports_stacking_metrics(tmp_path: Path, monkeypatch):
     processed_root = tmp_path / "outputs" / "processed"
     run_root = tmp_path / "runs"
     policy = "session_full"
+    _patch_minimal_stage1_execute_specs(monkeypatch)
 
     _write_processed_dataset(processed_root, "ISCX", policy, np.array([0, 1, 0, 1, 0, 1]), ["Chat", "VoIP"])
     _write_processed_dataset(processed_root, "MFCP", policy, np.array([0, 1, 0, 1, 0, 1]), ["A", "B"])
@@ -140,6 +163,8 @@ def test_stage1_binary_execute_stacking_reports_stacking_metrics(tmp_path: Path)
             "1",
             "--batch-size",
             "4",
+            "--num-workers",
+            "0",
         ]
     )
     assert code == 0
@@ -151,10 +176,11 @@ def test_stage1_binary_execute_stacking_reports_stacking_metrics(tmp_path: Path)
     assert "Metric Source: stacking" in report_text
 
 
-def test_stage1_binary_execute_moe_reports_moe_metrics(tmp_path: Path):
+def test_stage1_binary_execute_moe_reports_moe_metrics(tmp_path: Path, monkeypatch):
     processed_root = tmp_path / "outputs" / "processed"
     run_root = tmp_path / "runs"
     policy = "session_full"
+    _patch_minimal_stage1_execute_specs(monkeypatch)
 
     _write_processed_dataset(processed_root, "ISCX", policy, np.array([0, 1, 0, 1, 0, 1]), ["Chat", "VoIP"])
     _write_processed_dataset(processed_root, "MFCP", policy, np.array([0, 1, 0, 1, 0, 1]), ["A", "B"])
@@ -180,6 +206,8 @@ def test_stage1_binary_execute_moe_reports_moe_metrics(tmp_path: Path):
             "1",
             "--batch-size",
             "4",
+            "--num-workers",
+            "0",
         ]
     )
     assert code == 0

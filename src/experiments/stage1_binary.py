@@ -13,32 +13,34 @@ from src.train import main as train_main
 
 
 REQUIRED_STAGE1_DATASETS = ("ISCX", "MFCP", "MTA")
-STAGE1_ISCX_ALLOWED_CAPTURE_PREFIXES = (
-    "vpn_facebook_chat",
-    "vpn_ftps",
-    "vpn_sftp",
-    "vpn_skype_files",
-    "vpn_hangouts_audio",
-    "vpn_voipbuster",
-    "email",
-    "hangouts_audio",
-    "skype_chat",
-    "torrent",
-    "voipbuster",
-)
-STAGE1_MALICIOUS_ALLOWED_FAMILIES = {
-    "Artemis",
-    "Cobalt",
-    "Dridex",
-    "Emotet",
-    "Hancitor",
-    "IcedID",
-    "Icedid",
-    "Qakbot",
-    "Trickbot",
-    "TrickBot",
-    "Ursnif",
-}
+PAPER_STAGE1_ISCX_SPECS = [
+    {"name": "vpn_facebook_chat", "capture_prefixes": ("vpn_facebook_chat",), "train": 927, "test": 232},
+    {"name": "vpn_file_transfer", "capture_prefixes": ("vpn_ftps", "vpn_sftp", "vpn_skype_files"), "train": 805, "test": 201},
+    {"name": "vpn_hangouts_audio", "capture_prefixes": ("vpn_hangouts_audio",), "train": 2538, "test": 634},
+    {"name": "vpn_voipbuster", "capture_prefixes": ("vpn_voipbuster",), "train": 1294, "test": 324},
+    {"name": "email_nonvpn", "capture_prefixes": ("email",), "train": 2798, "test": 699},
+    {"name": "hangouts_audio_nonvpn", "capture_prefixes": ("hangouts_audio",), "train": 1384, "test": 346},
+    {"name": "skype_chat_nonvpn", "capture_prefixes": ("skype_chat",), "train": 3542, "test": 886},
+    {"name": "torrent_nonvpn", "capture_prefixes": ("torrent",), "train": 836, "test": 209},
+    {"name": "voipbuster_nonvpn", "capture_prefixes": ("voipbuster",), "train": 1420, "test": 355},
+]
+PAPER_STAGE1_MTA_SPECS = [
+    {"family": "Dridex", "train": 492, "test": 123},
+    {"family": "Emotet", "train": 3368, "test": 842},
+    {"family": "Hancitor", "train": 13452, "test": 3363},
+    {"family": "IcedID", "train": 1454, "test": 364},
+    {"family": "Qakbot", "train": 3350, "test": 838},
+    {"family": "Trickbot", "train": 1794, "test": 448},
+    {"family": "Ursnif", "train": 506, "test": 127},
+]
+PAPER_STAGE1_MFCP_SPECS = [
+    {"family": "Artemis", "train": 6000, "test": 1500},
+    {"family": "Cobalt", "train": 1501, "test": 375},
+    {"family": "Dridex", "train": 6000, "test": 1500},
+    {"family": "PUA", "train": 5614, "test": 1403},
+    {"family": "TrickBot", "train": 6000, "test": 1500},
+    {"family": "Ursnif", "train": 6000, "test": 1500},
+]
 DATASET_ALIASES: Dict[str, Tuple[str, ...]] = {
     "ISCX": ("ISCX", "ISCX-VPN-NonVPN-2016"),
     "MFCP": ("MFCP",),
@@ -96,6 +98,7 @@ def build_stage1_manifest(
     processed_root = Path(processed_root)
     _log(f"Build manifest start: processed_root={processed_root}, policy={policy}")
     missing: List[str] = []
+    loaded_frames: List[Tuple[str, pd.DataFrame]] = []
     frames: List[pd.DataFrame] = []
 
     for dataset in required_datasets:
@@ -104,19 +107,16 @@ def build_stage1_manifest(
         except FileNotFoundError:
             missing.append(dataset)
             continue
-        filtered = _filter_stage1_paper_subset(df, dataset=dataset)
-        if filtered.empty and not df.empty:
-            _log(f"Fallback to unfiltered dataset={dataset}: paper subset matched zero rows")
-            filtered = df
-        if filtered.empty:
-            missing.append(dataset)
-            continue
-        frames.append(filtered)
+        loaded_frames.append((dataset, df))
 
     if missing:
         raise FileNotFoundError(f"stage1 missing datasets: {sorted(set(missing))}")
     if not frames:
-        raise FileNotFoundError("stage1 manifest empty: no datasets loaded")
+        if not loaded_frames:
+            raise FileNotFoundError("stage1 manifest empty: no datasets loaded")
+
+    for dataset, df in loaded_frames:
+        frames.append(_build_stage1_paper_subset(df, dataset=dataset))
 
     merged = pd.concat(frames, axis=0, ignore_index=True)
     if merged.empty:
@@ -127,24 +127,104 @@ def build_stage1_manifest(
     return merged
 
 
-def _filter_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     if df.empty:
-        return df
-    out = df.copy()
+        raise ValueError(f"stage1 paper subset empty for dataset={dataset}")
+
     if dataset == "ISCX":
-        capture_series = out["capture_id"].astype(str).str.lower() if "capture_id" in out.columns else pd.Series("", index=out.index)
-        keep_mask = capture_series.map(_iscx_capture_allowed)
-        return out.loc[keep_mask].reset_index(drop=True)
-    if dataset in {"MFCP", "MTA"}:
-        family_series = out["family"].astype(str) if "family" in out.columns else pd.Series("", index=out.index)
-        keep_mask = family_series.isin(STAGE1_MALICIOUS_ALLOWED_FAMILIES)
-        return out.loc[keep_mask].reset_index(drop=True)
-    return out
+        frames = []
+        capture_series = (
+            df["capture_id"].astype(str).map(lambda value: Path(value).stem.lower())
+            if "capture_id" in df.columns
+            else pd.Series("", index=df.index)
+        )
+        for spec in PAPER_STAGE1_ISCX_SPECS:
+            keep_mask = capture_series.map(lambda stem: any(stem.startswith(prefix) for prefix in spec["capture_prefixes"]))
+            frames.append(
+                _select_split_quota(
+                    df.loc[keep_mask].reset_index(drop=True),
+                    dataset=dataset,
+                    group_name=str(spec["name"]),
+                    train_required=int(spec["train"]),
+                    test_required=int(spec["test"]),
+                )
+            )
+        return pd.concat(frames, axis=0, ignore_index=True)
+
+    if dataset == "MTA":
+        frames = []
+        for spec in PAPER_STAGE1_MTA_SPECS:
+            family_norm = _normalize_family(str(spec["family"]))
+            keep_mask = df["family"].astype(str).map(_normalize_family) == family_norm
+            frames.append(
+                _select_split_quota(
+                    df.loc[keep_mask].reset_index(drop=True),
+                    dataset=dataset,
+                    group_name=str(spec["family"]),
+                    train_required=int(spec["train"]),
+                    test_required=int(spec["test"]),
+                )
+            )
+        return pd.concat(frames, axis=0, ignore_index=True)
+
+    if dataset == "MFCP":
+        frames = []
+        for spec in PAPER_STAGE1_MFCP_SPECS:
+            family_norm = _normalize_family(str(spec["family"]))
+            keep_mask = df["family"].astype(str).map(_normalize_family) == family_norm
+            frames.append(
+                _select_split_quota(
+                    df.loc[keep_mask].reset_index(drop=True),
+                    dataset=dataset,
+                    group_name=str(spec["family"]),
+                    train_required=int(spec["train"]),
+                    test_required=int(spec["test"]),
+                )
+            )
+        return pd.concat(frames, axis=0, ignore_index=True)
+
+    return df.reset_index(drop=True)
 
 
-def _iscx_capture_allowed(capture_id: str) -> bool:
-    stem = Path(str(capture_id)).stem.lower()
-    return any(stem.startswith(prefix) for prefix in STAGE1_ISCX_ALLOWED_CAPTURE_PREFIXES)
+def _normalize_family(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def _stable_sort_rows(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["_capture_sort"] = out.get("capture_id", pd.Series("", index=out.index)).astype(str)
+    out["_session_sort"] = out.get("session_id", pd.Series("", index=out.index)).astype(str)
+    out = out.sort_values(by=["_capture_sort", "_session_sort"], kind="stable").reset_index(drop=True)
+    return out.drop(columns=["_capture_sort", "_session_sort"])
+
+
+def _select_split_quota(
+    df: pd.DataFrame,
+    dataset: str,
+    group_name: str,
+    train_required: int,
+    test_required: int,
+) -> pd.DataFrame:
+    train_df = _stable_sort_rows(df.loc[df["split"].astype(str) == "train"].reset_index(drop=True))
+    test_df = _stable_sort_rows(df.loc[df["split"].astype(str) == "test"].reset_index(drop=True))
+
+    if len(train_df) < train_required or len(test_df) < test_required:
+        raise ValueError(
+            "stage1 paper quota unavailable: "
+            f"dataset={dataset} group={group_name} "
+            f"required_train={train_required} available_train={len(train_df)} "
+            f"required_test={test_required} available_test={len(test_df)}"
+        )
+
+    selected = pd.concat(
+        [
+            train_df.iloc[:train_required].copy(),
+            test_df.iloc[:test_required].copy(),
+        ],
+        axis=0,
+        ignore_index=True,
+    )
+    return selected.reset_index(drop=True)
 
 
 def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:

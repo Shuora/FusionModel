@@ -27,3 +27,24 @@
   - 当请求 `cuda` 但当前环境不可用时，自动回退到 `cpu`
 - 当前实现仍有一条重要边界：
   - 数据在训练/评估前会整体载入内存，因此在 `8GB RAM` 机器上，内存往往比显存更早成为瓶颈。
+
+## Stage1 论文协议核对结论（2026-03-20）
+
+- 论文原文依据：`docs/paper/MVTBA A Novel Hybrid Deep Learning Model for Encrypted Malicious Traffic Identification.pdf` 第 10-12 页。
+- 论文 Exp. I 使用的是：
+  - `ISCX VPN-nonVPN`
+  - `MTA`
+  - `MFCP`
+  - 不包含 `USTC`
+- 论文 Table 1 为 ISCX 的 9 个 normal traffic group，并给出每组固定的 train/test 配额。
+- 论文 Table 2 为 MTA 的 7 个家族，并给出每家族固定的 train/test 配额。
+- 论文 Table 3 为 MFCP 的 6 个家族，并给出每家族固定的 train/test 配额。
+- 论文明确写到 `MFCP` 做过 `trimmed some of the traffic`，因此论文协议不是“原始数据集全量样本直接混合”。
+- 当前仓库 `stage1_binary` 的实现问题：
+  - 仅通过 ISCX 文件名前缀白名单与 MTA/MFCP 家族白名单近似论文子集
+  - 没有严格按论文表 1-3 的每组 train/test 配额构造 manifest
+  - 保留了“匹配不到论文子集时 fallback 到未过滤数据”的行为，不符合严格复现要求
+- 本轮实现边界：
+  - 严格复现论文的类别/家族集合与每组 train/test 数
+  - 使用仓库现有 `session_full` session 样本按稳定排序裁样
+  - 不承诺与论文作者原始逐 session 列表一一对应

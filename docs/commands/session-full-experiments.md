@@ -122,6 +122,17 @@ python -m src.data.preprocess_runner \
 - `ISCX = normal (0)`
 - `MFCP/MTA = malicious (1)`
 
+论文口径说明：
+
+- `stage1_binary` 现按论文 Exp. I / Table 1-3 构造 manifest，只使用 `ISCX + MTA + MFCP`
+- `ISCX` 按论文 Table 1 的 9 个 traffic group 取样
+- `MTA` 按论文 Table 2 的 7 个家族取样
+- `MFCP` 按论文 Table 3 的 6 个家族取样
+- 当前仓库实现的是“类别与数量严格复现”：
+  - 严格对齐论文的 group/family 集合与 train/test 配额
+  - 具体 session 通过仓库现有 `session_full` manifest 稳定裁样得到
+  - 不是论文作者原始逐 session 列表的逐条还原
+
 ### 3.1 只生成 manifest
 
 ```bash
