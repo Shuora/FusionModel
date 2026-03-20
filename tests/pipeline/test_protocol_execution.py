@@ -345,3 +345,139 @@ def test_stage2_multiclass_default_output_path_matches_docs(tmp_path: Path, monk
     code = stage2_mod.main([])
     assert code == 0
     assert (tmp_path / "outputs" / "protocol" / "stage2_tasks.json").exists()
+
+
+def test_stage1_binary_execute_forwards_device_and_num_workers_to_train(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy: pd.DataFrame(
+            [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--device",
+            "cuda",
+            "--num-workers",
+            "2",
+        ]
+    )
+    assert code == 0
+    assert "--device" in captured["argv"]
+    assert "cuda" in captured["argv"]
+    assert "--num-workers" in captured["argv"]
+    assert "2" in captured["argv"]
+
+
+def test_stage1_binary_execute_defaults_num_workers_to_four(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy: pd.DataFrame(
+            [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+        ]
+    )
+    assert code == 0
+    assert "--num-workers" in captured["argv"]
+    assert "4" in captured["argv"]
+
+
+def test_stage2_multiclass_execute_forwards_device_and_num_workers_to_train(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage2_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+            "--device",
+            "auto",
+            "--num-workers",
+            "1",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for argv in captured:
+        assert "--device" in argv
+        assert "auto" in argv
+        assert "--num-workers" in argv
+        assert "1" in argv
+
+
+def test_stage2_multiclass_execute_defaults_num_workers_to_four(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage2_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for argv in captured:
+        assert "--num-workers" in argv
+        assert "4" in argv

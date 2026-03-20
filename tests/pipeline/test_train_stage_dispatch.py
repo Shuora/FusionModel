@@ -133,7 +133,7 @@ def test_dispatch_stage_moe_forwards_lr(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(moe_module, "main", fake_moe_main)
 
-    args = argparse.Namespace(moe_epochs=7, batch_size=16, seed=99, lr=0.0005)
+    args = argparse.Namespace(moe_epochs=7, batch_size=16, seed=99, lr=0.0005, device="cuda", num_workers=2)
     run_dir = tmp_path / "dispatch-run"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -153,6 +153,58 @@ def test_dispatch_stage_moe_forwards_lr(monkeypatch, tmp_path: Path):
         "16",
         "--lr",
         "0.0005",
+        "--device",
+        "cuda",
+        "--num-workers",
+        "2",
         "--seed",
         "99",
+    ]
+
+
+def test_dispatch_stage_stacking_forwards_device_and_num_workers(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    def fake_stacking_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    import src.stacking as stacking_module
+
+    monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
+
+    args = argparse.Namespace(
+        stacking_n_splits=4,
+        stacking_oof_epochs=3,
+        batch_size=12,
+        seed=77,
+        lr=0.001,
+        device="auto",
+        num_workers=1,
+    )
+    run_dir = tmp_path / "stacking-dispatch-run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logs = []
+
+    def log(level: str, module: str, event: str, kv: dict) -> None:
+        logs.append((level, module, event, kv))
+
+    code = train_module._dispatch_stage(stage="stacking", run_dir=run_dir, args=args, log=log)
+    assert code == 0
+    assert captured["argv"] == [
+        "--run-dir",
+        str(run_dir),
+        "--n-splits",
+        "4",
+        "--oof-epochs",
+        "3",
+        "--batch-size",
+        "12",
+        "--device",
+        "auto",
+        "--num-workers",
+        "1",
+        "--seed",
+        "77",
     ]

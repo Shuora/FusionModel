@@ -13,3 +13,17 @@
 - 训练/评估/协议管线状态：
   - `train/evaluate/report + stage1/stage2 + stacking/moe` 相关测试链路可通过。
   - 用户指定回归命令已在本次文档更新后复验通过：`46 passed`。
+
+## 运行时支持结论（2026-03-19）
+
+- `src.train` 现已支持显式设备选择：
+  - `--device auto`
+  - `--device cpu`
+  - `--device cuda`
+- `src.train` 现已支持 `--num-workers`，并将解析后的 `device` / `num_workers` 写入 `config.yaml`。
+- `src.evaluate` 现已支持：
+  - CLI `--device`
+  - 若未显式传入，则优先复用训练时保存的 `device_requested`
+  - 当请求 `cuda` 但当前环境不可用时，自动回退到 `cpu`
+- 当前实现仍有一条重要边界：
+  - 数据在训练/评估前会整体载入内存，因此在 `8GB RAM` 机器上，内存往往比显存更早成为瓶颈。
