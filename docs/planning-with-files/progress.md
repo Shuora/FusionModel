@@ -36,3 +36,30 @@
   - 主训练命令显式加入 `--num-workers 4`
   - 增加针对 `RTX 4060 Laptop 8GB + i7-13700 + 8GB RAM` 的推荐参数说明
 - 执行并通过回归命令：`pytest -q tests/pipeline/test_train_eval_report.py tests/pipeline/test_train_stage_dispatch.py tests/pipeline/test_protocol_execution.py tests/pipeline/test_stacking_pipeline.py tests/pipeline/test_moe_pipeline.py`，结果 `23 passed`。
+
+## 2026-03-20
+
+- 读取并核对论文原文 `docs/paper/MVTBA A Novel Hybrid Deep Learning Model for Encrypted Malicious Traffic Identification.pdf` 第 10-12 页。
+- 确认论文 stage1 / Exp. I 协议为：
+  - `ISCX + MTA + MFCP`
+  - 不含 `USTC`
+  - 按 Table 1-3 的类别/家族与 train/test 配额构造数据
+- 确认当前 `src/experiments/stage1_binary.py` 仍是近似论文的白名单实现，尚未严格按表 1-3 构造 manifest。
+- 新增规格文档：
+  - `docs/superpowers/specs/2026-03-20-stage1-paper-protocol-design.md`
+- 新增实现计划：
+  - `docs/superpowers/plans/2026-03-20-stage1-paper-protocol.md`
+- 更新 `src/experiments/stage1_binary.py`：
+  - 引入论文 Table 1-3 驱动的协议配置
+  - 按 `capture_id` / `family` 与 `split=train|test` 精确裁样
+  - 样本不足时直接报错并输出缺口信息
+  - 删除“paper subset 匹配不到则 fallback 到全量”的行为
+- 更新 `tests/pipeline/test_stage1_binary_protocol.py`：
+  - 新增 `PUA` 与精确配额测试
+  - 使用最小论文协议夹具更新旧测试
+- 更新 `tests/pipeline/test_protocol_execution.py`：
+  - 将 stage1 execute smoke tests 改为最小论文协议配额
+  - 显式传入 `--num-workers 0`，避免无关的多进程 worker 干扰执行测试
+- 执行并通过回归命令：
+  - `pytest -q tests/pipeline/test_stage1_binary_protocol.py`，结果 `10 passed`
+  - `pytest -q tests/pipeline/test_protocol_execution.py -k 'stage1_binary_execute_runs_train_eval_report or stage1_binary_execute_stacking_reports_stacking_metrics or stage1_binary_execute_moe_reports_moe_metrics'`，结果 `3 passed`

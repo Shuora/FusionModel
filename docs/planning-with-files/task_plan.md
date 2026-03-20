@@ -50,3 +50,37 @@
 3. 在 `src.evaluate` 中复用保存配置中的设备偏好，但当 CUDA 不可用时回退到 CPU，避免评估阶段崩溃。
 4. 更新实验命令文档，补充 CUDA / `num-workers` 命令示例，以及针对 `RTX 4060 Laptop 8GB + i7-13700 + 8GB RAM` 的推荐参数。
 5. 运行针对性测试并记录结果。
+
+---
+
+# Stage1 Paper Protocol Plan
+
+## Goal
+
+将 `src/experiments/stage1_binary.py` 改为按论文 MVTBA 表 1-3 严格构造 stage1 binary manifest，而不是继续使用近似白名单筛选。
+
+## Status
+
+- Completed on 2026-03-20
+
+## Scope
+
+- `src/experiments/stage1_binary.py`
+- `tests/pipeline/test_stage1_binary_protocol.py`
+- `tests/pipeline/test_protocol_execution.py`
+- `docs/commands/session-full-experiments.md`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+- `docs/superpowers/specs/2026-03-20-stage1-paper-protocol-design.md`
+- `docs/superpowers/plans/2026-03-20-stage1-paper-protocol.md`
+
+## Plan
+
+1. 将论文表 1-3 的类别/家族与 train/test 配额整理成协议配置，并记录到 spec 与 findings。
+2. 先补 `stage1_binary` 协议测试，覆盖：
+   - `torrent` 与 `PUA` 被纳入论文协议
+   - ISCX / MTA / MFCP 的精确裁样
+   - 样本不足时报错
+3. 在 `src/experiments/stage1_binary.py` 中实现论文表驱动的裁样逻辑，移除旧的近似 fallback 行为。
+4. 更新 stage1 命令文档，说明当前是“论文类别与数量严格复现”，不是原作者原始 session 列表逐条还原。
+5. 运行相关 pytest 回归并记录结果。
