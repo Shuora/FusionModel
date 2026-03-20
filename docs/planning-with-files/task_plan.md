@@ -50,3 +50,28 @@
 3. 在 `src.evaluate` 中复用保存配置中的设备偏好，但当 CUDA 不可用时回退到 CPU，避免评估阶段崩溃。
 4. 更新实验命令文档，补充 CUDA / `num-workers` 命令示例，以及针对 `RTX 4060 Laptop 8GB + i7-13700 + 8GB RAM` 的推荐参数。
 5. 运行针对性测试并记录结果。
+
+---
+
+# Runs Date Layout Plan
+
+## Goal
+
+将默认训练输出目录调整为按日期归档，采用 `runs/yyyy-MM-dd/<唯一子目录>/` 结构，并确保同一天内的历史运行不会互相覆盖。
+
+## Status
+
+- Completed on 2026-03-20
+
+## Scope
+
+- `src/train.py`
+- `tests/pipeline/test_train_run_layout.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 先补一个针对默认 run 目录布局的失败测试，验证顶层日期目录为 `yyyy-MM-dd`，且叶子目录具备唯一性。
+2. 在 `src.train` 中抽离默认 run 目录生成逻辑，改为 `runs/yyyy-MM-dd/<唯一子目录>`。
+3. 运行针对性测试确认行为通过，并记录本轮发现与进度。
