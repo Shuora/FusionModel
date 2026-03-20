@@ -2,6 +2,18 @@
 
 本文档按当前仓库代码整理一套可直接执行的分步骤命令，适合你从环境准备、预处理、阶段1、阶段2一路手动跑通。
 
+实验执行部分按 `train -> evaluate -> report` 拆开写，方便你手动控制每一步。
+
+当前 `train/evaluate` 已支持：
+
+- `--device {auto,cpu,cuda}`
+- `--num-workers <int>`（训练）
+
+建议：
+
+- 单卡优先使用 `--device auto`
+- 若机器内存较小（如 8GB RAM），优先从 `--num-workers 4` 开始
+
 当前主线说明：
 
 - 预处理：`PCAP -> Session PCAP -> RGB + ET-BERT(input_ids/attention_mask/token_type_ids)`
@@ -119,40 +131,116 @@ python -m src.experiments.stage1_binary \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
-### 3.2 完整执行（train -> evaluate -> report）
+### 3.2 训练
+
+先生成 manifest：
 
 ```bash
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
-  --output outputs/protocol/stage1_binary_manifest.csv \
-  --execute \
+  --output outputs/protocol/stage1_binary_manifest.csv
+```
+
+再训练：
+
+```bash
+python -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets ISCX MFCP MTA \
+  --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
+  --label-mode binary \
+  --num-classes 2 \
   --run-root runs \
   --run-id stage1-binary \
   --stage fusion \
   --epochs 30 \
-  --batch-size 64 \
+  --batch-size 16 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4
 ```
 
-### 3.3 最小 smoke test
+### 3.3 评估
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage1-binary \
+  --split test \
+  --checkpoint best \
+  --device auto
+```
+
+如果请求的 split 不存在，允许自动回退：
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage1-binary \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+### 3.4 生成报告
+
+```bash
+python -m src.report \
+  --run-dir runs/stage1-binary
+```
+
+### 3.5 最小 smoke test
 
 想先快速确认流程能通：
+
+先生成 manifest：
 
 ```bash
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
-  --output outputs/protocol/stage1_binary_manifest.csv \
-  --execute \
+  --output outputs/protocol/stage1_binary_manifest.csv
+```
+
+再训练 1 epoch：
+
+```bash
+python -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets ISCX MFCP MTA \
+  --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
+  --label-mode binary \
+  --num-classes 2 \
   --run-root runs \
   --run-id stage1-binary-smoke \
   --stage fusion \
   --epochs 1 \
   --batch-size 8 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4
+```
+
+评估：
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage1-binary-smoke \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+报告：
+
+```bash
+python -m src.report \
+  --run-dir runs/stage1-binary-smoke
 ```
 
 约束说明：
@@ -176,20 +264,74 @@ python -m src.experiments.stage2_multiclass \
   - `MFCP`
   - `USTC-TFC2016`
 
-### 4.2 完整执行基础任务 + 默认 USTC 限样任务
+### 4.2 训练基础任务
+
+先生成任务文件：
 
 ```bash
 python -m src.experiments.stage2_multiclass \
-  --output outputs/protocol/stage2_tasks.json \
-  --execute \
+  --output outputs/protocol/stage2_tasks.json
+```
+
+#### 4.2.1 训练 MTA
+
+```bash
+python -m src.train \
   --processed-root outputs/processed \
   --policy session_full \
+  --datasets MTA \
+  --label-mode multiclass \
+  --num-classes 7 \
   --run-root runs \
+  --run-id stage2-mta \
   --stage fusion \
   --epochs 30 \
-  --batch-size 64 \
+  --batch-size 16 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4
+```
+
+#### 4.2.2 训练 MFCP
+
+```bash
+python -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets MFCP \
+  --label-mode multiclass \
+  --num-classes 6 \
+  --run-root runs \
+  --run-id stage2-mfcp \
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --device auto \
+  --num-workers 4
+```
+
+#### 4.2.3 训练 USTC-TFC2016
+
+```bash
+python -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets USTC-TFC2016 \
+  --label-mode multiclass \
+  --num-classes 10 \
+  --train-max-samples 2000 \
+  --run-root runs \
+  --run-id stage2-ustc-tfc2016 \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --device auto \
+  --num-workers 4
 ```
 
 默认基础任务：
@@ -198,27 +340,139 @@ python -m src.experiments.stage2_multiclass \
 - `MFCP` 6 类
 - `USTC-TFC2016` 10 类
 
-默认执行行为：
+### 4.3 分别评估基础任务
 
-- `--execute` 时会额外触发 USTC `4000/3000/2000` 限样实验
-- 这些额外 run 不会写进 `stage2_tasks.json`
-
-### 4.3 只跑 3 个基础任务，不跑 USTC 限样
+评估 MTA：
 
 ```bash
-python -m src.experiments.stage2_multiclass \
-  --output outputs/protocol/stage2_tasks.json \
-  --execute \
+python -m src.evaluate \
+  --run-dir runs/stage2-mta \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+评估 MFCP：
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage2-mfcp \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+评估 USTC-TFC2016：
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage2-ustc-tfc2016 \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+### 4.4 分别生成基础任务报告
+
+MTA：
+
+```bash
+python -m src.report \
+  --run-dir runs/stage2-mta
+```
+
+MFCP：
+
+```bash
+python -m src.report \
+  --run-dir runs/stage2-mfcp
+```
+
+USTC-TFC2016：
+
+```bash
+python -m src.report \
+  --run-dir runs/stage2-ustc-tfc2016
+```
+
+### 4.5 可选：USTC 限样训练 / 评估 / 报告
+
+例如训练 `train_max_samples=4000`：
+
+```bash
+python -m src.train \
   --processed-root outputs/processed \
   --policy session_full \
+  --datasets USTC-TFC2016 \
+  --label-mode multiclass \
+  --num-classes 10 \
+  --train-max-samples 4000 \
   --run-root runs \
+  --run-id stage2-ustc-tfc2016-train4000 \
   --stage fusion \
-  --epochs 30 \
-  --batch-size 64 \
+  --epochs 12 \
+  --batch-size 16 \
   --lr 1e-3 \
   --seed 42 \
-  --skip-ustc-limited
+  --device auto \
+  --num-workers 4
 ```
+
+评估：
+
+```bash
+python -m src.evaluate \
+  --run-dir runs/stage2-ustc-tfc2016-train4000 \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+```
+
+报告：
+
+```bash
+python -m src.report \
+  --run-dir runs/stage2-ustc-tfc2016-train4000
+```
+
+其余限样值同理，把 `4000` 改成 `3000` 或 `2000` 即可。
+
+### 4.6 针对 `RTX 4060 Laptop 8GB + i7-13700 + 8GB RAM` 的推荐值
+
+推荐原则：
+
+- 优先 `--device auto`
+- `--num-workers 4` 作为起点，不建议一开始开太高
+- 当前代码会把选中的数据一次性读入内存，所以 `8GB RAM` 往往比 `8GB VRAM` 更早成为瓶颈
+
+推荐训练参数：
+
+- `stage1 binary`：
+  - `--epochs 12`
+  - `--batch-size 16`
+  - `--lr 1e-3`
+  - `--num-workers 4`
+- `stage2 MTA / MFCP`：
+  - `--epochs 12`
+  - `--batch-size 16`
+  - `--lr 1e-3`
+  - `--num-workers 4`
+- `stage2 USTC-TFC2016`：
+  - `--epochs 12`
+  - `--batch-size 16`
+  - `--lr 1e-3`
+  - `--num-workers 4`
+  - `--train-max-samples 2000` 起步
+
+如果出现问题：
+
+- CUDA OOM：先把 `--batch-size 16` 降到 `8`
+- 系统内存紧张或卡死：先把 `--num-workers 4` 降到 `0`，再降低 `--train-max-samples`
+- 只是想确认链路能通：先跑 smoke test
 
 ## 5. 单独训练某个数据集
 
@@ -235,9 +489,11 @@ python -m src.train \
   --run-root runs \
   --run-id mfcp-fusion \
   --epochs 30 \
-  --batch-size 64 \
+  --batch-size 16 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4
 ```
 
 ### 5.2 只跑 MTA
@@ -253,9 +509,11 @@ python -m src.train \
   --run-root runs \
   --run-id mta-fusion \
   --epochs 30 \
-  --batch-size 64 \
+  --batch-size 16 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4
 ```
 
 ### 5.3 只跑 USTC-TFC2016
@@ -270,10 +528,13 @@ python -m src.train \
   --stage fusion \
   --run-root runs \
   --run-id ustc-fusion \
-  --epochs 30 \
-  --batch-size 64 \
+  --epochs 12 \
+  --batch-size 16 \
   --lr 1e-3 \
-  --seed 42
+  --seed 42 \
+  --device auto \
+  --num-workers 4 \
+  --train-max-samples 2000
 ```
 
 ## 6. 单独评估
@@ -282,7 +543,8 @@ python -m src.train \
 python -m src.evaluate \
   --run-dir runs/stage1-binary \
   --split test \
-  --checkpoint best
+  --checkpoint best \
+  --device auto
 ```
 
 如果请求的 split 不存在，允许自动回退：
@@ -292,6 +554,7 @@ python -m src.evaluate \
   --run-dir runs/stage1-binary \
   --split test \
   --checkpoint best \
+  --device auto \
   --allow-split-fallback
 ```
 

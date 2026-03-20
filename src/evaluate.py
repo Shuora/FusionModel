@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.runtime_device import resolve_runtime_device
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -25,11 +26,15 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--split", default="test")
     parser.add_argument("--checkpoint", default="best")
+    parser.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"])
     parser.add_argument("--allow-split-fallback", action="store_true", default=False)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     run_dir = Path(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    device_preference = args.device or cfg.get("device_requested") or cfg.get("device", "auto")
+    requested_device, resolved_device, device_fallback = resolve_runtime_device(device_preference)
+    device = torch.device(resolved_device)
     data = load_policy_multimodal_data(
         cfg["processed_root"],
         cfg["policy"],
@@ -71,10 +76,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         return 2
 
-    rgb_eval = torch.from_numpy(rgb[mask]).float()
-    input_eval = torch.from_numpy(input_ids[mask]).long()
-    attn_eval = torch.from_numpy(attention_mask[mask]).long()
-    token_type_eval = torch.from_numpy(token_type_ids[mask]).long()
+    rgb_eval = torch.from_numpy(rgb[mask]).float().to(device)
+    input_eval = torch.from_numpy(input_ids[mask]).long().to(device)
+    attn_eval = torch.from_numpy(attention_mask[mask]).long().to(device)
+    token_type_eval = torch.from_numpy(token_type_ids[mask]).long().to(device)
     y_eval = y[mask]
 
     ckpt_name = "best.ckpt" if args.checkpoint == "best" else "last.ckpt"
@@ -83,7 +88,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
-    )
+    ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     with torch.no_grad():
@@ -116,6 +121,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         "gate_mean": gate_mean,
         "num_samples": int(mask.sum()),
         "checkpoint": ckpt_name,
+        "device_requested": requested_device,
+        "device": resolved_device,
+        "device_fallback": device_fallback,
     }
     out_json = run_dir / f"eval_{effective_split}.json"
     out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

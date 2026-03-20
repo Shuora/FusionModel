@@ -15,6 +15,7 @@ import yaml
 
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.runtime_device import resolve_runtime_device
 
 try:
     from xgboost import XGBClassifier
@@ -68,6 +69,8 @@ def _train_base_model(
     vocab_size: int,
     epochs: int,
     batch_size: int,
+    device: torch.device,
+    num_workers: int,
     seed: int,
 ) -> MobileViTETBertFusionClassifier:
     torch.manual_seed(seed)
@@ -76,7 +79,7 @@ def _train_base_model(
         num_classes=num_classes,
         hidden_dim=128,
         vocab_size=vocab_size,
-    )
+    ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     ce = nn.CrossEntropyLoss()
     loader = DataLoader(
@@ -89,11 +92,18 @@ def _train_base_model(
         ),
         batch_size=max(1, batch_size),
         shuffle=True,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
     )
 
     for _ in range(max(1, epochs)):
         model.train()
         for rgb_b, input_b, att_b, type_b, y_b in loader:
+            rgb_b = rgb_b.to(device)
+            input_b = input_b.to(device)
+            att_b = att_b.to(device)
+            type_b = type_b.to(device)
+            y_b = y_b.to(device)
             optim.zero_grad()
             out = model(rgb_b, input_b, att_b, type_b)
             loss = ce(out["logits_fuse"], y_b) + 0.3 * ce(out["logits_img"], y_b) + 0.3 * ce(
@@ -111,6 +121,8 @@ def _predict_meta(
     attention: np.ndarray,
     token_type_ids: np.ndarray,
     batch_size: int,
+    device: torch.device,
+    num_workers: int,
 ) -> np.ndarray:
     if rgb.shape[0] == 0:
         return np.zeros((0, 1), dtype=np.float32)
@@ -121,10 +133,20 @@ def _predict_meta(
         torch.from_numpy(attention).long(),
         torch.from_numpy(token_type_ids).long(),
     )
-    loader = DataLoader(ds, batch_size=max(1, batch_size), shuffle=False)
+    loader = DataLoader(
+        ds,
+        batch_size=max(1, batch_size),
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+    )
     feats = []
     with torch.no_grad():
         for rgb_b, input_b, att_b, type_b in loader:
+            rgb_b = rgb_b.to(device)
+            input_b = input_b.to(device)
+            att_b = att_b.to(device)
+            type_b = type_b.to(device)
             out = model(rgb_b, input_b, att_b, type_b)
             feats.append(_compute_meta_features(out))
     return np.concatenate(feats, axis=0) if feats else np.zeros((0, 1), dtype=np.float32)
@@ -155,11 +177,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--n-splits", type=int, default=3)
     parser.add_argument("--oof-epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.num_workers < 0:
+        raise ValueError("--num-workers must be >= 0")
 
     run_dir = Path(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    _, resolved_device, _ = resolve_runtime_device(args.device)
+    device = torch.device(resolved_device)
     data = load_policy_multimodal_data(
         cfg["processed_root"],
         cfg["policy"],
@@ -215,6 +243,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             vocab_size=vocab_size,
             epochs=args.oof_epochs,
             batch_size=args.batch_size,
+            device=device,
+            num_workers=args.num_workers,
             seed=args.seed + fold_id,
         )
         oof_x[va_idx] = _predict_meta(
@@ -224,6 +254,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             att_tv[va_idx],
             type_tv[va_idx],
             batch_size=args.batch_size,
+            device=device,
+            num_workers=args.num_workers,
         )
 
     # Final model for test meta features
@@ -237,6 +269,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         vocab_size=vocab_size,
         epochs=max(1, args.oof_epochs),
         batch_size=args.batch_size,
+        device=device,
+        num_workers=args.num_workers,
         seed=args.seed + 999,
     )
     test_x = _predict_meta(
@@ -246,6 +280,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         att_test,
         type_test,
         batch_size=args.batch_size,
+        device=device,
+        num_workers=args.num_workers,
     )
 
     meta_model = _fit_meta_learner(oof_x, y_tv, num_classes=num_classes)

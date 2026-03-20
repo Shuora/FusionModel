@@ -20,6 +20,7 @@ import yaml
 from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.runtime_device import resolve_runtime_device
 
 
 def _make_run_id() -> str:
@@ -76,6 +77,7 @@ def _loss_and_logits(
 def _evaluate_loader(
     model: nn.Module,
     loader: DataLoader,
+    device: torch.device,
     stage: str,
     alpha: float,
     beta: float,
@@ -104,6 +106,11 @@ def _evaluate_loader(
     )
     with torch.no_grad():
         for rgb_b, input_ids_b, attn_b, token_type_b, y_b in iterator:
+            rgb_b = rgb_b.to(device)
+            input_ids_b = input_ids_b.to(device)
+            attn_b = attn_b.to(device)
+            token_type_b = token_type_b.to(device)
+            y_b = y_b.to(device)
             out = model(rgb_b, input_ids_b, attn_b, token_type_b)
             loss, pred_logits = _loss_and_logits(out, y_b, stage, ce, alpha, beta)
             pred = pred_logits.argmax(dim=1)
@@ -211,6 +218,10 @@ def _dispatch_stage(
                 str(args.stacking_oof_epochs),
                 "--batch-size",
                 str(args.batch_size),
+                "--device",
+                str(args.device),
+                "--num-workers",
+                str(args.num_workers),
                 "--seed",
                 str(args.seed),
             ]
@@ -235,6 +246,10 @@ def _dispatch_stage(
                 str(args.batch_size),
                 "--lr",
                 str(args.lr),
+                "--device",
+                str(args.device),
+                "--num-workers",
+                str(args.num_workers),
                 "--seed",
                 str(args.seed),
             ]
@@ -271,6 +286,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
     parser.add_argument("--grad-explode-threshold", type=float, default=1e4)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--stacking-n-splits", type=int, default=3)
     parser.add_argument("--stacking-oof-epochs", type=int, default=2)
@@ -279,6 +296,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if args.num_workers < 0:
+        raise ValueError("--num-workers must be >= 0")
+
+    requested_device, resolved_device, device_fallback = resolve_runtime_device(args.device)
+    device = torch.device(resolved_device)
 
     run_id = args.run_id or _make_run_id()
     run_dir = Path(args.run_root) / run_id
@@ -342,6 +364,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "num_classes": num_classes,
         "alpha": args.alpha,
         "beta": args.beta,
+        "device_requested": requested_device,
+        "device": resolved_device,
+        "device_fallback": device_fallback,
+        "num_workers": args.num_workers,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -362,6 +388,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             "lr": args.lr,
             "alpha": args.alpha,
             "beta": args.beta,
+            "device_requested": requested_device,
+            "device": resolved_device,
+            "device_fallback": device_fallback,
+            "num_workers": args.num_workers,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -440,16 +470,29 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 2
 
     train_dataset = TensorDataset(rgb_train, input_train, attn_train, token_type_train, y_train)
-    train_loader = DataLoader(train_dataset, batch_size=max(1, args.batch_size), shuffle=True)
+    pin_memory = resolved_device == "cuda"
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=max(1, args.batch_size),
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=pin_memory,
+    )
 
     val_dataset = TensorDataset(rgb_val, input_val, attn_val, token_type_val, y_val)
-    val_loader = DataLoader(val_dataset, batch_size=max(1, args.batch_size), shuffle=False)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=max(1, args.batch_size),
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=pin_memory,
+    )
 
     model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=args.hidden_dim,
         vocab_size=vocab_size,
-    )
+    ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
     ce = nn.CrossEntropyLoss()
 
@@ -463,6 +506,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "val_samples": int(rgb_val.shape[0]),
             "classes": num_classes,
             "stage": args.stage,
+            "device": resolved_device,
+            "num_workers": args.num_workers,
         },
     )
 
@@ -490,6 +535,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             leave=False,
         )
         for rgb_b, input_ids_b, attn_b, token_type_b, y_b in iterator:
+            rgb_b = rgb_b.to(device)
+            input_ids_b = input_ids_b.to(device)
+            attn_b = attn_b.to(device)
+            token_type_b = token_type_b.to(device)
+            y_b = y_b.to(device)
             optim.zero_grad()
             out = model(rgb_b, input_ids_b, attn_b, token_type_b)
             loss, pred_logits = _loss_and_logits(out, y_b, loss_stage, ce, args.alpha, args.beta)
@@ -547,6 +597,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         val_loss, val_acc, val_macro_f1, val_gate_mean = _evaluate_loader(
             model=model,
             loader=val_loader,
+            device=device,
             stage=loss_stage,
             alpha=args.alpha,
             beta=args.beta,

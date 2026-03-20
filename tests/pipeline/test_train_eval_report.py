@@ -6,8 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import yaml
 
+import src.evaluate as evaluate_module
+import src.train as train_module
 from src.evaluate import main as eval_main
 from src.report import main as report_main
 from src.train import main as train_main
@@ -328,3 +331,137 @@ def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):
     )
     assert code != 0
     assert not (run_dir / "eval_test.json").exists()
+
+
+def test_train_writes_resolved_device_and_num_workers(tmp_path: Path, monkeypatch):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    _prepare_dummy_processed(processed_root)
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "device-workers-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "4",
+            "--device",
+            "auto",
+            "--num-workers",
+            "3",
+        ]
+    )
+    assert code == 0
+
+    cfg = yaml.safe_load((run_root / "device-workers-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["device"] == "cpu"
+    assert int(cfg["num_workers"]) == 3
+
+
+def test_train_defaults_num_workers_to_four(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    captured_num_workers = []
+
+    class StopAfterLoaderInit(Exception):
+        pass
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        train_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.random.default_rng(1).integers(0, 256, size=(4, 3, 28, 28), dtype=np.uint8),
+            "input_ids": np.random.default_rng(2).integers(0, 1024, size=(4, 128), dtype=np.int32),
+            "attention_mask": np.ones((4, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((4, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["train", "train", "val", "val"], dtype="U8"),
+        },
+    )
+
+    def fake_dataloader(*args, **kwargs):
+        captured_num_workers.append(kwargs["num_workers"])
+        if len(captured_num_workers) == 2:
+            raise StopAfterLoaderInit()
+        return object()
+
+    monkeypatch.setattr(train_module, "DataLoader", fake_dataloader)
+
+    with pytest.raises(StopAfterLoaderInit):
+        train_main(
+            [
+                "--processed-root",
+                str(tmp_path / "outputs" / "processed"),
+                "--policy",
+                "strict",
+                "--stage",
+                "fusion",
+                "--run-root",
+                str(run_root),
+                "--run-id",
+                "default-workers-run",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--no-progress",
+            ]
+        )
+
+    cfg = yaml.safe_load((run_root / "default-workers-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert int(cfg["num_workers"]) == 4
+    assert captured_num_workers == [4, 4]
+
+
+def test_evaluate_records_cpu_fallback_when_cuda_unavailable(tmp_path: Path, monkeypatch):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    _prepare_dummy_processed(processed_root)
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    code = train_main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "eval-device-fallback-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "4",
+            "--device",
+            "cpu",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "eval-device-fallback-run"
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    cfg["device_requested"] = "cuda"
+    cfg["device"] = "cuda"
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(evaluate_module.torch.cuda, "is_available", lambda: False)
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test"])
+    assert code == 0
+
+    payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
+    assert payload["device_requested"] == "cuda"
+    assert payload["device"] == "cpu"

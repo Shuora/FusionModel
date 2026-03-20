@@ -21,9 +21,9 @@ def build_stage2_tasks() -> List[dict]:
     return [dict(item) for item in STAGE2_TASKS]
 
 
-def _run_stage_report(run_dir: Path, stage: str) -> int:
+def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:
     if stage in {"warmup", "fusion"}:
-        eval_code = evaluate_main(["--run-dir", str(run_dir), "--split", "test"])
+        eval_code = evaluate_main(["--run-dir", str(run_dir), "--split", "test", "--device", device])
         if eval_code != 0:
             return eval_code
     report_code = report_main(["--run-dir", str(run_dir)])
@@ -41,6 +41,8 @@ def _run_stage2_task(
     batch_size: int,
     lr: float,
     seed: int,
+    device: str,
+    num_workers: int,
     train_max_samples: int | None = None,
     run_id_suffix: str = "",
 ) -> int:
@@ -64,6 +66,10 @@ def _run_stage2_task(
         str(lr),
         "--seed",
         str(seed),
+        "--device",
+        device,
+        "--num-workers",
+        str(num_workers),
         "--datasets",
         dataset,
         "--label-mode",
@@ -78,7 +84,7 @@ def _run_stage2_task(
         return train_code
 
     run_dir = run_root / run_id
-    return _run_stage_report(run_dir=run_dir, stage=stage)
+    return _run_stage_report(run_dir=run_dir, stage=stage, device=device)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -93,6 +99,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--ustc-train-limits", nargs="+", type=int, default=[4000, 3000, 2000])
     parser.add_argument("--skip-ustc-limited", action="store_true", default=False)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -126,6 +134,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             batch_size=args.batch_size,
             lr=args.lr,
             seed=args.seed,
+            device=args.device,
+            num_workers=args.num_workers,
         )
         summary.append(
             {
@@ -154,6 +164,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     batch_size=args.batch_size,
                     lr=args.lr,
                     seed=args.seed,
+                    device=args.device,
+                    num_workers=args.num_workers,
                     train_max_samples=int(limit),
                     run_id_suffix=f"-train{int(limit)}",
                 )

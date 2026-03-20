@@ -147,10 +147,10 @@ def _iscx_capture_allowed(capture_id: str) -> bool:
     return any(stem.startswith(prefix) for prefix in STAGE1_ISCX_ALLOWED_CAPTURE_PREFIXES)
 
 
-def _run_stage_report(run_dir: Path, stage: str) -> int:
+def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:
     if stage in {"warmup", "fusion"}:
         _log(f"Evaluate step start: run_dir={run_dir}, split=test")
-        eval_code = evaluate_main(["--run-dir", str(run_dir), "--split", "test"])
+        eval_code = evaluate_main(["--run-dir", str(run_dir), "--split", "test", "--device", device])
         if eval_code != 0:
             _log(f"Evaluate step failed: exit_code={eval_code}")
             return eval_code
@@ -178,6 +178,8 @@ def run_stage1_protocol(
     batch_size: int,
     lr: float,
     seed: int,
+    device: str,
+    num_workers: int,
 ) -> int:
     _log("Protocol execute mode enabled")
     manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
@@ -206,6 +208,10 @@ def run_stage1_protocol(
             str(lr),
             "--seed",
             str(seed),
+            "--device",
+            device,
+            "--num-workers",
+            str(num_workers),
             "--datasets",
             *list(REQUIRED_STAGE1_DATASETS),
             "--session-filter-manifest",
@@ -222,7 +228,7 @@ def run_stage1_protocol(
     _log("Train step done")
 
     run_dir = run_root / run_id
-    return _run_stage_report(run_dir=run_dir, stage=stage)
+    return _run_stage_report(run_dir=run_dir, stage=stage, device=device)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -238,6 +244,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     processed_root = Path(args.processed_root)
@@ -258,6 +266,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             batch_size=args.batch_size,
             lr=args.lr,
             seed=args.seed,
+            device=args.device,
+            num_workers=args.num_workers,
         )
 
     manifest = build_stage1_manifest(processed_root=processed_root, policy=args.policy)

@@ -14,6 +14,7 @@ import yaml
 
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.runtime_device import resolve_runtime_device
 
 
 class RouterMLP(nn.Module):
@@ -74,11 +75,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if args.num_workers < 0:
+        raise ValueError("--num-workers must be >= 0")
+    _, resolved_device, _ = resolve_runtime_device(args.device)
+    device = torch.device(resolved_device)
 
     run_dir = Path(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -122,7 +129,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
-    )
+    ).to(device)
     best_ckpt = torch.load(run_dir / "checkpoints" / "best.ckpt", map_location="cpu")
     model.load_state_dict(best_ckpt["model_state"])
     model.eval()
@@ -130,13 +137,25 @@ def main(argv: Iterable[str] | None = None) -> int:
         p.requires_grad = False
 
     router = RouterMLP(in_dim=7, hidden_dim=16, num_experts=3)
+    router.to(device)
     opt = torch.optim.Adam(router.parameters(), lr=args.lr)
     ds = TensorDataset(rgb_train, input_train, att_train, type_train, y_train)
-    loader = DataLoader(ds, batch_size=max(1, args.batch_size), shuffle=True)
+    loader = DataLoader(
+        ds,
+        batch_size=max(1, args.batch_size),
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=device.type == "cuda",
+    )
 
     for _ in range(max(1, args.epochs)):
         router.train()
         for rgb_b, input_b, att_b, type_b, y_b in loader:
+            rgb_b = rgb_b.to(device)
+            input_b = input_b.to(device)
+            att_b = att_b.to(device)
+            type_b = type_b.to(device)
+            y_b = y_b.to(device)
             with torch.no_grad():
                 out = model(rgb_b, input_b, att_b, type_b)
                 f = _router_features(out)
@@ -151,7 +170,12 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     router.eval()
     with torch.no_grad():
-        out_test = model(rgb_test, input_test, att_test, type_test)
+        out_test = model(
+            rgb_test.to(device),
+            input_test.to(device),
+            att_test.to(device),
+            type_test.to(device),
+        )
         f_test = _router_features(out_test)
         logits_test = router(f_test)
         p_test = _mixture_probs(out_test, logits_test).cpu().numpy()
