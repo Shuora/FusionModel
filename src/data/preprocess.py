@@ -163,7 +163,7 @@ def preprocess_source(
             if policy == "session_full":
                 tmp_root = output_root / rec["dataset"] / policy / "tmp_sessions"
                 tmp_capture_dir = tmp_root / Path(rec["capture_id"]).stem
-                pcap_inputs = split_pcap_to_session_pcaps(rec["pcap_path"], tmp_capture_dir)
+                pcap_inputs = split_pcap_to_session_pcaps(rec["pcap_path"], tmp_capture_dir, include_udp=True)
             else:
                 pcap_inputs = [Path(rec["pcap_path"])]
 

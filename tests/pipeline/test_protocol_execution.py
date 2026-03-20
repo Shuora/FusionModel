@@ -356,7 +356,7 @@ def test_stage1_binary_default_output_path_matches_docs(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         stage1_mod,
         "build_stage1_manifest",
-        lambda processed_root, policy: pd.DataFrame(
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
             [{"dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
         ),
     )
@@ -383,7 +383,7 @@ def test_stage1_binary_execute_forwards_device_and_num_workers_to_train(tmp_path
     monkeypatch.setattr(
         stage1_mod,
         "build_stage1_manifest",
-        lambda processed_root, policy: pd.DataFrame(
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
             [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
         ),
     )
@@ -421,7 +421,7 @@ def test_stage1_binary_execute_defaults_num_workers_to_four(tmp_path: Path, monk
     monkeypatch.setattr(
         stage1_mod,
         "build_stage1_manifest",
-        lambda processed_root, policy: pd.DataFrame(
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
             [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
         ),
     )

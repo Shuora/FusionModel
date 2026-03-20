@@ -3,6 +3,7 @@ from pathlib import Path
 
 import dpkt
 
+from src.data.pcap_sessionizer import classify_pcap_sessions
 from src.data.session_splitcap import cleanup_session_pcaps, split_pcap_to_session_pcaps
 
 
@@ -28,6 +29,33 @@ def _make_eth_tcp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: byt
         data=ip,
     )
     return bytes(eth)
+
+
+def _make_raw_ip_tcp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: bytes) -> bytes:
+    tcp = dpkt.tcp.TCP(sport=sport, dport=dport, seq=1, flags=dpkt.tcp.TH_ACK, data=payload)
+    ip = dpkt.ip.IP(
+        src=socket.inet_aton(src_ip),
+        dst=socket.inet_aton(dst_ip),
+        p=dpkt.ip.IP_PROTO_TCP,
+        ttl=64,
+        data=tcp,
+    )
+    ip.len = 20 + len(tcp)
+    return bytes(ip)
+
+
+def _make_raw_ip_udp(src_ip: str, dst_ip: str, sport: int, dport: int, payload: bytes) -> bytes:
+    udp = dpkt.udp.UDP(sport=sport, dport=dport, data=payload)
+    udp.ulen = 8 + len(payload)
+    ip = dpkt.ip.IP(
+        src=socket.inet_aton(src_ip),
+        dst=socket.inet_aton(dst_ip),
+        p=dpkt.ip.IP_PROTO_UDP,
+        ttl=64,
+        data=udp,
+    )
+    ip.len = 20 + len(udp)
+    return bytes(ip)
 
 
 def _write_two_session_pcap(path: Path) -> None:
@@ -90,6 +118,30 @@ def _write_two_session_pcapng(path: Path) -> None:
         writer.close()
 
 
+def _write_raw_ip_two_session_pcap(path: Path) -> None:
+    tls_pkt1 = _make_raw_ip_tcp(
+        "10.0.0.1",
+        "10.0.0.2",
+        12345,
+        443,
+        _tls_record(22, bytes([1]) + b"\x00" * 8),
+    )
+    tls_pkt2 = _make_raw_ip_tcp(
+        "10.0.0.2",
+        "10.0.0.1",
+        443,
+        12345,
+        _tls_record(23, b"abcd"),
+    )
+    udp_pkt = _make_raw_ip_udp("10.0.0.5", "10.0.0.6", 9999, 53, b"\x12\x34")
+    with path.open("wb") as f:
+        writer = dpkt.pcap.Writer(f, linktype=101)
+        writer.writepkt(tls_pkt1, ts=1.0)
+        writer.writepkt(tls_pkt2, ts=2.0)
+        writer.writepkt(udp_pkt, ts=3.0)
+        writer.close()
+
+
 def test_split_pcap_to_sessions_and_cleanup(tmp_path: Path):
     pcap_path = tmp_path / "input.pcap"
     tmp_dir = tmp_path / "tmp_sessions"
@@ -127,3 +179,20 @@ def test_split_pcap_tolerates_trailing_truncated_record(tmp_path: Path):
     session_files = split_pcap_to_session_pcaps(pcap_path, tmp_dir)
     assert len(session_files) == 2
     assert all(p.exists() for p in session_files)
+
+
+def test_split_raw_ip_pcap_to_sessions_including_udp(tmp_path: Path):
+    pcap_path = tmp_path / "raw_ip_input.pcap"
+    tmp_dir = tmp_path / "tmp_sessions"
+    _write_raw_ip_two_session_pcap(pcap_path)
+
+    session_files = split_pcap_to_session_pcaps(pcap_path, tmp_dir, include_udp=True)
+
+    assert len(session_files) == 2
+    parsed = []
+    for session_file in session_files:
+        accepted, dropped = classify_pcap_sessions(session_file, mode="session_full")
+        assert len(dropped) == 0
+        assert len(accepted) == 1
+        parsed.append(accepted[0]["protocol"])
+    assert set(parsed) == {"TCP", "UDP"}

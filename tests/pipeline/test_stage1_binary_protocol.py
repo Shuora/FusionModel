@@ -92,7 +92,7 @@ def test_stage1_label_mapping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ],
         )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     assert set(manifest["label_binary"].unique().tolist()) == {0, 1}
     assert (manifest[manifest["dataset"] == "ISCX"]["label_binary"] == 0).all()
     assert (manifest[manifest["dataset"] != "ISCX"]["label_binary"] == 1).all()
@@ -134,7 +134,7 @@ def test_stage1_accepts_iscx_alias_directory(tmp_path: Path, monkeypatch: pytest
             ],
         )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     assert "ISCX" in set(manifest["dataset"].unique())
     assert (manifest[manifest["dataset"] == "ISCX"]["label_binary"] == 0).all()
 
@@ -190,7 +190,7 @@ def test_stage1_prefers_primary_iscx_directory_when_both_present(tmp_path: Path,
             ],
         )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     iscx_rows = manifest[manifest["dataset"] == "ISCX"]
     assert "iscx_primary_1" in set(iscx_rows["session_id"].tolist())
     assert "iscx_alias_1" not in set(iscx_rows["session_id"].tolist())
@@ -235,7 +235,7 @@ def test_stage1_does_not_require_ustc_dataset(tmp_path: Path, monkeypatch: pytes
                 }
             ],
         )
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     assert len(manifest) == 3
 
 
@@ -306,7 +306,7 @@ def test_stage1_manifest_filters_to_mvtba_paper_subset(tmp_path: Path, monkeypat
         ],
     )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     assert set(manifest["session_id"].tolist()) == {"iscx_keep", "mfcp_keep", "mta_keep"}
 
 
@@ -388,7 +388,7 @@ def test_stage1_manifest_applies_exact_paper_quotas(tmp_path: Path, monkeypatch:
         ],
     )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
     assert set(manifest["session_id"].tolist()) == {
         "iscx_train_1",
         "iscx_train_2",
@@ -453,7 +453,142 @@ def test_stage1_manifest_raises_when_paper_quota_is_unavailable(tmp_path: Path, 
     )
 
     with pytest.raises(ValueError, match="Dridex"):
-        build_stage1_manifest(processed_root=processed_root, policy=policy)
+        build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_strict")
+
+
+def test_stage1_manifest_balanced_skips_missing_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_ISCX_SPECS",
+        [
+            {"name": "present_group", "capture_prefixes": ("email",), "train": 2, "test": 1},
+            {"name": "missing_group", "capture_prefixes": ("torrent",), "train": 2, "test": 1},
+        ],
+    )
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MTA_SPECS", [{"family": "Dridex", "train": 1, "test": 0}])
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MFCP_SPECS", [{"family": "PUA", "train": 1, "test": 0}])
+
+    _write_manifest(
+        processed_root,
+        "ISCX",
+        policy,
+        [
+            {"session_id": "iscx_train_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_a.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_train_2", "dataset": "ISCX", "family": "F1", "capture_id": "email_b.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_test_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_c.pcap", "split": "test", "policy": policy},
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MTA",
+        policy,
+        [{"session_id": "mta_1", "dataset": "MTA", "family": "Dridex", "capture_id": "d1.pcap", "split": "train", "policy": policy}],
+    )
+    _write_manifest(
+        processed_root,
+        "MFCP",
+        policy,
+        [{"session_id": "mfcp_1", "dataset": "MFCP", "family": "PUA", "capture_id": "p1.pcap", "split": "train", "policy": policy}],
+    )
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_balanced")
+
+    assert set(manifest["session_id"].tolist()) == {"iscx_train_1", "iscx_train_2", "iscx_test_1", "mta_1", "mfcp_1"}
+
+
+def test_stage1_manifest_balanced_caps_oversupplied_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_ISCX_SPECS",
+        [{"name": "email_group", "capture_prefixes": ("email",), "train": 2, "test": 1}],
+    )
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MTA_SPECS", [{"family": "Dridex", "train": 1, "test": 0}])
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MFCP_SPECS", [{"family": "PUA", "train": 1, "test": 0}])
+
+    _write_manifest(
+        processed_root,
+        "ISCX",
+        policy,
+        [
+            {"session_id": "iscx_train_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_a.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_train_2", "dataset": "ISCX", "family": "F1", "capture_id": "email_b.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_train_3", "dataset": "ISCX", "family": "F1", "capture_id": "email_c.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_train_4", "dataset": "ISCX", "family": "F1", "capture_id": "email_d.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_test_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_e.pcap", "split": "test", "policy": policy},
+            {"session_id": "iscx_test_2", "dataset": "ISCX", "family": "F1", "capture_id": "email_f.pcap", "split": "test", "policy": policy},
+            {"session_id": "iscx_test_3", "dataset": "ISCX", "family": "F1", "capture_id": "email_g.pcap", "split": "test", "policy": policy},
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MTA",
+        policy,
+        [{"session_id": "mta_1", "dataset": "MTA", "family": "Dridex", "capture_id": "d1.pcap", "split": "train", "policy": policy}],
+    )
+    _write_manifest(
+        processed_root,
+        "MFCP",
+        policy,
+        [{"session_id": "mfcp_1", "dataset": "MFCP", "family": "PUA", "capture_id": "p1.pcap", "split": "train", "policy": policy}],
+    )
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_balanced")
+
+    iscx_rows = manifest[manifest["dataset"] == "ISCX"]
+    assert set(iscx_rows["session_id"].tolist()) == {
+        "iscx_train_1",
+        "iscx_train_2",
+        "iscx_train_3",
+        "iscx_test_1",
+        "iscx_test_2",
+    }
+
+
+def test_stage1_manifest_balanced_keeps_all_undersupplied_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+
+    monkeypatch.setattr(
+        stage1_module,
+        "PAPER_STAGE1_ISCX_SPECS",
+        [{"name": "email_group", "capture_prefixes": ("email",), "train": 10, "test": 5}],
+    )
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MTA_SPECS", [{"family": "Dridex", "train": 1, "test": 0}])
+    monkeypatch.setattr(stage1_module, "PAPER_STAGE1_MFCP_SPECS", [{"family": "PUA", "train": 1, "test": 0}])
+
+    _write_manifest(
+        processed_root,
+        "ISCX",
+        policy,
+        [
+            {"session_id": "iscx_train_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_a.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_train_2", "dataset": "ISCX", "family": "F1", "capture_id": "email_b.pcap", "split": "train", "policy": policy},
+            {"session_id": "iscx_test_1", "dataset": "ISCX", "family": "F1", "capture_id": "email_c.pcap", "split": "test", "policy": policy},
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MTA",
+        policy,
+        [{"session_id": "mta_1", "dataset": "MTA", "family": "Dridex", "capture_id": "d1.pcap", "split": "train", "policy": policy}],
+    )
+    _write_manifest(
+        processed_root,
+        "MFCP",
+        policy,
+        [{"session_id": "mfcp_1", "dataset": "MFCP", "family": "PUA", "capture_id": "p1.pcap", "split": "train", "policy": policy}],
+    )
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="paper_balanced")
+
+    iscx_rows = manifest[manifest["dataset"] == "ISCX"]
+    assert set(iscx_rows["session_id"].tolist()) == {"iscx_train_1", "iscx_train_2", "iscx_test_1"}
 
 
 def test_stage1_main_emits_progress_logs(

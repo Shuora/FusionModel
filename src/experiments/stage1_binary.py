@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -94,9 +95,12 @@ def build_stage1_manifest(
     processed_root: Path | str,
     policy: str = "session_full",
     required_datasets: Sequence[str] = REQUIRED_STAGE1_DATASETS,
+    protocol_mode: str = "paper_balanced",
 ) -> pd.DataFrame:
     processed_root = Path(processed_root)
     _log(f"Build manifest start: processed_root={processed_root}, policy={policy}")
+    if protocol_mode not in {"paper_strict", "paper_balanced"}:
+        raise ValueError(f"unsupported stage1 protocol_mode: {protocol_mode}")
     missing: List[str] = []
     loaded_frames: List[Tuple[str, pd.DataFrame]] = []
     frames: List[pd.DataFrame] = []
@@ -116,7 +120,7 @@ def build_stage1_manifest(
             raise FileNotFoundError("stage1 manifest empty: no datasets loaded")
 
     for dataset, df in loaded_frames:
-        frames.append(_build_stage1_paper_subset(df, dataset=dataset))
+        frames.append(_build_stage1_paper_subset(df, dataset=dataset, protocol_mode=protocol_mode))
 
     merged = pd.concat(frames, axis=0, ignore_index=True)
     if merged.empty:
@@ -127,7 +131,7 @@ def build_stage1_manifest(
     return merged
 
 
-def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
+def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str, protocol_mode: str) -> pd.DataFrame:
     if df.empty:
         raise ValueError(f"stage1 paper subset empty for dataset={dataset}")
 
@@ -140,15 +144,18 @@ def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
         )
         for spec in PAPER_STAGE1_ISCX_SPECS:
             keep_mask = capture_series.map(lambda stem: any(stem.startswith(prefix) for prefix in spec["capture_prefixes"]))
-            frames.append(
-                _select_split_quota(
-                    df.loc[keep_mask].reset_index(drop=True),
-                    dataset=dataset,
-                    group_name=str(spec["name"]),
-                    train_required=int(spec["train"]),
-                    test_required=int(spec["test"]),
-                )
+            selected = _select_subset_by_mode(
+                df.loc[keep_mask].reset_index(drop=True),
+                dataset=dataset,
+                group_name=str(spec["name"]),
+                train_required=int(spec["train"]),
+                test_required=int(spec["test"]),
+                protocol_mode=protocol_mode,
             )
+            if not selected.empty:
+                frames.append(selected)
+        if not frames:
+            raise ValueError(f"stage1 {protocol_mode} subset empty for dataset={dataset}")
         return pd.concat(frames, axis=0, ignore_index=True)
 
     if dataset == "MTA":
@@ -156,15 +163,18 @@ def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
         for spec in PAPER_STAGE1_MTA_SPECS:
             family_norm = _normalize_family(str(spec["family"]))
             keep_mask = df["family"].astype(str).map(_normalize_family) == family_norm
-            frames.append(
-                _select_split_quota(
-                    df.loc[keep_mask].reset_index(drop=True),
-                    dataset=dataset,
-                    group_name=str(spec["family"]),
-                    train_required=int(spec["train"]),
-                    test_required=int(spec["test"]),
-                )
+            selected = _select_subset_by_mode(
+                df.loc[keep_mask].reset_index(drop=True),
+                dataset=dataset,
+                group_name=str(spec["family"]),
+                train_required=int(spec["train"]),
+                test_required=int(spec["test"]),
+                protocol_mode=protocol_mode,
             )
+            if not selected.empty:
+                frames.append(selected)
+        if not frames:
+            raise ValueError(f"stage1 {protocol_mode} subset empty for dataset={dataset}")
         return pd.concat(frames, axis=0, ignore_index=True)
 
     if dataset == "MFCP":
@@ -172,15 +182,18 @@ def _build_stage1_paper_subset(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
         for spec in PAPER_STAGE1_MFCP_SPECS:
             family_norm = _normalize_family(str(spec["family"]))
             keep_mask = df["family"].astype(str).map(_normalize_family) == family_norm
-            frames.append(
-                _select_split_quota(
-                    df.loc[keep_mask].reset_index(drop=True),
-                    dataset=dataset,
-                    group_name=str(spec["family"]),
-                    train_required=int(spec["train"]),
-                    test_required=int(spec["test"]),
-                )
+            selected = _select_subset_by_mode(
+                df.loc[keep_mask].reset_index(drop=True),
+                dataset=dataset,
+                group_name=str(spec["family"]),
+                train_required=int(spec["train"]),
+                test_required=int(spec["test"]),
+                protocol_mode=protocol_mode,
             )
+            if not selected.empty:
+                frames.append(selected)
+        if not frames:
+            raise ValueError(f"stage1 {protocol_mode} subset empty for dataset={dataset}")
         return pd.concat(frames, axis=0, ignore_index=True)
 
     return df.reset_index(drop=True)
@@ -227,6 +240,95 @@ def _select_split_quota(
     return selected.reset_index(drop=True)
 
 
+def _select_subset_by_mode(
+    df: pd.DataFrame,
+    dataset: str,
+    group_name: str,
+    train_required: int,
+    test_required: int,
+    protocol_mode: str,
+) -> pd.DataFrame:
+    if protocol_mode == "paper_strict":
+        selected = _select_split_quota(
+            df=df,
+            dataset=dataset,
+            group_name=group_name,
+            train_required=train_required,
+            test_required=test_required,
+        )
+        _log_subset_summary(
+            dataset=dataset,
+            group_name=group_name,
+            paper_train=train_required,
+            paper_test=test_required,
+            available_train=train_required,
+            available_test=test_required,
+            selected_train=train_required,
+            selected_test=test_required,
+            status="matched",
+            protocol_mode=protocol_mode,
+        )
+        return selected
+
+    train_df = _stable_sort_rows(df.loc[df["split"].astype(str) == "train"].reset_index(drop=True))
+    test_df = _stable_sort_rows(df.loc[df["split"].astype(str) == "test"].reset_index(drop=True))
+    cap_train = int(math.ceil(train_required * 1.2))
+    cap_test = int(math.ceil(test_required * 1.2))
+    selected_train_n = min(len(train_df), cap_train)
+    selected_test_n = min(len(test_df), cap_test)
+    selected = pd.concat(
+        [
+            train_df.iloc[:selected_train_n].copy(),
+            test_df.iloc[:selected_test_n].copy(),
+        ],
+        axis=0,
+        ignore_index=True,
+    )
+    if selected_train_n == 0 and selected_test_n == 0:
+        status = "missing"
+    elif selected_train_n < train_required or selected_test_n < test_required:
+        status = "undersupplied"
+    elif selected_train_n < len(train_df) or selected_test_n < len(test_df):
+        status = "capped"
+    else:
+        status = "matched"
+    _log_subset_summary(
+        dataset=dataset,
+        group_name=group_name,
+        paper_train=train_required,
+        paper_test=test_required,
+        available_train=len(train_df),
+        available_test=len(test_df),
+        selected_train=selected_train_n,
+        selected_test=selected_test_n,
+        status=status,
+        protocol_mode=protocol_mode,
+    )
+    return selected.reset_index(drop=True)
+
+
+def _log_subset_summary(
+    dataset: str,
+    group_name: str,
+    paper_train: int,
+    paper_test: int,
+    available_train: int,
+    available_test: int,
+    selected_train: int,
+    selected_test: int,
+    status: str,
+    protocol_mode: str,
+) -> None:
+    _log(
+        "subset_summary "
+        f"mode={protocol_mode} dataset={dataset} group={group_name} "
+        f"paper_train={paper_train} paper_test={paper_test} "
+        f"available_train={available_train} available_test={available_test} "
+        f"selected_train={selected_train} selected_test={selected_test} "
+        f"status={status}"
+    )
+
+
 def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:
     if stage in {"warmup", "fusion"}:
         _log(f"Evaluate step start: run_dir={run_dir}, split=test")
@@ -260,9 +362,10 @@ def run_stage1_protocol(
     seed: int,
     device: str,
     num_workers: int,
+    protocol_mode: str,
 ) -> int:
     _log("Protocol execute mode enabled")
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode=protocol_mode)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output_manifest, index=False)
     _log(f"Manifest saved: {output_manifest} (rows={len(manifest)})")
@@ -326,6 +429,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--protocol-mode", default="paper_balanced", choices=["paper_strict", "paper_balanced"])
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     processed_root = Path(args.processed_root)
@@ -348,9 +452,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             seed=args.seed,
             device=args.device,
             num_workers=args.num_workers,
+            protocol_mode=args.protocol_mode,
         )
 
-    manifest = build_stage1_manifest(processed_root=processed_root, policy=args.policy)
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=args.policy, protocol_mode=args.protocol_mode)
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output, index=False)
     _log(f"Manifest saved: {output} (rows={len(manifest)})")
