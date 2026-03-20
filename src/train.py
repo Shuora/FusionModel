@@ -23,10 +23,11 @@ from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
 
 
-def _make_run_id() -> str:
-    now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    short = hashlib.sha1(now.encode("utf-8")).hexdigest()[:6]
-    return f"{now}-{short}"
+def _build_run_identity(run_root: Path) -> tuple[str, Path]:
+    now = datetime.now()
+    date_dir = now.strftime("%Y-%m-%d")
+    run_id = now.strftime("%H%M%S-%f")
+    return run_id, run_root / date_dir / run_id
 
 
 def _sha8(path: Path) -> str:
@@ -302,8 +303,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     requested_device, resolved_device, device_fallback = resolve_runtime_device(args.device)
     device = torch.device(resolved_device)
 
-    run_id = args.run_id or _make_run_id()
-    run_dir = Path(args.run_root) / run_id
+    run_root = Path(args.run_root)
+    if args.run_id:
+        run_id = args.run_id
+        run_dir = run_root / run_id
+    else:
+        run_id, run_dir = _build_run_identity(run_root)
     ckpt_dir = run_dir / "checkpoints"
     fig_dir = run_dir / "figures"
     run_dir.mkdir(parents=True, exist_ok=True)
