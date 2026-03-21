@@ -3,3 +3,6 @@
 /dataset/
 .worktrees/
 /outputs/
+/runs/
+__pycache__/
+*.pyc

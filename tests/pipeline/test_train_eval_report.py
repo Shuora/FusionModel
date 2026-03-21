@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 import yaml
 
 import src.evaluate as evaluate_module
@@ -316,6 +317,213 @@ def test_report_falls_back_to_moe_metrics_when_eval_missing(tmp_path: Path):
     assert "Top-1: 0.8800" in report_text
     assert "moe_metrics.json" in report_text
     assert "confusion_matrix_test.csv" not in report_text
+
+
+def test_evaluate_writes_classification_report_artifacts(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "eval-artifacts-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "eval-artifacts-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((4, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((4, 128), dtype=np.int32),
+            "attention_mask": np.ones((4, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((4, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["test", "test", "test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+            logits = torch.tensor(
+                [
+                    [3.0, 1.0],
+                    [1.0, 3.0],
+                    [1.0, 3.0],
+                    [3.0, 1.0],
+                ],
+                dtype=torch.float32,
+                device=rgb.device,
+            )
+            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
+    assert code == 0
+    assert (run_dir / "figures" / "classification_report_test.csv").exists()
+    assert (run_dir / "figures" / "classification_report_test.json").exists()
+
+
+def test_evaluate_fallback_writes_classification_report_with_effective_split(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "eval-fallback-artifacts-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "eval-fallback-artifacts-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((4, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((4, 128), dtype=np.int32),
+            "attention_mask": np.ones((4, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((4, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["val", "val", "val", "val"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+            logits = torch.tensor(
+                [
+                    [3.0, 1.0],
+                    [1.0, 3.0],
+                    [1.0, 3.0],
+                    [3.0, 1.0],
+                ],
+                dtype=torch.float32,
+                device=rgb.device,
+            )
+            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(
+        ["--run-dir", str(run_dir), "--split", "test", "--device", "cpu", "--allow-split-fallback"]
+    )
+    assert code == 0
+    assert not (run_dir / "figures" / "classification_report_test.csv").exists()
+    assert (run_dir / "figures" / "classification_report_val.csv").exists()
+    assert (run_dir / "figures" / "classification_report_val.json").exists()
+
+
+def test_report_renders_confusion_matrix_and_classification_tables(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-table-run"
+    _write_minimal_run_dir(run_dir, stage="fusion")
+    (run_dir / "eval_test.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.75,
+                "macro_precision": 0.75,
+                "macro_f1": 0.7333,
+                "macro_recall": 0.75,
+                "num_samples": 4,
+                "split": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    fig_dir = run_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([[1, 1], [0, 2]], columns=["0", "1"]).to_csv(fig_dir / "confusion_matrix_test.csv", index=False)
+    pd.DataFrame(
+        [
+            {"label": "0", "precision": 1.0, "recall": 0.5, "f1": 0.6667, "support": 2},
+            {"label": "1", "precision": 0.6667, "recall": 1.0, "f1": 0.8, "support": 2},
+        ]
+    ).to_csv(fig_dir / "classification_report_test.csv", index=False)
+    (fig_dir / "confusion_matrix_test.png").write_bytes(b"png")
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Confusion Matrix" in report_text
+    assert "## Classification Report" in report_text
+    assert "| true/pred | 0 | 1 |" in report_text
+    assert "| label | precision | recall | f1 | support |" in report_text
+
+
+def test_report_discovers_eval_val_and_renders_tables(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-val-table-run"
+    _write_minimal_run_dir(run_dir, stage="fusion")
+    (run_dir / "eval_val.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.75,
+                "macro_precision": 0.75,
+                "macro_f1": 0.7333,
+                "macro_recall": 0.75,
+                "num_samples": 4,
+                "requested_split": "test",
+                "effective_split": "val",
+                "split": "val",
+                "fallback_used": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fig_dir = run_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([[1, 1], [0, 2]], columns=["0", "1"]).to_csv(fig_dir / "confusion_matrix_val.csv", index=False)
+    pd.DataFrame(
+        [
+            {"label": "0", "precision": 1.0, "recall": 0.5, "f1": 0.6667, "support": 2},
+            {"label": "1", "precision": 0.6667, "recall": 1.0, "f1": 0.8, "support": 2},
+        ]
+    ).to_csv(fig_dir / "classification_report_val.csv", index=False)
+    (fig_dir / "classification_report_val.json").write_text("[]", encoding="utf-8")
+    (fig_dir / "confusion_matrix_val.png").write_bytes(b"png")
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "eval_val.json" in report_text
+    assert "classification_report_val.csv" in report_text
+    assert "## Confusion Matrix" in report_text
+    assert "## Classification Report" in report_text
 
 
 def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):

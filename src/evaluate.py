@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, precision_score, recall_score
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -139,9 +139,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     logits_np = logits.cpu().numpy()
     pred = np.argmax(logits_np, axis=1)
 
-    metrics = compute_classification_metrics(y_true=y_eval, pred=pred, num_classes=int(cfg["num_classes"]))
+    num_classes = int(cfg["num_classes"])
+    metrics = compute_classification_metrics(y_true=y_eval, pred=pred, num_classes=num_classes)
     gate_mean = float(out["gate"].mean().item())
-    cm = confusion_matrix(y_eval, pred, labels=list(range(int(cfg["num_classes"]))))
+    labels = list(range(num_classes))
+    cm = confusion_matrix(y_eval, pred, labels=labels)
+    class_report = classification_report(
+        y_eval,
+        pred,
+        labels=labels,
+        target_names=[str(label) for label in labels],
+        output_dict=True,
+        zero_division=0,
+    )
 
     payload = {
         "run_id": cfg["run_id"],
@@ -163,6 +173,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     fig_dir = run_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(cm).to_csv(fig_dir / f"confusion_matrix_{effective_split}.csv", index=False)
+    class_report_rows = _classification_report_rows(class_report)
+    pd.DataFrame(class_report_rows).to_csv(fig_dir / f"classification_report_{effective_split}.csv", index=False)
+    (fig_dir / f"classification_report_{effective_split}.json").write_text(
+        json.dumps(class_report_rows, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     _save_confusion_png(cm=cm, output_path=fig_dir / f"confusion_matrix_{effective_split}.png")
 
     print(
@@ -205,6 +221,33 @@ def _harmonic_mean(a: float | None, b: float | None) -> float | None:
     if denom == 0:
         return 0.0
     return float((2.0 * a * b) / denom)
+
+
+def _classification_report_rows(report: dict) -> list[dict]:
+    rows: list[dict] = []
+    for label, metrics in report.items():
+        if isinstance(metrics, dict):
+            rows.append(
+                {
+                    "label": str(label),
+                    "precision": float(metrics.get("precision", 0.0)),
+                    "recall": float(metrics.get("recall", 0.0)),
+                    "f1": float(metrics.get("f1-score", 0.0)),
+                    "support": int(metrics.get("support", 0)),
+                }
+            )
+            continue
+
+        rows.append(
+            {
+                "label": str(label),
+                "precision": "",
+                "recall": "",
+                "f1": float(metrics),
+                "support": int(report.get("macro avg", {}).get("support", 0)),
+            }
+        )
+    return rows
 
 
 if __name__ == "__main__":

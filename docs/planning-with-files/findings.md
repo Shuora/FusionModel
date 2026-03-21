@@ -177,3 +177,33 @@
 - 当前实现边界：
   - 未修改训练阶段的 `val_macro_f1` 与 best checkpoint 选择逻辑
   - `stacking/moe` 产物暂未主动补 `paper_*` 字段；ablation 仅在存在时读取
+
+## Evaluation / Report 表格补齐结论（2026-03-21）
+
+- 当前仓库原实现里，`src/evaluate.py` 只会输出：
+  - `eval_<split>.json`
+  - `confusion_matrix_<split>.csv`
+  - `confusion_matrix_<split>.png`
+- 当前仓库原实现里，`src/report.py` 只会在 `report.md` 里列出 artifact 路径，不会渲染表格。
+- 本轮实现后：
+  - `src/evaluate.py` 会额外输出：
+    - `classification_report_<split>.csv`
+    - `classification_report_<split>.json`
+  - `src/report.py` 会在 `report.md` 中直接渲染：
+    - `## Confusion Matrix`
+    - `## Classification Report`
+- 新增 classification report 的行结构为：
+  - 每类一行：`label / precision / recall / f1 / support`
+  - 额外包含：
+    - `accuracy`
+    - `macro avg`
+    - `weighted avg`
+- 已用新代码重刷现有 `runs/stage1-binary`：
+  - 新增 `runs/stage1-binary/figures/classification_report_test.csv`
+  - 新增 `runs/stage1-binary/figures/classification_report_test.json`
+  - `runs/stage1-binary/report.md` 现已直接显示混淆矩阵与分类指标表
+- 当前 `runs/stage1-binary` 刷新后的 test classification report 关键值为：
+  - `label 0`: precision `0.9174` / recall `0.9706` / f1 `0.9432` / support `4245`
+  - `label 1`: precision `0.9866` / recall `0.9612` / f1 `0.9737` / support `9570`
+  - `accuracy`: `0.9641`
+  - `macro avg f1`: `0.9585`
