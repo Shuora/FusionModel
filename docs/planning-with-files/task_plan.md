@@ -84,3 +84,97 @@
 3. 在 `src/experiments/stage1_binary.py` 中实现论文表驱动的裁样逻辑，移除旧的近似 fallback 行为。
 4. 更新 stage1 命令文档，说明当前是“论文类别与数量严格复现”，不是原作者原始 session 列表逐条还原。
 5. 运行相关 pytest 回归并记录结果。
+
+---
+
+# Stage1 Binary Result Investigation Plan
+
+## Goal
+
+只读排查当前 `runs/stage1-binary` 的 `0.9642` 是否存在明显实现/配置问题，明确该数值代表的指标、当前协议下是否异常，以及是否存在会压低性能或导致误解的训练/评估因素。
+
+## Status
+
+- Completed on 2026-03-21
+
+## Scope
+
+- `src/experiments/stage1_binary.py`
+- `src/train.py`
+- `src/evaluate.py`
+- `src/pipeline_data.py`
+- `src/data/preprocess.py`
+- `src/data/dataset_inventory.py`
+- `runs/stage1-binary/config.yaml`
+- `runs/stage1-binary/eval_test.json`
+- `runs/stage1-binary/metrics.csv`
+- `runs/stage1-binary/train.log`
+- `runs/stage1-binary/report.md`
+- `runs/stage1-binary/figures/confusion_matrix_test.csv`
+- `outputs/protocol/stage1_binary_manifest.csv`
+
+## Plan
+
+1. 追踪 `eval_test.json` 中 `0.9642` 的生成路径，确认它对应的评估指标与 checkpoint 来源。
+2. 核对 `stage1_binary` manifest 构造、`train` 的 train/val 协议和 `evaluate` 的 test 协议，确认 run 的真实实验口径。
+3. 汇总 manifest 与混淆矩阵，检查类别分布、样本缺口、潜在 leakage 与可能导致误解的配置因素。
+
+---
+
+# Metrics Parity Check Plan (MVTBA paper vs repo)
+
+## Goal
+
+核对仓库当前“各种指标”的计算方式是否与论文 `MVTBA A Novel Hybrid Deep Learning Model for Encrypted Malicious Traffic Identification` 一致，并明确指出一致项、差异项与原因。
+
+## Status
+
+- In progress on 2026-03-21
+
+## Scope
+
+- `docs/paper/MVTBA A Novel Hybrid Deep Learning Model for Encrypted Malicious Traffic Identification.pdf`
+- `src/evaluate.py`
+- `src/train.py`
+- `src/report.py`
+- `src/stacking.py`
+- `src/moe.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 提取论文实验评估章节中对指标的定义与展示方式，确认主指标、辅助指标及是否使用 confusion matrix。
+2. 检查仓库训练、评估、stacking、moe 的指标计算实现，确认公式、平均方式与零除边界处理。
+3. 逐项对照论文与实现，判断“完全一致 / 部分一致 / 不一致”。
+4. 将结论同步到 findings/progress，并向用户给出带文件定位的说明。
+
+---
+
+# Paper-Compatible Metrics Plan
+
+## Goal
+
+为当前评估结果增加一套与 MVTBA 论文更兼容的指标输出，同时保留现有 sklearn 工程口径作为主口径。
+
+## Status
+
+- In progress on 2026-03-21
+
+## Scope
+
+- `src/evaluate.py`
+- `src/report.py`
+- `src/ablation.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `tests/pipeline/test_ablation_plan.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 先补测试，约束新增 `paper_*` 指标字段与 `paper_macro_f1` 公式。
+2. 在评估阶段实现双口径输出，不改变训练选模逻辑。
+3. 更新报告与 ablation 汇总，展示兼容指标。
+4. 运行针对性测试并同步 findings/progress。

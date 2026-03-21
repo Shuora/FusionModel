@@ -63,3 +63,86 @@
 - 执行并通过回归命令：
   - `pytest -q tests/pipeline/test_stage1_binary_protocol.py`，结果 `10 passed`
   - `pytest -q tests/pipeline/test_protocol_execution.py -k 'stage1_binary_execute_runs_train_eval_report or stage1_binary_execute_stacking_reports_stacking_metrics or stage1_binary_execute_moe_reports_moe_metrics'`，结果 `3 passed`
+- 继续完善数据层口径兼容：
+  - `pcap_sessionizer` 支持 `raw IP` linktype 与 `session_full` 下的 `UDP`
+  - `session_splitcap` 支持 `raw IP` / `UDP` session 切分，并保留原始 linktype
+  - `preprocess` 在 `session_full` 下用 `include_udp=True`
+- 新增数据层回归测试：
+  - `tests/data/test_pcap_sessionizer.py`
+  - `tests/data/test_session_splitcap.py`
+- 引入 `paper_balanced` 协议：
+  - `src/experiments/stage1_binary.py` 增加 `--protocol-mode {paper_strict,paper_balanced}`
+  - 默认切换到 `paper_balanced`
+  - `paper_balanced` 下对超大组做上限裁样，对不足组全保留，对缺失组跳过并输出 summary
+- 更新 `tests/pipeline/test_stage1_binary_protocol.py`，增加 `paper_balanced` 缺失组/裁样/不足组测试。
+- 更新 `tests/pipeline/test_protocol_execution.py`，兼容 `protocol_mode` 参数后的默认执行行为。
+- 执行并通过回归命令：
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q tests/data/test_pcap_sessionizer.py tests/data/test_session_splitcap.py tests/data/test_preprocess_pipeline.py tests/data/test_preprocess_runner.py tests/data/test_session_full_filtering.py`，结果 `20 passed`
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q tests/pipeline/test_stage1_binary_protocol.py tests/pipeline/test_protocol_execution.py -k 'stage1_binary'`，结果 `19 passed`
+
+## 2026-03-21
+
+- 对 `runs/stage1-binary` 做只读排查，核对了：
+  - `src/experiments/stage1_binary.py`
+  - `src/train.py`
+  - `src/evaluate.py`
+  - `src/pipeline_data.py`
+  - `src/data/preprocess.py`
+  - `src/data/dataset_inventory.py`
+  - `runs/stage1-binary/{config.yaml,eval_test.json,metrics.csv,train.log,report.md}`
+  - `runs/stage1-binary/figures/confusion_matrix_test.csv`
+  - `outputs/protocol/stage1_binary_manifest.csv`
+- 确认 `0.9642` 的来源：
+  - 来自 `eval_test.json` 的 `top1`
+  - 对应 `src/evaluate.py` 中的 `accuracy_score`
+  - 不是 `macro_f1`
+- 确认 checkpoint 选择协议：
+  - `best.ckpt` 按 `val_macro_f1` 选择
+  - best epoch 为 `26`
+  - best val macro-F1 为 `0.9556`
+- 汇总当前 manifest / run 分布：
+  - manifest 总样本 `69144`
+  - 总类别分布 `0:21290, 1:47854`
+  - test 样本 `13815`
+  - test 混淆矩阵 `[[4121,124],[371,9199]]`
+- 识别出当前 run 的关键解释边界：
+  - 口径是 `session_full + paper_balanced`
+  - train 时无显式 val split，`src/train.py` 从 train 内再切 `10%` 做 val
+  - manifest 中存在 `42` 个 `dataset+capture_id` 同时落在 train/test，说明结果含有 capture 级 leakage 风险
+- 结论：
+  - 没发现直接把结果打坏的实现 bug
+  - 更需要提醒的是指标误读风险与协议不严格带来的可比性问题
+
+## 2026-03-21
+
+- 为“论文指标计算方式是否与仓库一致”建立专门核对任务，更新了 `docs/planning-with-files/task_plan.md`。
+- 已确认当前仓库主评估入口 `src/evaluate.py` 使用的是分类指标而非回归指标：
+  - `top1`
+  - `macro_precision`
+  - `macro_f1`
+  - `macro_recall`
+  - `confusion_matrix`
+- 已确认 `src/stacking.py` 与 `src/moe.py` 也沿用分类任务口径：
+  - `top1`
+  - `macro_f1`
+  - `macro_recall`
+- 已从论文 4.2/4.3/4.5 节抽取出指标定义、实验设置与表 5/6/7 的展示口径。
+- 已完成论文与仓库指标对照，当前结论是：
+  - `accuracy` ≈ 仓库 `top1`
+  - `macroP / macroR` ≈ 仓库 `macro_precision / macro_recall`
+  - 论文 `macroF1` 公式与仓库 `sklearn macro_f1` 不完全相同
+  - 仓库二分类阶段仍输出 macro 指标，与论文 Exp. I 的 `Precision / Recall / F1` 口径不严格一致
+  - 仓库默认评估 `best.ckpt`，论文描述为固定训练 `30` 轮，评估流程也不完全一致
+- 在独立 worktree `paper-metrics-compat` 中实现了“双口径指标”并已同步回当前 `dev` 工作区。
+- 按 TDD 先新增并跑红：
+  - `compute_classification_metrics_includes_paper_compatible_macro_f1`
+  - `write_ablation_summary_collects_run_metrics`
+- 已实现：
+  - `src/evaluate.py` 新增双口径指标计算 helper 与 `paper_*` 输出
+  - `src/report.py` 新增 `Paper-Compatible Metrics` 展示
+  - `src/ablation.py` 新增 `paper_macro_*` 汇总列
+- 已验证通过：
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k compute_classification_metrics_includes_paper_compatible_macro_f1`
+  - `pytest -q tests/pipeline/test_ablation_plan.py -k write_ablation_summary_collects_run_metrics`
+  - `python -m py_compile src/evaluate.py src/report.py src/ablation.py`
+  - 手工最小化 `report_main` 验证：`report.md` 已包含 `Paper-Compatible Metrics` 与 `Paper Macro-F1`

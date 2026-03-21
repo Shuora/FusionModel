@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Iterable
 
@@ -19,6 +20,43 @@ from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
+
+
+def compute_classification_metrics(y_true: np.ndarray, pred: np.ndarray, num_classes: int) -> dict:
+    macro_precision = float(precision_score(y_true, pred, average="macro", zero_division=0))
+    macro_f1 = float(f1_score(y_true, pred, average="macro", zero_division=0))
+    macro_recall = float(recall_score(y_true, pred, average="macro", zero_division=0))
+    paper_macro_precision = macro_precision
+    paper_macro_recall = macro_recall
+    paper_macro_f1 = _harmonic_mean(paper_macro_precision, paper_macro_recall)
+
+    metrics = {
+        "top1": float(accuracy_score(y_true, pred)),
+        "macro_precision": macro_precision,
+        "macro_f1": macro_f1,
+        "macro_recall": macro_recall,
+        "paper_macro_precision": paper_macro_precision,
+        "paper_macro_recall": paper_macro_recall,
+        "paper_macro_f1": paper_macro_f1,
+    }
+
+    if int(num_classes) == 2:
+        paper_precision = float(precision_score(y_true, pred, average="binary", zero_division=0))
+        paper_recall = float(recall_score(y_true, pred, average="binary", zero_division=0))
+        paper_f1 = _harmonic_mean(paper_precision, paper_recall)
+    else:
+        paper_precision = None
+        paper_recall = None
+        paper_f1 = None
+
+    metrics.update(
+        {
+            "paper_precision": paper_precision,
+            "paper_recall": paper_recall,
+            "paper_f1": paper_f1,
+        }
+    )
+    return metrics
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -101,10 +139,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     logits_np = logits.cpu().numpy()
     pred = np.argmax(logits_np, axis=1)
 
-    top1 = float(accuracy_score(y_eval, pred))
-    macro_precision = float(precision_score(y_eval, pred, average="macro", zero_division=0))
-    macro_f1 = float(f1_score(y_eval, pred, average="macro", zero_division=0))
-    macro_recall = float(recall_score(y_eval, pred, average="macro", zero_division=0))
+    metrics = compute_classification_metrics(y_true=y_eval, pred=pred, num_classes=int(cfg["num_classes"]))
     gate_mean = float(out["gate"].mean().item())
     cm = confusion_matrix(y_eval, pred, labels=list(range(int(cfg["num_classes"]))))
 
@@ -114,10 +149,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "requested_split": requested_split,
         "effective_split": effective_split,
         "fallback_used": fallback_used,
-        "top1": top1,
-        "macro_precision": macro_precision,
-        "macro_f1": macro_f1,
-        "macro_recall": macro_recall,
+        **metrics,
         "gate_mean": gate_mean,
         "num_samples": int(mask.sum()),
         "checkpoint": ckpt_name,
@@ -142,9 +174,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "requested_split": requested_split,
                 "effective_split": effective_split,
                 "fallback_used": fallback_used,
-                "top1": f"{top1:.4f}",
-                "macro_precision": f"{macro_precision:.4f}",
-                "macro_f1": f"{macro_f1:.4f}",
+                "top1": f"{metrics['top1']:.4f}",
+                "macro_precision": f"{metrics['macro_precision']:.4f}",
+                "macro_f1": f"{metrics['macro_f1']:.4f}",
                 "gate_mean": f"{gate_mean:.4f}",
             },
         )
@@ -162,6 +194,17 @@ def _save_confusion_png(cm: np.ndarray, output_path: Path) -> None:
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
+
+
+def _harmonic_mean(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    if not math.isfinite(a) or not math.isfinite(b):
+        return None
+    denom = a + b
+    if denom == 0:
+        return 0.0
+    return float((2.0 * a * b) / denom)
 
 
 if __name__ == "__main__":

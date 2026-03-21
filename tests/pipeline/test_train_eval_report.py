@@ -188,18 +188,41 @@ def test_train_evaluate_report_smoke(tmp_path: Path):
 
     eval_payload = pd.read_json(run_dir / "eval_test.json", typ="series")
     assert "macro_precision" in eval_payload.index
+    assert "paper_precision" in eval_payload.index
+    assert "paper_recall" in eval_payload.index
+    assert "paper_f1" in eval_payload.index
+    assert "paper_macro_precision" in eval_payload.index
+    assert "paper_macro_recall" in eval_payload.index
+    assert "paper_macro_f1" in eval_payload.index
     assert eval_payload["split"] == "test"
 
     code = report_main(["--run-dir", str(run_dir)])
     assert code == 0
     assert (run_dir / "report.md").exists()
     assert (run_dir / "figures" / "learning_curve.png").exists()
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Paper-Compatible Metrics" in report_text
+    assert "Paper Macro-F1" in report_text
     train_log = (run_dir / "train.log").read_text(encoding="utf-8")
     assert "gate_mean" in train_log
     assert "git_commit=" in train_log
     assert "config_summary" in train_log
     assert "dataset_stats" in train_log
     assert "train_macroF1" in train_log
+
+
+def test_compute_classification_metrics_includes_paper_compatible_macro_f1():
+    y_true = np.array([0, 0, 0, 0, 1, 1, 2, 2, 2], dtype=np.int64)
+    pred = np.array([0, 0, 0, 1, 1, 2, 2, 1, 1], dtype=np.int64)
+
+    metrics = evaluate_module.compute_classification_metrics(y_true=y_true, pred=pred, num_classes=3)
+
+    assert metrics["top1"] == pytest.approx(5 / 9)
+    assert metrics["paper_macro_precision"] == pytest.approx(0.5833333333)
+    assert metrics["paper_macro_recall"] == pytest.approx(0.5277777778)
+    assert metrics["paper_macro_f1"] == pytest.approx(0.5541666667)
+    assert metrics["macro_f1"] == pytest.approx(0.5301587302)
+    assert metrics["paper_macro_f1"] != pytest.approx(metrics["macro_f1"])
 
 
 def test_evaluate_fallback_uses_effective_split_and_report_discovers_it(tmp_path: Path):
