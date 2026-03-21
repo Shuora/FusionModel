@@ -179,6 +179,9 @@ def collect_ablation_summary(run_root: str | Path) -> pd.DataFrame:
                 "top1",
                 "macro_f1",
                 "macro_recall",
+                "paper_macro_precision",
+                "paper_macro_recall",
+                "paper_macro_f1",
                 "best_val_macro_f1",
                 "best_val_acc",
             ]
@@ -204,6 +207,9 @@ def _read_one_ablation_run(group: str, run_dir: Path) -> Dict[str, object]:
     top1 = np.nan
     macro_f1 = np.nan
     macro_recall = np.nan
+    paper_macro_precision = np.nan
+    paper_macro_recall = np.nan
+    paper_macro_f1 = np.nan
     metric_source = "none"
 
     stacking_json = run_dir / "stacking" / "meta_metrics.json"
@@ -225,6 +231,9 @@ def _read_one_ablation_run(group: str, run_dir: Path) -> Dict[str, object]:
         top1 = float(metrics_payload.get("top1", np.nan))
         macro_f1 = float(metrics_payload.get("macro_f1", np.nan))
         macro_recall = float(metrics_payload.get("macro_recall", np.nan))
+        paper_macro_precision = float(metrics_payload.get("paper_macro_precision", np.nan))
+        paper_macro_recall = float(metrics_payload.get("paper_macro_recall", np.nan))
+        paper_macro_f1 = float(metrics_payload.get("paper_macro_f1", np.nan))
 
     best_val_macro_f1 = np.nan
     best_val_acc = np.nan
@@ -244,6 +253,9 @@ def _read_one_ablation_run(group: str, run_dir: Path) -> Dict[str, object]:
         "top1": top1,
         "macro_f1": macro_f1,
         "macro_recall": macro_recall,
+        "paper_macro_precision": paper_macro_precision,
+        "paper_macro_recall": paper_macro_recall,
+        "paper_macro_f1": paper_macro_f1,
         "best_val_macro_f1": best_val_macro_f1,
         "best_val_acc": best_val_acc,
     }

@@ -60,6 +60,19 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "",
             ]
         )
+        if any(key in eval_payload for key in ("paper_macro_precision", "paper_macro_recall", "paper_macro_f1")):
+            lines.extend(
+                [
+                    "## Paper-Compatible Metrics",
+                    f"- Paper Precision: {_format_metric(eval_payload.get('paper_precision'))}",
+                    f"- Paper Recall: {_format_metric(eval_payload.get('paper_recall'))}",
+                    f"- Paper F1: {_format_metric(eval_payload.get('paper_f1'))}",
+                    f"- Paper Macro-Precision: {_format_metric(eval_payload.get('paper_macro_precision'))}",
+                    f"- Paper Macro-Recall: {_format_metric(eval_payload.get('paper_macro_recall'))}",
+                    f"- Paper Macro-F1: {_format_metric(eval_payload.get('paper_macro_f1'))}",
+                    "",
+                ]
+            )
 
     artifact_lines = [
         "## Artifacts",
@@ -140,6 +153,18 @@ def _plot_learning_curve(metrics: pd.DataFrame, output_path: Path) -> None:
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
+
+
+def _format_metric(value: object) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if pd.isna(numeric):
+        return "n/a"
+    return f"{numeric:.4f}"
 
 
 if __name__ == "__main__":

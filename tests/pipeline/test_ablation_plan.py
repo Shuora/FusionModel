@@ -58,7 +58,16 @@ def test_write_ablation_summary_collects_run_metrics(tmp_path: Path):
     run_b.mkdir(parents=True, exist_ok=True)
 
     (run_a / "eval_test.json").write_text(
-        json.dumps({"top1": 0.95, "macro_f1": 0.94, "macro_recall": 0.93}),
+        json.dumps(
+            {
+                "top1": 0.95,
+                "macro_f1": 0.94,
+                "macro_recall": 0.93,
+                "paper_macro_precision": 0.92,
+                "paper_macro_recall": 0.91,
+                "paper_macro_f1": 0.915,
+            }
+        ),
         encoding="utf-8",
     )
     pd.DataFrame(
@@ -78,9 +87,20 @@ def test_write_ablation_summary_collects_run_metrics(tmp_path: Path):
     assert out_csv.exists()
     df = pd.read_csv(out_csv)
     assert len(df) == 2
-    assert {"group", "run_id", "metric_source", "top1", "macro_f1", "macro_recall", "best_val_macro_f1"}.issubset(
-        df.columns
-    )
+    assert {
+        "group",
+        "run_id",
+        "metric_source",
+        "top1",
+        "macro_f1",
+        "macro_recall",
+        "paper_macro_precision",
+        "paper_macro_recall",
+        "paper_macro_f1",
+        "best_val_macro_f1",
+    }.issubset(df.columns)
     source_map = {row["run_id"]: row["metric_source"] for _, row in df.iterrows()}
     assert source_map["run-a"] == "eval"
     assert source_map["run-b"] == "stacking"
+    row_a = df[df["run_id"] == "run-a"].iloc[0]
+    assert row_a["paper_macro_f1"] == 0.915
