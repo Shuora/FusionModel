@@ -178,3 +178,32 @@
 2. 在评估阶段实现双口径输出，不改变训练选模逻辑。
 3. 更新报告与 ablation 汇总，展示兼容指标。
 4. 运行针对性测试并同步 findings/progress。
+
+---
+
+# Evaluation Report Tables Fix Plan
+
+## Goal
+
+补齐 `evaluate/report` 的分类明细产物与 Markdown 表格展示，让 stage1 binary 的 run 报告直接包含 confusion matrix 和 classification report，而不只是文件路径。
+
+## Status
+
+- Completed on 2026-03-21
+
+## Scope
+
+- `src/evaluate.py`
+- `src/report.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `tests/pipeline/test_protocol_execution.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+- `docs/superpowers/plans/2026-03-21-eval-report-tables.md`
+
+## Plan
+
+1. 先补 `train_eval_report` 相关失败测试，锁定缺失的 classification report artifact 与 `report.md` 表格渲染行为。
+2. 在 `src/evaluate.py` 中输出 `classification_report_<split>.csv/json`，保留现有 `eval_*.json` 与 confusion matrix 产物。
+3. 在 `src/report.py` 中读取 confusion matrix / classification report artifact，并将其渲染为 Markdown 表格。
+4. 跑针对性回归，确认 `stacking/moe` fallback 与 stage1 execute 相关测试不回退。

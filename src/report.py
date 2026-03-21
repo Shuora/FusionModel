@@ -83,6 +83,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     effective_split = str(eval_payload.get("effective_split", eval_payload.get("split", "test"))) if eval_payload else "test"
     confusion_csv = run_dir / "figures" / f"confusion_matrix_{effective_split}.csv"
     confusion_png = run_dir / "figures" / f"confusion_matrix_{effective_split}.png"
+    classification_csv = run_dir / "figures" / f"classification_report_{effective_split}.csv"
+    classification_json = run_dir / "figures" / f"classification_report_{effective_split}.json"
     if metric_source == "eval" and confusion_csv.exists() and confusion_png.exists():
         artifact_lines.extend(
             [
@@ -90,6 +92,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"- Confusion Matrix PNG: `{confusion_png.as_posix()}`",
             ]
         )
+    if metric_source == "eval" and classification_csv.exists():
+        artifact_lines.append(f"- Classification Report CSV: `{classification_csv.as_posix()}`")
+    if metric_source == "eval" and classification_json.exists():
+        artifact_lines.append(f"- Classification Report JSON: `{classification_json.as_posix()}`")
 
     stacking_metrics = run_dir / "stacking" / "meta_metrics.json"
     stacking_model = run_dir / "stacking" / "meta_model.json"
@@ -110,6 +116,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         artifact_lines.append(f"- Checkpoints: `{checkpoints_dir.as_posix()}`")
 
     lines.extend(artifact_lines)
+    if metric_source == "eval" and confusion_csv.exists():
+        confusion_df = pd.read_csv(confusion_csv)
+        lines.extend(["", "## Confusion Matrix", _markdown_table(_confusion_markdown_frame(confusion_df))])
+    if metric_source == "eval" and classification_csv.exists():
+        classification_df = pd.read_csv(classification_csv)
+        lines.extend(["", "## Classification Report", _markdown_table(classification_df)])
     (run_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
     return 0
 
@@ -165,6 +177,34 @@ def _format_metric(value: object) -> str:
     if pd.isna(numeric):
         return "n/a"
     return f"{numeric:.4f}"
+
+
+def _confusion_markdown_frame(confusion_df: pd.DataFrame) -> pd.DataFrame:
+    table = confusion_df.copy()
+    table.columns = [str(col) for col in table.columns]
+    table.insert(0, "true/pred", [str(i) for i in range(len(table))])
+    return table
+
+
+def _markdown_table(df: pd.DataFrame) -> str:
+    headers = [str(col) for col in df.columns]
+    rows = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+    for row in df.itertuples(index=False, name=None):
+        rendered = [_format_markdown_cell(value) for value in row]
+        rows.append("| " + " | ".join(rendered) + " |")
+    return "\n".join(rows)
+
+
+def _format_markdown_cell(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.4f}"
+    return str(value)
 
 
 if __name__ == "__main__":

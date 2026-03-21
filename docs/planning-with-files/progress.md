@@ -146,3 +146,34 @@
   - `pytest -q tests/pipeline/test_ablation_plan.py -k write_ablation_summary_collects_run_metrics`
   - `python -m py_compile src/evaluate.py src/report.py src/ablation.py`
   - 手工最小化 `report_main` 验证：`report.md` 已包含 `Paper-Compatible Metrics` 与 `Paper Macro-F1`
+
+## 2026-03-21
+
+- 针对用户反馈“run 报告里没有混淆矩阵分类表和 classification report 表格”，已完成只读根因定位：
+  - `src/evaluate.py` 只会输出 summary json 与 confusion matrix csv/png
+  - `src/report.py` 只会把 artifact 路径列进 `report.md`
+  - 当前缺失表格是实现空缺，不是 run 失败
+- 本轮实现目标收敛为：
+  - 新增 `classification_report_<split>.csv/json`
+  - 在 `report.md` 中直接渲染 confusion matrix 与 classification report Markdown 表格
+- 按 TDD 先补了快速单测并跑红：
+  - `test_evaluate_writes_classification_report_artifacts`
+  - `test_evaluate_fallback_writes_classification_report_with_effective_split`
+  - `test_report_renders_confusion_matrix_and_classification_tables`
+  - `test_report_discovers_eval_val_and_renders_tables`
+- 更新 `src/evaluate.py`：
+  - 新增 `classification_report` 计算
+  - 输出 `classification_report_<split>.csv/json`
+- 更新 `src/report.py`：
+  - 将 confusion matrix 渲染为 Markdown 表
+  - 将 classification report 渲染为 Markdown 表
+  - artifact 列表中加入 classification report csv/json
+- 执行并通过快速回归命令：
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q tests/pipeline/test_train_eval_report.py -k 'evaluate_writes_classification_report_artifacts or evaluate_fallback_writes_classification_report_with_effective_split or report_renders_confusion_matrix_and_classification_tables or report_discovers_eval_val_and_renders_tables or report_falls_back_to_stacking_metrics_when_eval_missing or report_falls_back_to_moe_metrics_when_eval_missing'`
+  - 结果：`6 passed, 6 deselected`
+- 用新代码重跑现有 `runs/stage1-binary` 的 `evaluate + report`：
+  - 成功生成 `runs/stage1-binary/figures/classification_report_test.csv`
+  - 成功生成 `runs/stage1-binary/figures/classification_report_test.json`
+  - 成功更新 `runs/stage1-binary/report.md`，新增：
+    - `## Confusion Matrix`
+    - `## Classification Report`
