@@ -124,12 +124,16 @@ python -m src.data.preprocess_runner \
 
 论文口径说明：
 
-- `stage1_binary` 现按论文 Exp. I / Table 1-3 构造 manifest，只使用 `ISCX + MTA + MFCP`
-- `ISCX` 按论文 Table 1 的 9 个 traffic group 取样
-- `MTA` 按论文 Table 2 的 7 个家族取样
-- `MFCP` 按论文 Table 3 的 6 个家族取样
-- 当前仓库实现的是“类别与数量严格复现”：
-  - 严格对齐论文的 group/family 集合与 train/test 配额
+- `stage1_binary` 支持两种论文风格协议，只使用 `ISCX + MTA + MFCP`
+- 默认推荐：`paper_balanced`
+  - 保留论文 Table 1-3 的类别/家族集合
+  - 不强制逐组精确等于论文配额
+  - 对超大组做上限裁样，对不足组全保留
+- 严格对照：`paper_strict`
+  - 严格按论文配额检查
+  - 任一组样本不足直接报错
+- 当前仓库实现的是“论文风格近似复现”：
+  - 类别/家族集合尽量对齐论文
   - 具体 session 通过仓库现有 `session_full` manifest 稳定裁样得到
   - 不是论文作者原始逐 session 列表的逐条还原
 
@@ -139,6 +143,7 @@ python -m src.data.preprocess_runner \
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
+  --protocol-mode paper_balanced \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
@@ -150,6 +155,7 @@ python -m src.experiments.stage1_binary \
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
+  --protocol-mode paper_balanced \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
@@ -212,6 +218,7 @@ python -m src.report \
 python -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
+  --protocol-mode paper_balanced \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
