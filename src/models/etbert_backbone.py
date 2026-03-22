@@ -252,7 +252,13 @@ class ETBertBackbone(nn.Module):
             activation="gelu",
             batch_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=effective_layers)
+        # Disable the prototype nested-tensor fast path to avoid PyTorch runtime warnings
+        # in training/evaluation logs while keeping the same encoder semantics.
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=effective_layers,
+            enable_nested_tensor=False,
+        )
         if checkpoint_path is not None:
             self.last_checkpoint_report = self.load_pretrained_checkpoint(checkpoint_path)
             self.checkpoint_report = self.last_checkpoint_report

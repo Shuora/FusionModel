@@ -239,3 +239,16 @@
   - 自定义 smoke（`num_workers=0`）：
     - train + stacking 全链路通过
     - train + moe 全链路通过
+
+## 2026-03-22
+
+- 新建 worktree `.worktrees/fix-etbert-warning` 与分支 `fix-etbert-warning`，隔离 ETBERT warning 修复。
+- 已完成 root cause 定位：
+  - warning 来自 `ETBertBackbone` 内部 `TransformerEncoder(enable_nested_tensor=True)` 的默认行为。
+- 已按 TDD 新增并跑红：
+  - `test_etbert_backbone_disables_transformer_nested_tensor_path`
+- 已完成实现：
+  - `src/models/etbert_backbone.py` 构造 `TransformerEncoder` 时显式传 `enable_nested_tensor=False`
+- 已完成验证：
+  - `pytest -q tests/models/test_pretrained_backbones.py -k 'disables_transformer_nested_tensor_path or forward_does_not_emit_nested_tensor_warning or can_truncate_encoder_layers'`（`3 passed`）
+  - `python -m py_compile src/models/etbert_backbone.py tests/models/test_pretrained_backbones.py`
