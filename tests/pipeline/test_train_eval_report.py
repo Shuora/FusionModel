@@ -526,6 +526,38 @@ def test_report_discovers_eval_val_and_renders_tables(tmp_path: Path):
     assert "## Classification Report" in report_text
 
 
+def test_report_selects_best_epoch_by_configured_best_metric(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-best-metric-run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": run_dir.name,
+                "stage": "fusion",
+                "policy": "strict",
+                "epochs": 2,
+                "batch_size": 4,
+                "best_metric": "val_acc",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {"epoch": 1, "train_loss": 0.9, "val_loss": 0.8, "train_acc": 0.6, "val_acc": 0.92, "val_macro_f1": 0.98},
+            {"epoch": 2, "train_loss": 0.7, "val_loss": 0.6, "train_acc": 0.8, "val_acc": 0.95, "val_macro_f1": 0.90},
+        ]
+    ).to_csv(run_dir / "metrics.csv", index=False)
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Best Epoch: 2" in report_text
+    assert "Val Macro-F1: 0.9000" in report_text
+    assert "Val Acc: 0.9500" in report_text
+
+
 def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):
     processed_root = tmp_path / "outputs" / "processed"
     run_root = tmp_path / "runs"
@@ -562,6 +594,44 @@ def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):
     )
     assert code != 0
     assert not (run_dir / "eval_test.json").exists()
+
+
+def test_train_records_val_acc_at_decision_threshold(tmp_path: Path):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    _prepare_dummy_processed(processed_root)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "threshold-acc-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "4",
+            "--num-workers",
+            "0",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "threshold-acc-run"
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    assert "val_acc_at_decision_threshold" in metrics.columns
+    assert float(metrics["val_acc_at_decision_threshold"].iloc[0]) >= 0.0
+    assert float(metrics["val_acc_at_decision_threshold"].iloc[0]) <= 1.0
+
+    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
+    assert "val_acc_at_decision_threshold=" in train_log
 
 
 def test_train_writes_resolved_device_and_num_workers(tmp_path: Path, monkeypatch):

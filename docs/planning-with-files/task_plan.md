@@ -237,3 +237,31 @@
 2. 在 `src/evaluate.py` 中输出 `classification_report_<split>.csv/json`，保留现有 `eval_*.json` 与 confusion matrix 产物。
 3. 在 `src/report.py` 中读取 confusion matrix / classification report artifact，并将其渲染为 Markdown 表格。
 4. 跑针对性回归，确认 `stacking/moe` fallback 与 stage1 execute 相关测试不回退。
+
+---
+
+# Stage1 Binary Acc 可解释性修复计划（2026-03-22）
+
+## Goal
+
+修复“二分类一直 95%”的观测误导问题，确保训练日志和报告口径与配置一致、可对齐。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `src/train.py`
+- `src/report.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 按 TDD 新增失败测试：`report` 应按 `config.best_metric` 选择 best epoch；`train` 应输出阈值口径的 `val_acc` 指标。
+2. 在训练评估环节增加 `val_acc_at_decision_threshold` 计算与日志/metrics 落盘。
+3. 调整 `report` 的 best row 选择逻辑：优先使用 `config.best_metric` 对应列，缺失时回退 `val_macro_f1`。
+4. 运行针对性测试与一次端到端 stage1 binary 训练+评估+报告，确认结果可复现并与日志一致。
+5. 提交分支、合并到 `dev`，删除 worktree 与分支。
