@@ -766,3 +766,94 @@ def test_evaluate_records_cpu_fallback_when_cuda_unavailable(tmp_path: Path, mon
     payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
     assert payload["device_requested"] == "cuda"
     assert payload["device"] == "cpu"
+
+
+def test_train_early_stops_on_val_acc_plateau(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        train_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.random.default_rng(1).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
+            "input_ids": np.random.default_rng(2).integers(0, 1024, size=(6, 128), dtype=np.int32),
+            "attention_mask": np.ones((6, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((6, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["train", "train", "train", "train", "val", "val"], dtype="U8"),
+        },
+    )
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, num_classes, hidden_dim=128, num_heads=4, vocab_size=30522):
+            super().__init__()
+            self.num_classes = num_classes
+            self.scale = torch.nn.Parameter(torch.tensor(0.5))
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+            batch = rgb.shape[0]
+            logits = torch.stack(
+                [
+                    self.scale.expand(batch),
+                    (-self.scale).expand(batch),
+                ],
+                dim=1,
+            )
+            gate = torch.full((batch, 1), 0.5, dtype=logits.dtype, device=logits.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+
+    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    eval_results = iter(
+        [
+            (0.4, 0.80, 0.70, 0.5, 0.5, 0.80),
+            (0.4, 0.80, 0.70, 0.5, 0.5, 0.80),
+            (0.4, 0.79, 0.69, 0.5, 0.5, 0.79),
+            (0.4, 0.78, 0.68, 0.5, 0.5, 0.78),
+        ]
+    )
+    monkeypatch.setattr(train_module, "_evaluate_loader", lambda *args, **kwargs: next(eval_results))
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "early-stop-run",
+            "--epochs",
+            "8",
+            "--batch-size",
+            "4",
+            "--device",
+            "cpu",
+            "--num-workers",
+            "0",
+            "--best-metric",
+            "val_acc",
+            "--early-stopping-patience",
+            "2",
+            "--early-stopping-min-delta",
+            "0.0",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "early-stop-run"
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["best_metric"] == "val_acc"
+    assert int(cfg["early_stopping_patience"]) == 2
+
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    assert metrics["epoch"].tolist() == [1, 2, 3]
+
+    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
+    assert "early_stopping_triggered" in train_log
+    assert "stopped_epoch=3" in train_log

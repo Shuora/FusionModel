@@ -252,3 +252,16 @@
 - 已完成验证：
   - `pytest -q tests/models/test_pretrained_backbones.py -k 'disables_transformer_nested_tensor_path or forward_does_not_emit_nested_tensor_warning or can_truncate_encoder_layers'`（`3 passed`）
   - `python -m py_compile src/models/etbert_backbone.py tests/models/test_pretrained_backbones.py`
+
+## 2026-03-22
+
+- 复用 worktree `.worktrees/early-stopping` 与分支 `feat-early-stopping` 实现训练早停。
+- 已按 TDD 新增并跑红：
+  - `test_train_early_stops_on_val_acc_plateau`
+- 已完成实现：
+  - `src/train.py` 新增 `--early-stopping-patience` / `--early-stopping-min-delta`
+  - 训练按 `val_acc` 判断是否提前结束
+  - 新增 `early_stopping_triggered` 结构化日志
+- 已完成验证：
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'early_stops_on_val_acc_plateau or train_writes_best_metric_to_config'`
+  - `python -m py_compile src/train.py src/common/structured_logging.py tests/pipeline/test_train_eval_report.py`

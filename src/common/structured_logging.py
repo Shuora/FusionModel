@@ -51,6 +51,7 @@ _EVENT_MAP = {
     "checkpoint_saved": "Checkpoint 已保存",
     "best_checkpoint_saved": "最佳 Checkpoint 已保存",
     "metrics_saved": "指标文件已保存",
+    "early_stopping_triggered": "触发早停",
 }
 
 

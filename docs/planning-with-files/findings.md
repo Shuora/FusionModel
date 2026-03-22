@@ -279,3 +279,16 @@
   - 显式设置 `enable_nested_tensor=False`
   - 不修改 encoder 层数、注意力头数、mask 逻辑或 pooling 逻辑
 - 该修复的目标是消除日志污染，而不是调整模型行为；前向语义保持不变。
+
+## 训练早停实现结论（2026-03-22）
+
+- `src/train.py` 已新增：
+  - `--early-stopping-patience`
+  - `--early-stopping-min-delta`
+- 早停当前按 `val_acc` 触发：
+  - 若本 epoch `val_acc` 未超过 `best_val_acc + min_delta`
+  - 连续达到 `patience` 个 epoch 后触发停训
+- 设计边界：
+  - `patience=0` 表示关闭 early stopping
+  - 早停只截断 epoch 循环，不改变 best checkpoint 保存机制
+  - 触发时会输出 `early_stopping_triggered` 日志，并将配置写入 `config.yaml`
