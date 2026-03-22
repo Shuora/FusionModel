@@ -269,17 +269,17 @@ def _read_json(path: Path) -> Dict[str, object]:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate ablation experiment plan")
+    parser = argparse.ArgumentParser(description="生成 ablation 实验计划")
     parser.add_argument("--mode", choices=["plan", "summary"], default="plan")
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--output", default="runs/ablation/ablation_plan.csv")
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.mode == "plan":
         out = write_ablation_plan(args.output)
-        print(f"ablation plan saved: {out}")
+        print(f"ablation 计划已保存: {out}")
     else:
         out = write_ablation_summary(run_root=args.run_root, output_csv=args.output)
-        print(f"ablation summary saved: {out}")
+        print(f"ablation 汇总已保存: {out}")
     return 0
 
 

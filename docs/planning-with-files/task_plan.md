@@ -181,6 +181,36 @@
 
 ---
 
+# 日志中文化计划（2026-03-22）
+
+## Goal
+
+将项目中用户可见的日志输出尽可能切换为中文表达，同时保留必要英文技术术语与 event code，避免破坏现有检索与测试。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `src/common/structured_logging.py`
+- `src/experiments/stage1_binary.py`
+- `src/ablation.py`
+- `tests/common/test_structured_logging.py`
+- `tests/data/test_preprocess_pipeline.py`
+- `tests/pipeline/test_stage1_binary_protocol.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 统一结构化日志模板：level/module/event 展示中文化。
+2. 事件名采用“中文说明 + 英文 event code”双显示，兼容历史检索与断言。
+3. 翻译 `stage1_binary` 与 `ablation` 中的直出日志字符串。
+4. 更新受影响测试断言并执行针对性回归。
+
+---
+
 # Evaluation Report Tables Fix Plan
 
 ## Goal

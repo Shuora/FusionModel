@@ -207,3 +207,15 @@
   - `label 1`: precision `0.9866` / recall `0.9612` / f1 `0.9737` / support `9570`
   - `accuracy`: `0.9641`
   - `macro avg f1`: `0.9585`
+
+## 日志中文化结论（2026-03-22）
+
+- 结构化日志主模板已中文化：
+  - level：`成功/警告/错误/信息`
+  - module：`数据/模型/评估/保存/时间/指标`
+- event 展示改为“中文说明 + 英文 event code”：
+  - 例如：`配置摘要 (config_summary)`
+  - 这样既满足中文可读性，也保留了英文 event code 的可检索性和测试兼容性。
+- `src/experiments/stage1_binary.py` 的直出日志已翻译为中文语义（如“评估步骤开始”“Manifest 已保存”等）。
+- `src/ablation.py` 的 CLI 输出日志已翻译为中文（如“ablation 计划已保存”）。
+- 现有与日志文案直接耦合的测试已同步更新，并完成针对性回归通过。

@@ -177,3 +177,24 @@
   - 成功更新 `runs/stage1-binary/report.md`，新增：
     - `## Confusion Matrix`
     - `## Classification Report`
+
+## 2026-03-22
+
+- 在独立 worktree `/.worktrees/chinese-logs` 中执行日志中文化改造，避免影响主工作区。
+- 更新 `src/common/structured_logging.py`：
+  - level/module 文案改为中文。
+  - 增加 event 中文映射，并输出 `中文说明 (event_code)` 双语样式。
+  - 未命中的 module 使用 `模块:<name>` 统一展示。
+- 更新 `src/experiments/stage1_binary.py`：
+  - 主要流程日志翻译为中文（构建 manifest、训练/评估/报告步骤、跳过原因等）。
+  - 日志前缀调整为 `[Stage1Binary][阶段1协议]`。
+- 更新 `src/ablation.py`：
+  - `plan/summary` 输出日志翻译为中文。
+- 同步更新断言测试：
+  - `tests/common/test_structured_logging.py`
+  - `tests/data/test_preprocess_pipeline.py`
+  - `tests/pipeline/test_stage1_binary_protocol.py`
+- 执行并通过针对性回归：
+  - `pytest -q tests/common/test_structured_logging.py tests/data/test_preprocess_pipeline.py::test_preprocess_source_writes_expected_outputs tests/pipeline/test_stage1_binary_protocol.py::test_stage1_main_emits_progress_logs`
+  - 结果：`4 passed`
+- 额外执行快速兼容性检查，确认 `config_summary` 等英文 event code 仍在日志文本中保留。
