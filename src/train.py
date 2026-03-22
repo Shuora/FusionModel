@@ -552,6 +552,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=args.hidden_dim,
+        num_heads=args.num_heads,
         vocab_size=vocab_size,
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
