@@ -86,9 +86,9 @@ def _evaluate_loader(
     epoch: int,
     total_epochs: int,
     lr: float,
-) -> tuple[float, float, float, float, float | None, float | None]:
+) -> tuple[float, float, float, float, float | None]:
     if len(loader) == 0:
-        return 0.0, 0.0, 0.0, 0.0, None, None
+        return 0.0, 0.0, 0.0, 0.0, None
 
     model.eval()
     ce = nn.CrossEntropyLoss()
@@ -97,6 +97,8 @@ def _evaluate_loader(
     labels: List[np.ndarray] = []
     gate_means: List[float] = []
     positive_probs: List[np.ndarray] = []
+    seen_samples = 0
+    correct_samples = 0
 
     iterator = tqdm(
         loader,
@@ -117,43 +119,79 @@ def _evaluate_loader(
             loss, pred_logits = _loss_and_logits(out, y_b, stage, ce, alpha, beta)
             pred = pred_logits.argmax(dim=1)
             batch_acc = float((pred == y_b).float().mean().item())
+            batch_size = int(y_b.shape[0])
 
             losses.append(float(loss.item()))
             preds.append(pred.cpu().numpy())
             labels.append(y_b.cpu().numpy())
             gate_means.append(float(out["gate"].mean().item()))
+            seen_samples += batch_size
+            correct_samples += int((pred == y_b).sum().item())
             if pred_logits.shape[1] == 2:
                 probs = torch.softmax(pred_logits, dim=1)[:, 1]
                 positive_probs.append(probs.detach().cpu().numpy())
-            iterator.set_postfix(loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}", lr=f"{lr:.2e}")
+            running_loss = float(np.mean(losses)) if losses else float(loss.item())
+            running_acc = float(correct_samples / seen_samples) if seen_samples > 0 else batch_acc
+            iterator.set_postfix(loss=f"{running_loss:.4f}", acc=f"{running_acc:.4f}", lr=f"{lr:.2e}")
 
     y_true = np.concatenate(labels, axis=0) if labels else np.zeros((0,), dtype=np.int64)
     y_pred = np.concatenate(preds, axis=0) if preds else np.zeros((0,), dtype=np.int64)
     if y_true.size == 0:
-        return 0.0, 0.0, 0.0, 0.0, None, None
+        return 0.0, 0.0, 0.0, 0.0, None
 
     val_loss = float(np.mean(losses))
     val_acc = float(np.mean(y_true == y_pred))
     val_macro_f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
     val_gate_mean = float(np.mean(gate_means)) if gate_means else 0.0
-    val_decision_threshold: float | None = None
-    val_acc_at_decision_threshold: float | None = None
+    decision_threshold = None
     if positive_probs:
-        threshold, threshold_acc = choose_best_binary_threshold(
+        threshold, _ = choose_best_binary_threshold(
             positive_probs=np.concatenate(positive_probs, axis=0),
             y_true=y_true,
         )
-        val_decision_threshold = float(threshold)
-        val_acc_at_decision_threshold = float(threshold_acc)
+        decision_threshold = threshold
+    return val_loss, val_acc, val_macro_f1, val_gate_mean, decision_threshold
 
-    return (
-        val_loss,
-        val_acc,
-        val_macro_f1,
-        val_gate_mean,
-        val_decision_threshold,
-        val_acc_at_decision_threshold,
-    )
+
+def _derive_validation_mask_from_train(
+    train_mask: np.ndarray,
+    y: np.ndarray,
+    seed: int,
+    val_fraction: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    idx = np.where(train_mask)[0]
+    if idx.size < 2:
+        raise ValueError("cannot derive validation split from fewer than 2 training samples")
+    rng = np.random.default_rng(seed)
+    labels = y[idx]
+    val_idx_parts: List[np.ndarray] = []
+
+    for cls in np.unique(labels):
+        cls_idx = idx[labels == cls].copy()
+        rng.shuffle(cls_idx)
+        if cls_idx.size < 2:
+            continue
+        cls_val_n = int(round(float(cls_idx.size) * float(val_fraction)))
+        cls_val_n = max(1, cls_val_n)
+        cls_val_n = min(cls_val_n, cls_idx.size - 1)
+        if cls_val_n > 0:
+            val_idx_parts.append(cls_idx[:cls_val_n])
+
+    if val_idx_parts:
+        val_idx = np.concatenate(val_idx_parts, axis=0)
+    else:
+        shuffled = idx.copy()
+        rng.shuffle(shuffled)
+        n_val = int(round(float(idx.size) * float(val_fraction)))
+        n_val = max(1, n_val)
+        n_val = min(n_val, idx.size - 1)
+        val_idx = shuffled[:n_val]
+
+    new_train_mask = train_mask.copy()
+    new_train_mask[val_idx] = False
+    val_mask = np.zeros_like(train_mask, dtype=bool)
+    val_mask[val_idx] = True
+    return new_train_mask, val_mask
 
 
 def choose_best_binary_threshold(positive_probs: np.ndarray, y_true: np.ndarray) -> tuple[float, float]:
@@ -186,29 +224,6 @@ def _select_best_metric_value(best_metric: str, val_acc: float, val_macro_f1: fl
     if best_metric == "val_macro_f1":
         return float(val_macro_f1)
     raise ValueError(f"unsupported best metric: {best_metric}")
-
-
-def _derive_validation_mask_from_train(
-    train_mask: np.ndarray,
-    seed: int,
-    val_fraction: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    idx = np.where(train_mask)[0]
-    if idx.size < 2:
-        raise ValueError("cannot derive validation split from fewer than 2 training samples")
-    rng = np.random.default_rng(seed)
-    shuffled = idx.copy()
-    rng.shuffle(shuffled)
-    n_val = int(round(float(idx.size) * float(val_fraction)))
-    n_val = max(1, n_val)
-    n_val = min(n_val, idx.size - 1)
-    val_idx = shuffled[:n_val]
-
-    new_train_mask = train_mask.copy()
-    new_train_mask[val_idx] = False
-    val_mask = np.zeros_like(train_mask, dtype=bool)
-    val_mask[val_idx] = True
-    return new_train_mask, val_mask
 
 
 def _limit_training_samples(
@@ -340,11 +355,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
     parser.add_argument("--grad-explode-threshold", type=float, default=1e4)
-    parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
-    parser.add_argument("--early-stopping-patience", type=int, default=0)
-    parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--stacking-n-splits", type=int, default=3)
     parser.add_argument("--stacking-oof-epochs", type=int, default=2)
@@ -355,10 +368,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     torch.manual_seed(args.seed)
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
-    if args.early_stopping_patience < 0:
-        raise ValueError("--early-stopping-patience must be >= 0")
-    if args.early_stopping_min_delta < 0:
-        raise ValueError("--early-stopping-min-delta must be >= 0")
 
     requested_device, resolved_device, device_fallback = resolve_runtime_device(args.device)
     device = torch.device(resolved_device)
@@ -434,8 +443,6 @@ def main(argv: Iterable[str] | None = None) -> int:
         "device_fallback": device_fallback,
         "num_workers": args.num_workers,
         "best_metric": args.best_metric,
-        "early_stopping_patience": args.early_stopping_patience,
-        "early_stopping_min_delta": args.early_stopping_min_delta,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -461,8 +468,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             "device_fallback": device_fallback,
             "num_workers": args.num_workers,
             "best_metric": args.best_metric,
-            "early_stopping_patience": args.early_stopping_patience,
-            "early_stopping_min_delta": args.early_stopping_min_delta,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -507,6 +512,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         try:
             train_mask, val_mask = _derive_validation_mask_from_train(
                 train_mask=train_mask,
+                y=y,
                 seed=args.seed,
                 val_fraction=args.val_fraction,
             )
@@ -562,7 +568,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=args.hidden_dim,
-        num_heads=args.num_heads,
         vocab_size=vocab_size,
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -588,8 +593,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     show_progress = not args.no_progress
     loss_stage = "warmup" if args.stage == "warmup" else "fusion"
     best_decision_threshold: float | None = None
-    early_stopping_enabled = args.early_stopping_patience > 0
-    no_improve_epochs = 0
 
     for epoch in range(1, args.epochs + 1):
         start = time.time()
@@ -600,6 +603,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         train_targets: List[np.ndarray] = []
         train_gates: List[float] = []
         clipped_steps = 0
+        train_seen_samples = 0
+        train_correct_samples = 0
 
         iterator = tqdm(
             train_loader,
@@ -641,12 +646,17 @@ def main(argv: Iterable[str] | None = None) -> int:
             optim.step()
             pred = pred_logits.argmax(dim=1)
             batch_acc = float((pred == y_b).float().mean().item())
+            batch_size = int(y_b.shape[0])
 
             train_losses.append(float(loss.item()))
             train_preds.append(pred.cpu().numpy())
             train_targets.append(y_b.cpu().numpy())
             train_gates.append(float(out["gate"].mean().item()))
-            iterator.set_postfix(loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}", lr=f"{args.lr:.2e}")
+            train_seen_samples += batch_size
+            train_correct_samples += int((pred == y_b).sum().item())
+            running_loss = float(np.mean(train_losses)) if train_losses else float(loss.item())
+            running_acc = float(train_correct_samples / train_seen_samples) if train_seen_samples > 0 else batch_acc
+            iterator.set_postfix(loss=f"{running_loss:.4f}", acc=f"{running_acc:.4f}", lr=f"{args.lr:.2e}")
 
         if clipped_steps > 0:
             log(
@@ -669,14 +679,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         train_gate_mean = float(np.mean(train_gates)) if train_gates else 0.0
 
-        (
-            val_loss,
-            val_acc,
-            val_macro_f1,
-            val_gate_mean,
-            val_decision_threshold,
-            val_acc_at_decision_threshold,
-        ) = _evaluate_loader(
+        val_loss, val_acc, val_macro_f1, val_gate_mean, val_decision_threshold = _evaluate_loader(
             model=model,
             loader=val_loader,
             device=device,
@@ -701,7 +704,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             "val_macro_f1": val_macro_f1,
             "val_gate_mean": val_gate_mean,
             "val_decision_threshold": val_decision_threshold,
-            "val_acc_at_decision_threshold": val_acc_at_decision_threshold,
             "lr": args.lr,
             "epoch_time": epoch_time,
         }
@@ -719,12 +721,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "val_loss": f"{val_loss:.4f}",
                 "val_acc": f"{val_acc:.4f}",
                 "val_macroF1": f"{val_macro_f1:.4f}",
-                "val_decision_threshold": (
-                    "none" if val_decision_threshold is None else f"{val_decision_threshold:.4f}"
-                ),
-                "val_acc_at_decision_threshold": (
-                    "none" if val_acc_at_decision_threshold is None else f"{val_acc_at_decision_threshold:.4f}"
-                ),
+                "val_decision_threshold": "none" if val_decision_threshold is None else f"{val_decision_threshold:.4f}",
                 "gate_mean": f"{val_gate_mean:.4f}",
                 "lr": args.lr,
                 "time_s": f"{epoch_time:.2f}",
@@ -748,13 +745,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             val_acc=val_acc,
             val_macro_f1=val_macro_f1,
         )
-        improved = current_best_value > (best_value + args.early_stopping_min_delta)
-        if improved:
+        if current_best_value >= best_value:
             best_value = current_best_value
             best_decision_threshold = val_decision_threshold
             cfg["decision_threshold"] = best_decision_threshold
             cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-            no_improve_epochs = 0
             best_path = ckpt_dir / "best.ckpt"
             torch.save(
                 {
@@ -780,24 +775,6 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "sha8": _sha8(best_path),
                 },
             )
-        elif early_stopping_enabled:
-            no_improve_epochs += 1
-
-        if early_stopping_enabled and no_improve_epochs >= args.early_stopping_patience:
-            log(
-                "info",
-                "model",
-                "early_stopping_triggered",
-                {
-                    "stopped_epoch": epoch,
-                    "best_metric": args.best_metric,
-                    "best_metric_value": f"{best_value:.4f}",
-                    "bad_epochs": no_improve_epochs,
-                    "patience": args.early_stopping_patience,
-                    "min_delta": args.early_stopping_min_delta,
-                },
-            )
-            break
 
     pd.DataFrame(rows).to_csv(metrics_path, index=False)
     log("success", "save", "metrics_saved", {"path": str(metrics_path)})

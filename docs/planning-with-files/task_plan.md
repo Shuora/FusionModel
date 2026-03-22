@@ -24,6 +24,35 @@
 
 ---
 
+# 模型结构调研计划（2026-03-22）
+
+## Goal
+
+梳理仓库当前模型结构，明确主模型、两个 backbone、特征融合方式，以及它们与训练/评估管线的连接关系，形成可直接给用户阅读的代码导览。
+
+## Status
+
+- In progress on 2026-03-22
+
+## Scope
+
+- `src/models/fusion_model.py`
+- `src/models/mobilevit_backbone.py`
+- `src/models/etbert_backbone.py`
+- `src/train.py`
+- `tests/models/test_fusion_model.py`
+- `tests/models/test_pretrained_backbones.py`
+- `README.md`
+
+## Plan
+
+1. 定位模型入口与目录结构，确认核心实现文件与测试覆盖位置。
+2. 阅读 `fusion_model` 与两个 backbone，梳理输入、输出、融合与分类头的职责分工。
+3. 补读 `train.py`、README 与模型测试，确认模型如何被实例化、训练与验证。
+4. 更新 findings/progress，并向用户输出结构化说明。
+
+---
+
 # Runtime Support Plan (CUDA + num-workers)
 
 ## Goal
@@ -95,7 +124,7 @@
 
 ## Status
 
-- Completed on 2026-03-21
+- Completed on 2026-03-22
 
 ## Scope
 
@@ -129,7 +158,7 @@
 
 ## Status
 
-- In progress on 2026-03-21
+- Completed on 2026-03-21
 
 ## Scope
 
@@ -240,111 +269,60 @@
 
 ---
 
-# Stage1 Binary Acc 可解释性修复计划（2026-03-22）
+# Latest Run Result Review Plan
 
 ## Goal
 
-修复“二分类一直 95%”的观测误导问题，确保训练日志和报告口径与配置一致、可对齐。
+只读核对最新一次 `stage1-binary` 训练/验证/测试产物，解释“为什么只有 96%”对应的真实指标，以及当前协议下更可能的限制因素。
 
 ## Status
 
-- Completed on 2026-03-22
+- Completed on 2026-03-21
 
 ## Scope
 
+- `runs/2026-03-21/stage1-binary-195511/config.yaml`
+- `runs/2026-03-21/stage1-binary-195511/metrics.csv`
+- `runs/2026-03-21/stage1-binary-195511/train.log`
+- `runs/2026-03-21/stage1-binary-195511/eval_test.json`
+- `runs/2026-03-21/stage1-binary-195511/report.md`
+- `outputs/protocol/stage1_binary_manifest.csv`
 - `src/train.py`
-- `src/report.py`
-- `tests/pipeline/test_train_eval_report.py`
-- `docs/planning-with-files/findings.md`
-- `docs/planning-with-files/progress.md`
+- `src/experiments/stage1_binary.py`
 
 ## Plan
 
-1. 按 TDD 新增失败测试：`report` 应按 `config.best_metric` 选择 best epoch；`train` 应输出阈值口径的 `val_acc` 指标。
-2. 在训练评估环节增加 `val_acc_at_decision_threshold` 计算与日志/metrics 落盘。
-3. 调整 `report` 的 best row 选择逻辑：优先使用 `config.best_metric` 对应列，缺失时回退 `val_macro_f1`。
-4. 运行针对性测试与一次端到端 stage1 binary 训练+评估+报告，确认结果可复现并与日志一致。
-5. 提交分支、合并到 `dev`，删除 worktree 与分支。
+1. 确认最新 run 的训练、验证、测试分别对应哪些指标，避免把 `Top-1`、`Macro-F1`、`weighted avg F1` 混为一谈。
+2. 核对训练端的 `val` 产生方式、best checkpoint 选择策略，以及 loss 是否考虑类不平衡。
+3. 汇总 manifest 的类别分布、数据集占比和 `capture_id` overlap，判断 96% 更像是模型上限、协议口径，还是明显实现问题。
 
 ---
 
-# Attention Fusion 改造计划（2026-03-22）
+# Accuracy-Oriented Training Plan
 
 ## Goal
 
-将当前二分类主干从门控线性融合（`gate * img + (1-gate) * tls`）改为注意力层面的融合，同时保持训练与下游 `stacking/moe` 接口兼容。
+在不改当前 stage1 数据协议的前提下，通过训练策略优化优先提升当前协议下的 test `accuracy`。
 
 ## Status
 
-- Completed on 2026-03-22
+- In progress on 2026-03-21
 
 ## Scope
 
-- `src/models/fusion_model.py`
 - `src/train.py`
 - `src/evaluate.py`
-- `src/stacking.py`
-- `src/moe.py`
-- `tests/models/test_fusion_model.py`
-- `docs/planning-with-files/findings.md`
-- `docs/planning-with-files/progress.md`
-
-## Plan
-
-1. 在 `fusion_model` 中引入 attention 融合层（learnable query + cross-attention）。
-2. 保持输出字典兼容：保留 `logits_fuse/logits_img/logits_tls/gate`，其中 `gate` 改为 attention 到 image token 的权重。
-3. 同步模型构造参数 `num_heads` 到 train/evaluate/stacking/moe。
-4. 增加/更新单测，确保融合逻辑为 attention 路径并维持输出形状约束。
-5. 运行针对性测试与最小训练验证，记录结果到 findings/progress。
-
----
-
-# ETBERT Nested Tensor Warning 修复计划（2026-03-22）
-
-## Goal
-
-消除 `ETBertBackbone` 在 PyTorch `TransformerEncoder` 上触发的 nested tensor prototype warning，不改变模型前向语义。
-
-## Status
-
-- Completed on 2026-03-22
-
-## Scope
-
-- `src/models/etbert_backbone.py`
-- `tests/models/test_pretrained_backbones.py`
-- `docs/planning-with-files/findings.md`
-- `docs/planning-with-files/progress.md`
-
-## Plan
-
-1. 先补失败测试，锁定 `TransformerEncoder.enable_nested_tensor` 必须关闭。
-2. 在 `ETBertBackbone` 构造 encoder 时显式传 `enable_nested_tensor=False`。
-3. 运行 backbone 相关测试与语法校验，确认不改前向输出约束。
-
----
-
-# 训练早停计划（2026-03-22）
-
-## Goal
-
-为训练过程增加按 `val_acc` 监控的 early stopping，减少无效 epoch。
-
-## Status
-
-- Completed on 2026-03-22
-
-## Scope
-
-- `src/train.py`
-- `src/common/structured_logging.py`
 - `tests/pipeline/test_train_eval_report.py`
+- `docs/commands/session-full-experiments.md`
+- `docs/planning-with-files/task_plan.md`
 - `docs/planning-with-files/findings.md`
 - `docs/planning-with-files/progress.md`
+- `docs/superpowers/specs/2026-03-21-stage1-accuracy-training-design.md`
+- `docs/superpowers/plans/2026-03-21-stage1-accuracy-training-plan.md`
 
 ## Plan
 
-1. 先补失败测试，锁定 `patience + min_delta` 配置和提前停止行为。
-2. 在 `train.py` 增加 `--early-stopping-patience` / `--early-stopping-min-delta` 参数，并按 `val_acc` 做停训判断。
-3. 增加 `early_stopping_triggered` 日志事件与配置落盘。
-4. 运行针对性测试与语法校验。
+1. 先补训练/评估测试，约束分层 validation、可配置 `best_metric` 和二分类 threshold calibration。
+2. 在 `src/train.py` 中把派生 val 改为按 label 分层抽样，并支持按 `val_acc` 选择 best checkpoint。
+3. 在 `src.train` / `src.evaluate` 中增加二分类 decision threshold 的持久化与复用。
+4. 更新实验文档与 planning-with-files 记录，并运行针对性回归。

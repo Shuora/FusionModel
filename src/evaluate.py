@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.run_dir import resolve_run_dir
 from src.runtime_device import resolve_runtime_device
 
 
@@ -59,6 +60,18 @@ def compute_classification_metrics(y_true: np.ndarray, pred: np.ndarray, num_cla
     return metrics
 
 
+def predict_from_logits(
+    logits_np: np.ndarray,
+    num_classes: int,
+    decision_threshold: float | None = None,
+) -> np.ndarray:
+    if int(num_classes) == 2 and decision_threshold is not None:
+        logits_tensor = torch.from_numpy(np.asarray(logits_np, dtype=np.float32))
+        positive_probs = torch.softmax(logits_tensor, dim=1)[:, 1].cpu().numpy()
+        return (positive_probs >= float(decision_threshold)).astype(np.int64)
+    return np.argmax(logits_np, axis=1)
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate TLS fusion model")
     parser.add_argument("--run-dir", required=True)
@@ -68,7 +81,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--allow-split-fallback", action="store_true", default=False)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    run_dir = Path(args.run_dir)
+    run_dir = resolve_run_dir(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     device_preference = args.device or cfg.get("device_requested") or cfg.get("device", "auto")
     requested_device, resolved_device, device_fallback = resolve_runtime_device(device_preference)
@@ -125,7 +138,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     model = MobileViTETBertFusionClassifier(
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
-        num_heads=int(cfg.get("num_heads", 4)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
@@ -137,10 +149,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     else:
         logits = out["logits_fuse"]
 
-    logits_np = logits.cpu().numpy()
-    pred = np.argmax(logits_np, axis=1)
-
     num_classes = int(cfg["num_classes"])
+    decision_threshold = None
+    if num_classes == 2:
+        raw_threshold = ckpt.get("decision_threshold", cfg.get("decision_threshold"))
+        if raw_threshold is not None:
+            decision_threshold = float(raw_threshold)
+
+    logits_np = logits.cpu().numpy()
+    pred = predict_from_logits(
+        logits_np=logits_np,
+        num_classes=num_classes,
+        decision_threshold=decision_threshold,
+    )
     metrics = compute_classification_metrics(y_true=y_eval, pred=pred, num_classes=num_classes)
     gate_mean = float(out["gate"].mean().item())
     labels = list(range(num_classes))
@@ -164,6 +185,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "gate_mean": gate_mean,
         "num_samples": int(mask.sum()),
         "checkpoint": ckpt_name,
+        "decision_threshold": decision_threshold,
         "device_requested": requested_device,
         "device": resolved_device,
         "device_fallback": device_fallback,

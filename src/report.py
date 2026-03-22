@@ -12,13 +12,15 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
+from src.run_dir import resolve_run_dir
+
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate run report")
     parser.add_argument("--run-dir", required=True)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    run_dir = Path(args.run_dir)
+    run_dir = resolve_run_dir(args.run_dir)
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     metrics = pd.read_csv(run_dir / "metrics.csv")
 
@@ -28,9 +30,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     _plot_learning_curve(metrics, curve_path)
 
     eval_payload, metric_source, metric_path = _discover_metric_payload(run_dir)
-    best_metric = str(cfg.get("best_metric", "val_macro_f1"))
-    best_metric_column = best_metric if best_metric in metrics.columns else "val_macro_f1"
-    best_row = metrics.sort_values(best_metric_column, ascending=False).iloc[0]
+    best_row = metrics.sort_values("val_macro_f1", ascending=False).iloc[0]
 
     lines = [
         f"# Run Report: {cfg['run_id']}",
@@ -43,20 +43,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "",
         "## Best Validation",
         f"- Best Epoch: {int(best_row['epoch'])}",
-        f"- Best Metric: {best_metric_column}",
         f"- Val Macro-F1: {best_row['val_macro_f1']:.4f}",
         f"- Val Acc: {best_row['val_acc']:.4f}",
         "",
     ]
-    if "val_acc_at_decision_threshold" in metrics.columns:
-        calibrated_acc = best_row.get("val_acc_at_decision_threshold")
-        if pd.notna(calibrated_acc):
-            lines.extend(
-                [
-                    f"- Val Acc @ Decision Threshold: {float(calibrated_acc):.4f}",
-                    "",
-                ]
-            )
     if eval_payload:
         num_samples = eval_payload.get("num_samples", eval_payload.get("n_test_samples", 0))
         lines.extend(

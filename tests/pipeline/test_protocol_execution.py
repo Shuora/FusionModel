@@ -413,6 +413,40 @@ def test_stage1_binary_execute_forwards_device_and_num_workers_to_train(tmp_path
     assert "2" in captured["argv"]
 
 
+def test_stage1_binary_execute_forwards_best_metric_to_train(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
+            [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--best-metric",
+            "val_acc",
+        ]
+    )
+    assert code == 0
+    assert "--best-metric" in captured["argv"]
+    assert "val_acc" in captured["argv"]
+
+
 def test_stage1_binary_execute_defaults_num_workers_to_four(tmp_path: Path, monkeypatch):
     from src.experiments import stage1_binary as stage1_mod
 

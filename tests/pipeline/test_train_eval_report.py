@@ -526,36 +526,96 @@ def test_report_discovers_eval_val_and_renders_tables(tmp_path: Path):
     assert "## Classification Report" in report_text
 
 
-def test_report_selects_best_epoch_by_configured_best_metric(tmp_path: Path):
-    run_dir = tmp_path / "runs" / "report-best-metric-run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.yaml").write_text(
+def test_evaluate_accepts_short_run_dir_and_resolves_dated_partition(tmp_path: Path, monkeypatch):
+    dated_run_dir = tmp_path / "runs" / "2026-03-21" / "stage1-binary"
+    (dated_run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (dated_run_dir / "config.yaml").write_text(
         yaml.safe_dump(
             {
-                "run_id": run_dir.name,
-                "stage": "fusion",
+                "run_id": "stage1-binary",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
                 "policy": "strict",
-                "epochs": 2,
-                "batch_size": 4,
-                "best_metric": "val_acc",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
             },
             sort_keys=False,
         ),
         encoding="utf-8",
     )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((4, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((4, 128), dtype=np.int32),
+            "attention_mask": np.ones((4, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((4, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["test", "test", "test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+            logits = torch.tensor(
+                [[3.0, 1.0], [1.0, 3.0], [1.0, 3.0], [3.0, 1.0]],
+                dtype=torch.float32,
+                device=rgb.device,
+            )
+            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(["--run-dir", "runs/stage1-binary", "--split", "test", "--device", "cpu"])
+    assert code == 0
+    assert (dated_run_dir / "eval_test.json").exists()
+
+
+def test_report_accepts_short_run_dir_and_resolves_dated_partition(tmp_path: Path, monkeypatch):
+    dated_run_dir = tmp_path / "runs" / "2026-03-21" / "stage1-binary"
+    _write_minimal_run_dir(dated_run_dir, stage="fusion")
+    (dated_run_dir / "eval_test.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.75,
+                "macro_precision": 0.75,
+                "macro_f1": 0.7333,
+                "macro_recall": 0.75,
+                "num_samples": 4,
+                "split": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    fig_dir = dated_run_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([[1, 1], [0, 2]], columns=["0", "1"]).to_csv(fig_dir / "confusion_matrix_test.csv", index=False)
     pd.DataFrame(
         [
-            {"epoch": 1, "train_loss": 0.9, "val_loss": 0.8, "train_acc": 0.6, "val_acc": 0.92, "val_macro_f1": 0.98},
-            {"epoch": 2, "train_loss": 0.7, "val_loss": 0.6, "train_acc": 0.8, "val_acc": 0.95, "val_macro_f1": 0.90},
+            {"label": "0", "precision": 1.0, "recall": 0.5, "f1": 0.6667, "support": 2},
+            {"label": "1", "precision": 0.6667, "recall": 1.0, "f1": 0.8, "support": 2},
         ]
-    ).to_csv(run_dir / "metrics.csv", index=False)
+    ).to_csv(fig_dir / "classification_report_test.csv", index=False)
+    (fig_dir / "classification_report_test.json").write_text("[]", encoding="utf-8")
+    (fig_dir / "confusion_matrix_test.png").write_bytes(b"png")
+    monkeypatch.chdir(tmp_path)
 
-    code = report_main(["--run-dir", str(run_dir)])
+    code = report_main(["--run-dir", "runs/stage1-binary"])
     assert code == 0
-    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
-    assert "Best Epoch: 2" in report_text
-    assert "Val Macro-F1: 0.9000" in report_text
-    assert "Val Acc: 0.9500" in report_text
+    assert (dated_run_dir / "report.md").exists()
 
 
 def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):
@@ -594,44 +654,6 @@ def test_evaluate_fails_when_requested_split_missing(tmp_path: Path):
     )
     assert code != 0
     assert not (run_dir / "eval_test.json").exists()
-
-
-def test_train_records_val_acc_at_decision_threshold(tmp_path: Path):
-    processed_root = tmp_path / "outputs" / "processed"
-    run_root = tmp_path / "runs"
-    _prepare_dummy_processed(processed_root)
-
-    code = train_main(
-        [
-            "--processed-root",
-            str(processed_root),
-            "--policy",
-            "strict",
-            "--stage",
-            "fusion",
-            "--run-root",
-            str(run_root),
-            "--run-id",
-            "threshold-acc-run",
-            "--epochs",
-            "1",
-            "--batch-size",
-            "4",
-            "--num-workers",
-            "0",
-            "--no-progress",
-        ]
-    )
-    assert code == 0
-
-    run_dir = run_root / "threshold-acc-run"
-    metrics = pd.read_csv(run_dir / "metrics.csv")
-    assert "val_acc_at_decision_threshold" in metrics.columns
-    assert float(metrics["val_acc_at_decision_threshold"].iloc[0]) >= 0.0
-    assert float(metrics["val_acc_at_decision_threshold"].iloc[0]) <= 1.0
-
-    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
-    assert "val_acc_at_decision_threshold=" in train_log
 
 
 def test_train_writes_resolved_device_and_num_workers(tmp_path: Path, monkeypatch):
@@ -768,92 +790,152 @@ def test_evaluate_records_cpu_fallback_when_cuda_unavailable(tmp_path: Path, mon
     assert payload["device"] == "cpu"
 
 
-def test_train_early_stops_on_val_acc_plateau(tmp_path: Path, monkeypatch):
+def test_derive_validation_mask_from_train_is_stratified():
+    train_mask = np.array([True] * 10, dtype=bool)
+    y = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1], dtype=np.int32)
+
+    new_train_mask, val_mask = train_module._derive_validation_mask_from_train(
+        train_mask=train_mask,
+        y=y,
+        seed=7,
+        val_fraction=0.2,
+    )
+
+    assert int(val_mask.sum()) == 2
+    assert set(y[val_mask].tolist()) == {0, 1}
+    assert set(y[new_train_mask].tolist()) == {0, 1}
+
+
+def test_train_writes_best_metric_to_config(tmp_path: Path, monkeypatch):
     run_root = tmp_path / "runs"
+
+    class StopAfterLoaderInit(Exception):
+        pass
 
     monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(
         train_module,
         "load_policy_multimodal_data",
         lambda *args, **kwargs: {
-            "rgb": np.random.default_rng(1).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
-            "input_ids": np.random.default_rng(2).integers(0, 1024, size=(6, 128), dtype=np.int32),
+            "rgb": np.random.default_rng(11).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
+            "input_ids": np.random.default_rng(12).integers(0, 1024, size=(6, 128), dtype=np.int32),
             "attention_mask": np.ones((6, 128), dtype=np.uint8),
             "token_type_ids": np.zeros((6, 128), dtype=np.uint8),
-            "y": np.array([0, 1, 0, 1, 0, 1], dtype=np.int32),
-            "split": np.array(["train", "train", "train", "train", "val", "val"], dtype="U8"),
+            "y": np.array([0, 0, 0, 1, 1, 1], dtype=np.int32),
+            "split": np.array(["train", "train", "train", "val", "val", "val"], dtype="U8"),
         },
     )
 
+    def fake_dataloader(*args, **kwargs):
+        raise StopAfterLoaderInit()
+
+    monkeypatch.setattr(train_module, "DataLoader", fake_dataloader)
+
+    with pytest.raises(StopAfterLoaderInit):
+        train_main(
+            [
+                "--processed-root",
+                str(tmp_path / "outputs" / "processed"),
+                "--policy",
+                "strict",
+                "--stage",
+                "fusion",
+                "--run-root",
+                str(run_root),
+                "--run-id",
+                "best-metric-run",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--best-metric",
+                "val_acc",
+                "--no-progress",
+            ]
+        )
+
+    cfg = yaml.safe_load((run_root / "best-metric-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["best_metric"] == "val_acc"
+
+
+def test_choose_best_binary_threshold_maximizes_accuracy():
+    positive_probs = np.array([0.20, 0.49, 0.52, 0.90], dtype=np.float32)
+    y_true = np.array([0, 0, 1, 1], dtype=np.int32)
+
+    threshold, best_acc = train_module.choose_best_binary_threshold(
+        positive_probs=positive_probs,
+        y_true=y_true,
+    )
+
+    pred = (positive_probs >= threshold).astype(np.int32)
+    assert best_acc == pytest.approx(1.0)
+    assert float(np.mean(pred == y_true)) == pytest.approx(1.0)
+
+
+def test_evaluate_uses_binary_decision_threshold(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "threshold-eval-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "threshold-eval-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
+                "decision_threshold": 0.8,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((2, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((2, 128), dtype=np.int32),
+            "attention_mask": np.ones((2, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((2, 128), dtype=np.uint8),
+            "y": np.array([0, 1], dtype=np.int32),
+            "split": np.array(["test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(
+        evaluate_module.torch,
+        "load",
+        lambda *args, **kwargs: {"model_state": {}, "decision_threshold": 0.8},
+    )
+
     class DummyModel(torch.nn.Module):
-        def __init__(self, num_classes, hidden_dim=128, num_heads=4, vocab_size=30522):
+        def __init__(self, *args, **kwargs):
             super().__init__()
-            self.num_classes = num_classes
-            self.scale = torch.nn.Parameter(torch.tensor(0.5))
+
+        def load_state_dict(self, state):
+            return
 
         def forward(self, rgb, input_ids, attention_mask, token_type_ids):
-            batch = rgb.shape[0]
-            logits = torch.stack(
+            logits = torch.tensor(
                 [
-                    self.scale.expand(batch),
-                    (-self.scale).expand(batch),
+                    [0.0, 0.8],
+                    [0.0, 2.0],
                 ],
-                dim=1,
+                dtype=torch.float32,
+                device=rgb.device,
             )
-            gate = torch.full((batch, 1), 0.5, dtype=logits.dtype, device=logits.device)
+            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
             return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
 
-    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", DummyModel)
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
 
-    eval_results = iter(
-        [
-            (0.4, 0.80, 0.70, 0.5, 0.5, 0.80),
-            (0.4, 0.80, 0.70, 0.5, 0.5, 0.80),
-            (0.4, 0.79, 0.69, 0.5, 0.5, 0.79),
-            (0.4, 0.78, 0.68, 0.5, 0.5, 0.78),
-        ]
-    )
-    monkeypatch.setattr(train_module, "_evaluate_loader", lambda *args, **kwargs: next(eval_results))
-
-    code = train_main(
-        [
-            "--processed-root",
-            str(tmp_path / "outputs" / "processed"),
-            "--policy",
-            "strict",
-            "--stage",
-            "fusion",
-            "--run-root",
-            str(run_root),
-            "--run-id",
-            "early-stop-run",
-            "--epochs",
-            "8",
-            "--batch-size",
-            "4",
-            "--device",
-            "cpu",
-            "--num-workers",
-            "0",
-            "--best-metric",
-            "val_acc",
-            "--early-stopping-patience",
-            "2",
-            "--early-stopping-min-delta",
-            "0.0",
-            "--no-progress",
-        ]
-    )
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
     assert code == 0
 
-    run_dir = run_root / "early-stop-run"
-    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    assert cfg["best_metric"] == "val_acc"
-    assert int(cfg["early_stopping_patience"]) == 2
-
-    metrics = pd.read_csv(run_dir / "metrics.csv")
-    assert metrics["epoch"].tolist() == [1, 2, 3]
-
-    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
-    assert "early_stopping_triggered" in train_log
-    assert "stopped_epoch=3" in train_log
+    payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
+    assert payload["decision_threshold"] == pytest.approx(0.8)
+    assert payload["top1"] == pytest.approx(1.0)

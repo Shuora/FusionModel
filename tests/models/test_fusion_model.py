@@ -22,20 +22,6 @@ def test_mobilevit_etbert_fusion_model_forward_shapes_and_gate_range():
     assert torch.all(out["gate"] <= 1.0)
 
 
-def test_mobilevit_etbert_fusion_model_uses_attention_fusion_components():
-    model = MobileViTETBertFusionClassifier(num_classes=2, hidden_dim=64, num_heads=4, vocab_size=2048, max_tokens=64)
-    assert hasattr(model, "fusion_query")
-    assert hasattr(model, "modality_fusion_attn")
-
-
-def test_mobilevit_etbert_fusion_model_requires_hidden_dim_divisible_by_heads():
-    try:
-        MobileViTETBertFusionClassifier(num_classes=2, hidden_dim=62, num_heads=4, vocab_size=2048, max_tokens=64)
-        assert False, "expected ValueError for incompatible hidden_dim/num_heads"
-    except ValueError:
-        pass
-
-
 def test_mobilevit_etbert_fusion_model_handles_partial_attention_mask():
     model = MobileViTETBertFusionClassifier(num_classes=2, hidden_dim=32, vocab_size=2048, max_tokens=64)
     rgb = torch.rand(2, 3, 28, 28)

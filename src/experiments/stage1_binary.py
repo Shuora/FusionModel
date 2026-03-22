@@ -362,6 +362,7 @@ def run_stage1_protocol(
     seed: int,
     device: str,
     num_workers: int,
+    best_metric: str,
     protocol_mode: str,
 ) -> int:
     _log("协议执行模式已启用")
@@ -395,6 +396,8 @@ def run_stage1_protocol(
             device,
             "--num-workers",
             str(num_workers),
+            "--best-metric",
+            str(best_metric),
             "--datasets",
             *list(REQUIRED_STAGE1_DATASETS),
             "--session-filter-manifest",
@@ -429,6 +432,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
     parser.add_argument("--protocol-mode", default="paper_balanced", choices=["paper_strict", "paper_balanced"])
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -452,6 +456,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             seed=args.seed,
             device=args.device,
             num_workers=args.num_workers,
+            best_metric=args.best_metric,
             protocol_mode=args.protocol_mode,
         )
 

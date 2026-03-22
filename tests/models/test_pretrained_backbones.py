@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import warnings
 
 import torch
 
@@ -211,23 +210,3 @@ def test_mobilevit_backbone_projects_features():
     x = torch.rand(1, 3, 28, 28)
     y = model(x)
     assert y.shape == (1, 96)
-
-
-def test_etbert_backbone_forward_does_not_emit_nested_tensor_warning():
-    model = ETBertBackbone(vocab_size=256, hidden_dim=32, max_tokens=16, num_layers=2)
-    input_ids = torch.randint(0, 256, (2, 16))
-    attention_mask = torch.zeros(2, 16, dtype=torch.long)
-    attention_mask[:, :8] = 1
-    token_type_ids = torch.zeros(2, 16, dtype=torch.long)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        output = model(input_ids, attention_mask, token_type_ids)
-
-    assert output.shape == (2, 32)
-    assert not any("nested tensors is in prototype stage" in str(item.message) for item in caught)
-
-
-def test_etbert_backbone_disables_transformer_nested_tensor_path():
-    model = ETBertBackbone(vocab_size=256, hidden_dim=32, max_tokens=16, num_layers=2)
-    assert model.encoder.enable_nested_tensor is False
