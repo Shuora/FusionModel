@@ -341,6 +341,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
     parser.add_argument("--grad-explode-threshold", type=float, default=1e4)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-progress", action="store_true")
@@ -353,6 +355,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     torch.manual_seed(args.seed)
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience must be >= 0")
+    if args.early_stopping_min_delta < 0:
+        raise ValueError("--early-stopping-min-delta must be >= 0")
 
     requested_device, resolved_device, device_fallback = resolve_runtime_device(args.device)
     device = torch.device(resolved_device)
@@ -428,6 +434,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "device_fallback": device_fallback,
         "num_workers": args.num_workers,
         "best_metric": args.best_metric,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_min_delta": args.early_stopping_min_delta,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -453,6 +461,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "device_fallback": device_fallback,
             "num_workers": args.num_workers,
             "best_metric": args.best_metric,
+            "early_stopping_patience": args.early_stopping_patience,
+            "early_stopping_min_delta": args.early_stopping_min_delta,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -578,6 +588,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     show_progress = not args.no_progress
     loss_stage = "warmup" if args.stage == "warmup" else "fusion"
     best_decision_threshold: float | None = None
+    early_stopping_enabled = args.early_stopping_patience > 0
+    no_improve_epochs = 0
 
     for epoch in range(1, args.epochs + 1):
         start = time.time()
@@ -736,11 +748,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             val_acc=val_acc,
             val_macro_f1=val_macro_f1,
         )
-        if current_best_value >= best_value:
+        improved = current_best_value > (best_value + args.early_stopping_min_delta)
+        if improved:
             best_value = current_best_value
             best_decision_threshold = val_decision_threshold
             cfg["decision_threshold"] = best_decision_threshold
             cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+            no_improve_epochs = 0
             best_path = ckpt_dir / "best.ckpt"
             torch.save(
                 {
@@ -766,6 +780,24 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "sha8": _sha8(best_path),
                 },
             )
+        elif early_stopping_enabled:
+            no_improve_epochs += 1
+
+        if early_stopping_enabled and no_improve_epochs >= args.early_stopping_patience:
+            log(
+                "info",
+                "model",
+                "early_stopping_triggered",
+                {
+                    "stopped_epoch": epoch,
+                    "best_metric": args.best_metric,
+                    "best_metric_value": f"{best_value:.4f}",
+                    "bad_epochs": no_improve_epochs,
+                    "patience": args.early_stopping_patience,
+                    "min_delta": args.early_stopping_min_delta,
+                },
+            )
+            break
 
     pd.DataFrame(rows).to_csv(metrics_path, index=False)
     log("success", "save", "metrics_saved", {"path": str(metrics_path)})

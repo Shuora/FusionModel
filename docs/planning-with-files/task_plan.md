@@ -321,3 +321,30 @@
 1. 先补失败测试，锁定 `TransformerEncoder.enable_nested_tensor` 必须关闭。
 2. 在 `ETBertBackbone` 构造 encoder 时显式传 `enable_nested_tensor=False`。
 3. 运行 backbone 相关测试与语法校验，确认不改前向输出约束。
+
+---
+
+# 训练早停计划（2026-03-22）
+
+## Goal
+
+为训练过程增加按 `val_acc` 监控的 early stopping，减少无效 epoch。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `src/train.py`
+- `src/common/structured_logging.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 先补失败测试，锁定 `patience + min_delta` 配置和提前停止行为。
+2. 在 `train.py` 增加 `--early-stopping-patience` / `--early-stopping-min-delta` 参数，并按 `val_acc` 做停训判断。
+3. 增加 `early_stopping_triggered` 日志事件与配置落盘。
+4. 运行针对性测试与语法校验。
