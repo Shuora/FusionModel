@@ -269,3 +269,13 @@
   - `moe.py`
 - 为防止错误配置，模型初始化新增约束：
   - `hidden_dim % num_heads == 0`，否则抛 `ValueError`
+
+## ETBERT Nested Tensor Warning 修复结论（2026-03-22）
+
+- warning 根因位于 `ETBertBackbone`：
+  - `nn.TransformerEncoder(...)` 默认 `enable_nested_tensor=True`
+  - 在部分 PyTorch 运行路径下会触发 `nested tensors is in prototype stage` 的用户警告
+- 本次修复采用最小策略：
+  - 显式设置 `enable_nested_tensor=False`
+  - 不修改 encoder 层数、注意力头数、mask 逻辑或 pooling 逻辑
+- 该修复的目标是消除日志污染，而不是调整模型行为；前向语义保持不变。

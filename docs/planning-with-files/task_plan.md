@@ -296,3 +296,28 @@
 3. 同步模型构造参数 `num_heads` 到 train/evaluate/stacking/moe。
 4. 增加/更新单测，确保融合逻辑为 attention 路径并维持输出形状约束。
 5. 运行针对性测试与最小训练验证，记录结果到 findings/progress。
+
+---
+
+# ETBERT Nested Tensor Warning 修复计划（2026-03-22）
+
+## Goal
+
+消除 `ETBertBackbone` 在 PyTorch `TransformerEncoder` 上触发的 nested tensor prototype warning，不改变模型前向语义。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `src/models/etbert_backbone.py`
+- `tests/models/test_pretrained_backbones.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 先补失败测试，锁定 `TransformerEncoder.enable_nested_tensor` 必须关闭。
+2. 在 `ETBertBackbone` 构造 encoder 时显式传 `enable_nested_tensor=False`。
+3. 运行 backbone 相关测试与语法校验，确认不改前向输出约束。
