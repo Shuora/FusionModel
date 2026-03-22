@@ -220,3 +220,22 @@
     - `python -m src.evaluate --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast --split test --device cpu`
     - `python -m src.report --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast`
   - 产物核对通过：train.log 与 report.md 均出现新增字段。
+
+## 2026-03-22
+
+- 新建 worktree `.worktrees/attention-fusion` 与分支 `feat-attention-fusion`，用于注意力融合改造。
+- 已完成现状确认：
+  - `fusion_model` 当前为 gate 加权融合，不是 attention 融合；
+  - `stacking/moe/train/evaluate` 均依赖 `out["gate"]` 字段，改造需保持兼容输出。
+- 已建立改造计划，下一步开始落地 attention 融合实现与参数透传。
+- 已完成代码改造：
+  - `fusion_model` 从 gate 线性融合切换为 query+cross-attention 融合；
+  - 保留 `gate` 输出兼容下游；
+  - `num_heads` 参数同步到 train/evaluate/stacking/moe 模型构造。
+- 已完成验证：
+  - `python -m py_compile src/models/fusion_model.py src/train.py src/evaluate.py src/stacking.py src/moe.py tests/models/test_fusion_model.py`
+  - `pytest -q tests/models/test_fusion_model.py`（`4 passed`）
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k train_records_val_acc_at_decision_threshold`（`1 passed`）
+  - 自定义 smoke（`num_workers=0`）：
+    - train + stacking 全链路通过
+    - train + moe 全链路通过

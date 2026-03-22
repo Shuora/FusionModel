@@ -265,3 +265,34 @@
 3. 调整 `report` 的 best row 选择逻辑：优先使用 `config.best_metric` 对应列，缺失时回退 `val_macro_f1`。
 4. 运行针对性测试与一次端到端 stage1 binary 训练+评估+报告，确认结果可复现并与日志一致。
 5. 提交分支、合并到 `dev`，删除 worktree 与分支。
+
+---
+
+# Attention Fusion 改造计划（2026-03-22）
+
+## Goal
+
+将当前二分类主干从门控线性融合（`gate * img + (1-gate) * tls`）改为注意力层面的融合，同时保持训练与下游 `stacking/moe` 接口兼容。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `src/models/fusion_model.py`
+- `src/train.py`
+- `src/evaluate.py`
+- `src/stacking.py`
+- `src/moe.py`
+- `tests/models/test_fusion_model.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 在 `fusion_model` 中引入 attention 融合层（learnable query + cross-attention）。
+2. 保持输出字典兼容：保留 `logits_fuse/logits_img/logits_tls/gate`，其中 `gate` 改为 attention 到 image token 的权重。
+3. 同步模型构造参数 `num_heads` 到 train/evaluate/stacking/moe。
+4. 增加/更新单测，确保融合逻辑为 attention 路径并维持输出形状约束。
+5. 运行针对性测试与最小训练验证，记录结果到 findings/progress。

@@ -241,3 +241,31 @@
   - `runs/2026-03-22/stage1-binary-e2e-accfix-fast`
   - 训练日志已出现 `val_acc_at_decision_threshold=...`
   - 报告已出现 `Best Metric: val_acc` 与 `Val Acc @ Decision Threshold: ...`
+
+## Attention Fusion 改造发现（2026-03-22）
+
+- 当前 `MobileViTETBertFusionClassifier` 融合方式是单标量门控：
+  - `gate = MLP([img_feature, tls_feature])`
+  - `fused = gate * img + (1-gate) * tls`
+- 该实现不属于注意力层面的融合；要改成 attention，最小可行方案是：
+  - 将 `img_feature` 与 `tls_feature` 视作两个 modality token；
+  - 使用 learnable query 对这两个 token 做 cross-attention，输出 fused feature。
+- 下游依赖兼容要求：
+  - `train/evaluate/stacking/moe` 都读取 `out["gate"]`，因此新实现仍需返回 `gate`，可定义为 attention 对 image token 的权重。
+
+## Attention Fusion 改造实现结论（2026-03-22）
+
+- `src/models/fusion_model.py` 已改为注意力融合：
+  - 输入 token：`[img_feature, tls_feature]`
+  - 融合机制：learnable query + `MultiheadAttention` cross-attention
+  - 融合后：`LayerNorm + MLP + LayerNorm`
+- 输出接口保持兼容：
+  - `logits_fuse/logits_img/logits_tls` 保持不变
+  - `gate` 保持 `(B,1)`，定义为 attention 分配到 image token 的权重
+- `num_heads` 已从训练配置透传到各入口：
+  - `train.py`
+  - `evaluate.py`
+  - `stacking.py`
+  - `moe.py`
+- 为防止错误配置，模型初始化新增约束：
+  - `hidden_dim % num_heads == 0`，否则抛 `ValueError`

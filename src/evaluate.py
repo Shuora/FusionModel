@@ -125,6 +125,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     model = MobileViTETBertFusionClassifier(
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
+        num_heads=int(cfg.get("num_heads", 4)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
