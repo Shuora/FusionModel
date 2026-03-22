@@ -5,10 +5,10 @@ from typing import Any, Dict, Optional
 
 
 _LEVEL_MAP = {
-    "success": ("✅", "成功"),
-    "warning": ("⚠️", "警告"),
-    "error": ("❌", "错误"),
-    "info": ("ℹ️", "信息"),
+    "success": ("✅", "SUCCESS"),
+    "warning": ("⚠️", "WARNING"),
+    "error": ("❌", "ERROR"),
+    "info": ("ℹ️", "INFO"),
 }
 
 _MODULE_MAP = {
