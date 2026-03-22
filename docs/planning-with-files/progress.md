@@ -1,5 +1,35 @@
 # Progress
 
+## 2026-03-22
+
+- 启动“模型结构调研”任务，已读取：
+  - `AGENTS.md`
+  - `docs/planning-with-files/{task_plan,findings,progress}.md`
+- 已定位模型核心目录与入口：
+  - `src/models/`
+  - `src/train.py`
+  - `tests/models/`
+- 已检查工作区变更状态：
+  - 当前有未提交修改，但本轮任务保持只读，不影响后续模型结构梳理。
+- 已完成第一轮模型源码阅读：
+  - `src/models/fusion_model.py`
+  - `src/models/mobilevit_backbone.py`
+  - `src/models/etbert_backbone.py`
+- 已确认当前模型是“MobileViT 图像分支 + ET-BERT 风格序列分支 + gate 融合 + 三头分类输出”的结构。
+- 已补读模型测试：
+  - `tests/models/test_fusion_model.py`
+  - `tests/models/test_pretrained_backbones.py`
+  并确认测试重点集中在输出 shape、gate 范围、ET-BERT checkpoint 映射与容错。
+- 已补读训练与数据接入链路：
+  - `src/train.py`
+  - `src/pipeline_data.py`
+  - `README.md`
+- 已确认训练时的样本组织与 loss 逻辑：
+  - 输入为 `rgb + input_ids + attention_mask + token_type_ids`
+  - `warmup` 阶段只监督两个单模态头
+  - `fusion` 阶段以融合头为主，同时保留两个辅助头损失
+- 本轮结论已足够向用户输出完整模型结构说明，无需改动代码或运行测试。
+
 ## 2026-03-18
 
 - 读取并核对了 `README.md`、`docs/commands/session-full-experiments.md` 与当前实现代码（MobileViT / ET-BERT / stage1 / stage2）。
@@ -199,69 +229,95 @@
   - 结果：`4 passed`
 - 额外执行快速兼容性检查，确认 `config_summary` 等英文 event code 仍在日志文本中保留。
 
-- 在独立 worktree `.worktrees/stage1-acc-fix` 创建分支 `fix-stage1-acc-report`，隔离本次修复。
-- 已完成问题复盘：
-  - 最新二分类 test 指标约 `96.5%`；
-  - 训练日志缺少阈值口径 acc；
-  - `report` best row 忽略 `best_metric` 配置。
-- 已建立本轮实施计划，下一步按 TDD 先补失败测试再改实现。
-- 已按 TDD 新增并跑红：
-  - `test_report_selects_best_epoch_by_configured_best_metric`
-  - `test_train_records_val_acc_at_decision_threshold`
-- 已完成实现：
-  - `src/train.py` 增加 `val_acc_at_decision_threshold` 计算、日志与 CSV 输出；
-  - `src/train.py` 增加 `--best-metric` 与 best checkpoint 选择逻辑；
-  - `src/report.py` 按 `config.best_metric` 选 best epoch，并展示阈值口径 acc。
-- 已完成验证：
-  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'report_selects_best_epoch_by_configured_best_metric or train_records_val_acc_at_decision_threshold'` 通过；
-  - `python -m py_compile src/train.py src/report.py` 通过；
-  - 端到端快速链路：
-    - `python -m src.train ... --run-id stage1-binary-e2e-accfix-fast --train-max-samples 256 --num-workers 0`
-    - `python -m src.evaluate --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast --split test --device cpu`
-    - `python -m src.report --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast`
-  - 产物核对通过：train.log 与 report.md 均出现新增字段。
+## 2026-03-21
+
+- 根据用户反馈“run 路径必须带时间线，不要假定 `runs/<name>` 直接存在”，已定位到根因：
+  - `train` 默认会把 run 写到 `runs/YYYY-MM-DD/<auto_run_id>`
+  - `evaluate/report` 之前不会解析这种日期分区路径，只接受完整目录
+- 按 TDD 新增并通过：
+  - `tests/pipeline/test_run_dir_resolution.py`
+  - `test_evaluate_accepts_short_run_dir_and_resolves_dated_partition`
+  - `test_report_accepts_short_run_dir_and_resolves_dated_partition`
+- 新增 `src/run_dir.py`，并接入：
+  - `src/evaluate.py`
+  - `src/report.py`
+- 当前行为：
+  - 传完整目录仍可用
+  - 传 `runs/<run-id>` 时，会自动解析到最新的 `runs/YYYY-MM-DD/<run-id>`
+- 执行并通过回归命令：
+  - `pytest -q tests/pipeline/test_run_dir_resolution.py tests/pipeline/test_train_eval_report.py -k 'accepts_short_run_dir_and_resolves_dated_partition or resolve_run_dir'`
+  - 结果：`5 passed, 13 deselected`
+
+## 2026-03-21
+
+- 按最新用户问题，对最新 run `runs/2026-03-21/stage1-binary-195511` 做了只读排查。
+- 已核对产物：
+  - `config.yaml`
+  - `metrics.csv`
+  - `train.log`
+  - `eval_test.json`
+  - `report.md`
+  - `outputs/protocol/stage1_binary_manifest.csv`
+- 已确认最新 run 的关键结果：
+  - 末轮训练：`train_acc=0.9623`，`train_macro_f1=0.9566`
+  - 最佳验证：`epoch=29`，`val_acc=0.9626`，`val_macro_f1=0.9564`
+  - 测试：`top1=0.9639`，`macro_f1=0.9583`
+- 已确认这次 run 的验证集不是预先协议固定，而是训练时从 train 内随机切出：
+  - `val_fraction=0.1`
+  - `train_samples=49796`
+  - `val_samples=5533`
+- 已汇总 manifest 分布与协议特征：
+  - 总样本 `69144`
+  - `train=55329`，`test=13815`
+  - `normal=21290`，`malicious=47854`
+  - test 组成中 `MFCP=67.0%`、`ISCX=30.7%`、`MTA=2.25%`
+  - 存在 `42` 个 `dataset+capture_id` 跨 train/test overlap
+- 当前结论已同步到 findings：
+  - 没发现明显实现 bug
+  - `96%` 更像当前任务定义、类不平衡、随机 val 切分与协议结构共同作用下的稳定平台
+
+## 2026-03-21
+
+- 根据用户要求“先提高当前协议下的 acc”，已完成方案收敛并写入：
+  - `docs/superpowers/specs/2026-03-21-stage1-accuracy-training-design.md`
+  - `docs/superpowers/plans/2026-03-21-stage1-accuracy-training-plan.md`
+- 在隔离 worktree `feat-stage1-accuracy` 中按 TDD 先新增并跑红：
+  - `test_derive_validation_mask_from_train_is_stratified`
+  - `test_train_writes_best_metric_to_config`
+  - `test_choose_best_binary_threshold_maximizes_accuracy`
+  - `test_evaluate_uses_binary_decision_threshold`
+- 已实现：
+  - `src/train.py` 支持 `--best-metric {val_macro_f1,val_acc}`
+  - 派生 validation 改为按 label 分层切分
+  - binary validation 阶段自动搜索最佳 threshold，并写入 checkpoint/config
+  - `src/evaluate.py` 读取并复用 binary `decision_threshold`
+- 已执行并通过定向回归：
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'stratified or best_metric or threshold'`
+  - 结果：`4 passed, 13 deselected`
+- 已执行并通过额外验证：
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'compute_classification_metrics_includes_paper_compatible_macro_f1 or evaluate_writes_classification_report_artifacts or report_renders_confusion_matrix_and_classification_tables'`
+  - 结果：`3 passed, 14 deselected`
+  - `python -m py_compile src/train.py src/evaluate.py`
+  - 结果：通过
+- 尝试运行更宽的 `tests/pipeline/test_train_eval_report.py` 回归，但在当前环境中真实训练路径耗时过长，本轮未等待到完整结束结果。
 
 ## 2026-03-22
 
-- 新建 worktree `.worktrees/attention-fusion` 与分支 `feat-attention-fusion`，用于注意力融合改造。
-- 已完成现状确认：
-  - `fusion_model` 当前为 gate 加权融合，不是 attention 融合；
-  - `stacking/moe/train/evaluate` 均依赖 `out["gate"]` 字段，改造需保持兼容输出。
-- 已建立改造计划，下一步开始落地 attention 融合实现与参数透传。
-- 已完成代码改造：
-  - `fusion_model` 从 gate 线性融合切换为 query+cross-attention 融合；
-  - 保留 `gate` 输出兼容下游；
-  - `num_heads` 参数同步到 train/evaluate/stacking/moe 模型构造。
-- 已完成验证：
-  - `python -m py_compile src/models/fusion_model.py src/train.py src/evaluate.py src/stacking.py src/moe.py tests/models/test_fusion_model.py`
-  - `pytest -q tests/models/test_fusion_model.py`（`4 passed`）
-  - `pytest -q tests/pipeline/test_train_eval_report.py -k train_records_val_acc_at_decision_threshold`（`1 passed`）
-  - 自定义 smoke（`num_workers=0`）：
-    - train + stacking 全链路通过
-    - train + moe 全链路通过
-
-## 2026-03-22
-
-- 新建 worktree `.worktrees/fix-etbert-warning` 与分支 `fix-etbert-warning`，隔离 ETBERT warning 修复。
-- 已完成 root cause 定位：
-  - warning 来自 `ETBertBackbone` 内部 `TransformerEncoder(enable_nested_tensor=True)` 的默认行为。
-- 已按 TDD 新增并跑红：
-  - `test_etbert_backbone_disables_transformer_nested_tensor_path`
-- 已完成实现：
-  - `src/models/etbert_backbone.py` 构造 `TransformerEncoder` 时显式传 `enable_nested_tensor=False`
-- 已完成验证：
-  - `pytest -q tests/models/test_pretrained_backbones.py -k 'disables_transformer_nested_tensor_path or forward_does_not_emit_nested_tensor_warning or can_truncate_encoder_layers'`（`3 passed`）
-  - `python -m py_compile src/models/etbert_backbone.py tests/models/test_pretrained_backbones.py`
-
-## 2026-03-22
-
-- 复用 worktree `.worktrees/early-stopping` 与分支 `feat-early-stopping` 实现训练早停。
-- 已按 TDD 新增并跑红：
-  - `test_train_early_stops_on_val_acc_plateau`
-- 已完成实现：
-  - `src/train.py` 新增 `--early-stopping-patience` / `--early-stopping-min-delta`
-  - 训练按 `val_acc` 判断是否提前结束
-  - 新增 `early_stopping_triggered` 结构化日志
-- 已完成验证：
-  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'early_stops_on_val_acc_plateau or train_writes_best_metric_to_config'`
-  - `python -m py_compile src/train.py src/common/structured_logging.py tests/pipeline/test_train_eval_report.py`
+- 基于用户新 run `runs/2026-03-22/stage1-binary-133158` 的结果排查，确认这次“几乎没变化”的直接原因是：
+  - run 使用了 `decision_threshold`
+  - 但 `best_metric` 仍然是 `val_macro_f1`
+- 已定位到根因在 `src.experiments.stage1_binary --execute`：
+  - parser 不接受 `--best-metric`
+  - `run_stage1_protocol(...)` 不透传 `best_metric` 给 `train_main(...)`
+- 按 TDD 新增并跑红：
+  - `test_stage1_binary_execute_forwards_best_metric_to_train`
+- 已实现：
+  - `src/experiments/stage1_binary.py` 新增 `--best-metric`
+  - `--execute` 路径已透传该参数到训练阶段
+- 已验证通过：
+  - `pytest -q tests/pipeline/test_protocol_execution.py -k 'stage1_binary_execute_forwards_best_metric_to_train'`
+  - 结果：`1 passed, 12 deselected`
+  - `pytest -q tests/pipeline/test_protocol_execution.py -k 'stage1_binary_execute_forwards_device_and_num_workers_to_train or stage1_binary_execute_defaults_num_workers_to_four'`
+  - 结果：`2 passed, 11 deselected`
+  - `python -m py_compile src/experiments/stage1_binary.py`
+  - 结果：通过

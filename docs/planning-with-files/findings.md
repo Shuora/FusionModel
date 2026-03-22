@@ -1,5 +1,68 @@
 # Findings
 
+## 模型结构调研发现（2026-03-22）
+
+- 模型代码主入口位于 `src/models/`，包含：
+  - `fusion_model.py`
+  - `mobilevit_backbone.py`
+  - `etbert_backbone.py`
+- 训练入口在 `src/train.py`，模型相关测试位于：
+  - `tests/models/test_fusion_model.py`
+  - `tests/models/test_pretrained_backbones.py`
+- 当前工作区存在未提交改动，集中在：
+  - `src/common/structured_logging.py`
+  - `src/train.py`
+  - `tests/common/test_structured_logging.py`
+  - `tests/data/test_preprocess_pipeline.py`
+- 本次任务以只读调研为主，不改动模型代码；阅读时需要注意与用户现有未提交改动并存，不做回滚。
+- `MobileViTETBertFusionClassifier` 是当前核心融合模型：
+  - 图像分支：`MobileViTBackbone`
+  - 序列分支：`ETBertBackbone`
+  - 融合方式：先拼接两个 `hidden_dim` 特征，经过 `Linear -> ReLU -> Linear -> Sigmoid` 得到单标量 gate，再做 `gate * img + (1 - gate) * tls`
+  - 输出头包含三路：
+    - `logits_fuse`
+    - `logits_img`
+    - `logits_tls`
+- `MobileViTBackbone` 不是自写 CNN，而是直接包了一层 `transformers.MobileViTForImageClassification`：
+  - 取 `self.model.mobilevit(...)` 的 `pooler_output`
+  - 若 `pooler_output` 缺失，则退化为 `last_hidden_state.mean(dim=(-1, -2))`
+  - 最后经 `proj` 线性层投影到统一 `out_dim`
+  - 默认会尝试加载本地 checkpoint：`/tmp/Shuora-MobileViT/malicious_traffic_mobilevit_model.pth`
+  - checkpoint 加载时会过滤掉 `classifier.*`，说明主要复用 backbone 权重而不是原分类头
+- `ETBertBackbone` 本质上是一个 ET-BERT 风格 adapter：
+  - embedding = token + type + position
+  - 编码器 = `nn.TransformerEncoder`
+  - 输出 = 按 `attention_mask` 做 masked mean pooling
+  - 支持 `config/config_path/num_layers/checkpoint_path`
+  - checkpoint 加载逻辑较强，能适配多种外部 key 格式并生成诊断报告 `checkpoint_report`
+- 测试约束显示当前模型接口契约很明确：
+  - fusion model 输出三路 logits + gate
+  - gate 范围必须在 `[0, 1]`
+  - ET-BERT 支持层数截断、缺失 checkpoint 报告、BERT/Transformer 风格权重映射、QKV 拼接与不完整组诊断
+- 训练主链路位于 `src/train.py`：
+  - 先通过 `load_policy_multimodal_data(...)` 读取四路输入：
+    - `rgb`
+    - `input_ids`
+    - `attention_mask`
+    - `token_type_ids`
+  - 再用 `TensorDataset/DataLoader` 组织 batch
+  - 模型实例化参数目前核心是：
+    - `num_classes`
+    - `hidden_dim`
+    - `vocab_size`
+- 训练存在两种 loss 模式：
+  - `warmup`：
+    - loss = `0.5 * CE(logits_img) + 0.5 * CE(logits_tls)`
+    - 预测也取两路平均
+  - `fusion`：
+    - loss = `CE(logits_fuse) + alpha * CE(logits_img) + beta * CE(logits_tls)`
+    - 预测主用 `logits_fuse`
+- 训练/验证阶段都会统计 `gate` 的均值，说明门控值被当作可观察训练信号，而不只是内部中间变量。
+- `pipeline_data` 显示当前多模态样本对齐方式是按 `session_id` 对齐：
+  - RGB 来自 `policy/rgb/rgb_shard_*.npz`
+  - ET-BERT 序列输入来自 `policy/etbert/etbert_shard_*.npz`
+  - 二者按同一 `session_id` 拼成一个样本
+
 ## 文档对齐结论（2026-03-18）
 
 - `MobileViTBackbone` 当前为真实 `transformers.MobileViTForImageClassification` 主干，并在默认路径存在时复用本地 checkpoint：`/tmp/Shuora-MobileViT/malicious_traffic_mobilevit_model.pth`。
@@ -220,75 +283,70 @@
 - `src/ablation.py` 的 CLI 输出日志已翻译为中文（如“ablation 计划已保存”）。
 - 现有与日志文案直接耦合的测试已同步更新，并完成针对性回归通过。
 
-## Stage1 Binary Acc 可解释性修复发现（2026-03-22）
+## Timeline Run Dir 解析结论（2026-03-21）
 
-- 最新 run `runs/2026-03-22/stage1-binary-153827` 的 `test top1` 实际为 `0.9655`，并非固定 `0.95`。
-- 训练日志当前只输出 `val_acc(argmax)` 与 `val_decision_threshold`，缺少“阈值校准后 acc”字段，易造成口径误读。
-- `report.py` 当前 best row 固定按 `val_macro_f1` 排序，忽略了 `config.best_metric`，在 `best_metric=val_acc` 时会出现“配置与报告不一致”。
-- 在当前沙箱环境，`num_workers>0` 的真实训练会触发 multiprocessing socket 权限错误（`PermissionError: [Errno 1] Operation not permitted`），端到端验证需使用 `--num-workers 0`。
+- `src/train.py` 的默认 run 布局是：
+  - `runs/YYYY-MM-DD/<auto_run_id>`
+- 但 `src/evaluate.py` / `src/report.py` 之前要求 `--run-dir` 必须已经是完整目录，因此输入：
+  - `runs/stage1-binary`
+  - 或仅输入短 run id
+  在“真实目录位于日期分区下”时会直接报 `config.yaml` 不存在。
+- 本轮已新增 `src/run_dir.py`，并让 `evaluate/report` 统一复用：
+  - 如果 `--run-dir` 本身就是完整目录，直接使用
+  - 如果不是，则自动在 `runs/**/<run-id>` 下查找
+  - 若存在多个同名时间分区 run，则优先选择最新日期分区
+- 因此现在可以直接用短路径：
+  - `python -m src.evaluate --run-dir runs/<run-id> ...`
+  - `python -m src.report --run-dir runs/<run-id>`
+  无需手工先展开到 `runs/YYYY-MM-DD/<run-id>`
 
-## Stage1 Binary Acc 可解释性修复实现结论（2026-03-22）
+## 最新 run 结果排查结论（2026-03-21）
 
-- `src/train.py` 已新增：
-  - `choose_best_binary_threshold(...)`，在验证集上搜索使 accuracy 最大的阈值；
-  - `val_acc_at_decision_threshold` 指标，写入 `metrics.csv` 且输出到 `epoch_done` 日志；
-  - `--best-metric {val_macro_f1,val_acc}` 参数，best checkpoint 选择不再固定 `val_macro_f1`；
-  - `best.ckpt` 与 `config.yaml` 写入 `decision_threshold`。
-- `src/report.py` 已调整：
-  - `Best Validation` 的 best row 由 `config.best_metric` 决定（缺失时回退 `val_macro_f1`）；
-  - 当 `metrics.csv` 含 `val_acc_at_decision_threshold` 时，报告展示 `Val Acc @ Decision Threshold`。
-- 端到端快速验证 run：
-  - `runs/2026-03-22/stage1-binary-e2e-accfix-fast`
-  - 训练日志已出现 `val_acc_at_decision_threshold=...`
-  - 报告已出现 `Best Metric: val_acc` 与 `Val Acc @ Decision Threshold: ...`
+- 当前最新 run 是：
+  - `runs/2026-03-21/stage1-binary-195511`
+- 这次 run 的三个关键数值分别是：
+  - 训练最后一轮：`train_acc=0.9623`，`train_macro_f1=0.9566`
+  - 最佳验证：`epoch=29`，`val_acc=0.9626`，`val_macro_f1=0.9564`
+  - 测试：`top1=0.9639`，`macro_f1=0.9583`
+- 因此“只有 96%”不是单一异常点，而是：
+  - train / val / test 三侧都稳定落在 `95.6% - 96.4%`
+  - 更像当前协议与模型组合下的稳定平台，而不是单次评估偶然波动
+- 当前 run 没看到明显把结果打坏的实现错误：
+  - `best.ckpt` 仍按 `val_macro_f1` 选择
+  - test confusion matrix `[[4130,115],[384,9186]]` 与 `accuracy=0.963879...` 一致
+  - 训练末轮并未明显高于验证/测试，缺少典型过拟合特征
+- 更可能限制结果的因素有三类：
+  - 类不平衡：manifest 总分布为 `malicious=47854`、`normal=21290`，训练端仍使用未加权 `CrossEntropyLoss`
+  - 验证切分粗糙：manifest 只有 `train/test`，`src/train.py` 会再从 train 随机切 `10%` 作为 val，且不是分层抽样
+  - 协议异质性：`paper_balanced` 下 test 的 `67.0%` 来自 `MFCP`，`30.7%` 来自 `ISCX`，`MTA` 仅 `2.25%`
+- 从分类明细看，当前主要短板不是整体崩掉，而是类别两侧仍有稳定残余误差：
+  - `label 0 (normal)`：precision `0.9149`，recall `0.9729`
+  - `label 1 (malicious)`：precision `0.9876`，recall `0.9599`
+  - 说明模型更容易把一部分样本判成 `malicious`，normal 侧 precision 被拉低
+- 另一个重要事实是：这个 `96.39%` 不能视为“严格跨 capture 泛化”的保守成绩：
+  - 当前 manifest 中有 `42` 个 `dataset+capture_id` 同时出现在 train/test
+  - 这会带来一定 capture 级 overlap
+  - 因此如果用户觉得“96 已经偏低”，从协议角度看它甚至更可能是略偏乐观，而不是被评估脚本压低
 
-## Attention Fusion 改造发现（2026-03-22）
+## Accuracy-Oriented Training 结论（2026-03-21）
 
-- 当前 `MobileViTETBertFusionClassifier` 融合方式是单标量门控：
-  - `gate = MLP([img_feature, tls_feature])`
-  - `fused = gate * img + (1-gate) * tls`
-- 该实现不属于注意力层面的融合；要改成 attention，最小可行方案是：
-  - 将 `img_feature` 与 `tls_feature` 视作两个 modality token；
-  - 使用 learnable query 对这两个 token 做 cross-attention，输出 fused feature。
-- 下游依赖兼容要求：
-  - `train/evaluate/stacking/moe` 都读取 `out["gate"]`，因此新实现仍需返回 `gate`，可定义为 attention 对 image token 的权重。
+- 为优先提升当前协议下的 binary `accuracy`，本轮实现了三项训练策略改动：
+  - 派生 validation 从“全局随机切分”改为“按 label 分层切分”
+  - `best.ckpt` 选择指标改为可配置，支持 `val_macro_f1` 与 `val_acc`
+  - 二分类 validation 会自动搜索最佳 decision threshold，并在评估时复用
+- 当前实现边界：
+  - 默认 `best_metric` 仍是 `val_macro_f1`，保持兼容
+  - 只有 binary 任务会启用阈值校准；多分类仍然走 `argmax`
+  - 未改动 `stage1_binary` 协议本身，也未引入 class weight / sampler
+- 这组改动更偏向“提高当前协议下的最终 acc”，不是更严格泛化评估。
 
-## Attention Fusion 改造实现结论（2026-03-22）
+## Stage1 Execute 透传结论（2026-03-22）
 
-- `src/models/fusion_model.py` 已改为注意力融合：
-  - 输入 token：`[img_feature, tls_feature]`
-  - 融合机制：learnable query + `MultiheadAttention` cross-attention
-  - 融合后：`LayerNorm + MLP + LayerNorm`
-- 输出接口保持兼容：
-  - `logits_fuse/logits_img/logits_tls` 保持不变
-  - `gate` 保持 `(B,1)`，定义为 attention 分配到 image token 的权重
-- `num_heads` 已从训练配置透传到各入口：
-  - `train.py`
-  - `evaluate.py`
-  - `stacking.py`
-  - `moe.py`
-- 为防止错误配置，模型初始化新增约束：
-  - `hidden_dim % num_heads == 0`，否则抛 `ValueError`
-
-## ETBERT Nested Tensor Warning 修复结论（2026-03-22）
-
-- warning 根因位于 `ETBertBackbone`：
-  - `nn.TransformerEncoder(...)` 默认 `enable_nested_tensor=True`
-  - 在部分 PyTorch 运行路径下会触发 `nested tensors is in prototype stage` 的用户警告
-- 本次修复采用最小策略：
-  - 显式设置 `enable_nested_tensor=False`
-  - 不修改 encoder 层数、注意力头数、mask 逻辑或 pooling 逻辑
-- 该修复的目标是消除日志污染，而不是调整模型行为；前向语义保持不变。
-
-## 训练早停实现结论（2026-03-22）
-
-- `src/train.py` 已新增：
-  - `--early-stopping-patience`
-  - `--early-stopping-min-delta`
-- 早停当前按 `val_acc` 触发：
-  - 若本 epoch `val_acc` 未超过 `best_val_acc + min_delta`
-  - 连续达到 `patience` 个 epoch 后触发停训
-- 设计边界：
-  - `patience=0` 表示关闭 early stopping
-  - 早停只截断 epoch 循环，不改变 best checkpoint 保存机制
-  - 触发时会输出 `early_stopping_triggered` 日志，并将配置写入 `config.yaml`
+- 用户 2026-03-22 的新 run `runs/2026-03-22/stage1-binary-133158` 虽然已经写入 `decision_threshold`，但 `best_metric` 仍为 `val_macro_f1`。
+- 根因不是 `src.train` 忽略了 `--best-metric`，而是 `src.experiments.stage1_binary --execute` 路径此前：
+  - CLI 不接受 `--best-metric`
+  - `run_stage1_protocol(...)` 也没有把 `best_metric` 透传给 `train_main(...)`
+- 因此如果用户通过 `stage1_binary --execute` 一键跑实验，即使预期想走 accuracy-first，也会默默退回默认 `val_macro_f1`。
+- 本轮修复后：
+  - `stage1_binary` CLI 已支持 `--best-metric {val_macro_f1,val_acc}`
+  - `--execute` 路径会将该参数继续传给 `src.train`

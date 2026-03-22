@@ -67,7 +67,6 @@ def _train_base_model(
     y: np.ndarray,
     num_classes: int,
     vocab_size: int,
-    num_heads: int,
     epochs: int,
     batch_size: int,
     device: torch.device,
@@ -79,7 +78,6 @@ def _train_base_model(
     model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
         hidden_dim=128,
-        num_heads=num_heads,
         vocab_size=vocab_size,
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -228,7 +226,6 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     num_classes = int(np.max(y)) + 1
     vocab_size = int(max(30522, int(input_ids.max()) + 1))
-    num_heads = int(cfg.get("num_heads", 4))
 
     # OOF meta features
     n_splits = min(args.n_splits, int(np.bincount(y_tv).min()) if len(y_tv) > 0 else 2)
@@ -244,7 +241,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             y_tv[tr_idx],
             num_classes=num_classes,
             vocab_size=vocab_size,
-            num_heads=num_heads,
             epochs=args.oof_epochs,
             batch_size=args.batch_size,
             device=device,
@@ -271,7 +267,6 @@ def main(argv: Iterable[str] | None = None) -> int:
         y_tv,
         num_classes=num_classes,
         vocab_size=vocab_size,
-        num_heads=num_heads,
         epochs=max(1, args.oof_epochs),
         batch_size=args.batch_size,
         device=device,

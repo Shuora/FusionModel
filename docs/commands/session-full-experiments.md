@@ -8,17 +8,22 @@
 
 - `--device {auto,cpu,cuda}`
 - `--num-workers <int>`（训练）
+- `--best-metric {val_macro_f1,val_acc}`（训练）
+- `--early-stopping-patience <int>`（训练）
+- `--early-stopping-min-delta <float>`（训练）
 
 建议：
 
 - 单卡优先使用 `--device auto`
 - 若机器内存较小（如 8GB RAM），优先从 `--num-workers 4` 开始
+- 若目标是优先抬当前协议下的最终 `accuracy`，binary 训练可加 `--best-metric val_acc`
 
 当前主线说明：
 
 - 预处理：`PCAP -> Session PCAP -> RGB + ET-BERT(input_ids/attention_mask/token_type_ids)`
 - 图像主干：`transformers.MobileViTForImageClassification.mobilevit`
 - 文本主干：`ETBertBackbone` 兼容适配器
+- 融合主干：`learnable query + MultiheadAttention` 注意力融合
 - 实验协议：
   - 阶段1：二分类
   - 阶段2：多分类
@@ -159,6 +164,13 @@ python -m src.experiments.stage1_binary \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
+推荐先定义本次 run 的日期分区和 run id：
+
+```bash
+export RUN_DATE=$(date +%F)
+export RUN_ID="stage1-binary-$(date +%H%M%S)"
+```
+
 再训练：
 
 ```bash
@@ -169,22 +181,119 @@ python -m src.train \
   --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
   --label-mode binary \
   --num-classes 2 \
-  --run-root runs \
-  --run-id stage1-binary \
+  --run-root "runs/${RUN_DATE}" \
+  --run-id "${RUN_ID}" \
   --stage fusion \
   --epochs 30 \
-  --batch-size 16 \
+  --batch-size 24 \
   --lr 1e-3 \
   --seed 42 \
-  --device auto \
+  --best-metric val_acc \
+  --early-stopping-patience 5 \
+  --early-stopping-min-delta 0.001 \
+  --hidden-dim 192 \
+  --num-heads 6 \
+  --device cuda \
   --num-workers 4
 ```
+
+说明：
+
+- 当 manifest 没有显式 `val` 时，`train` 会从 train 内派生 validation，并按 label 分层抽样。
+- binary 任务会在 validation 上自动搜索更优的 `decision_threshold`，并在 `evaluate` 阶段自动复用。
+- 当前推荐配置是 attention fusion：`hidden_dim=192`、`num_heads=6`
+- 若显存不足，优先把 `--batch-size 24` 降到 `16`；再不够就改成 `--hidden-dim 128 --num-heads 4`
+
+如果想一口气从 manifest 到训练/评估/报告都自动跑完，可以继续用 `--execute`，但注意：
+
+- 当前 `stage1_binary --execute` 还不能透传 `--hidden-dim / --num-heads / --early-stopping-*`
+- 所以它适合通用流程，不是当前 attention-fusion 的推荐命令
+
+通用一键命令如下：
+
+```bash
+RUN_DATE=$(date +%F) RUN_ID="stage1-binary-$(date +%H%M%S)" && \
+python -m src.experiments.stage1_binary \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --output outputs/protocol/stage1_binary_manifest.csv \
+  --execute \
+  --run-root "runs/${RUN_DATE}" \
+  --run-id "${RUN_ID}" \
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 24 \
+  --lr 0.001 \
+  --seed 42 \
+  --best-metric val_acc \
+  --device cuda \
+  --num-workers 4 \
+  --protocol-mode paper_balanced && \
+echo "report: runs/${RUN_DATE}/${RUN_ID}/report.md"
+```
+
+推荐直接复制下面这段，先激活环境，再跑当前 attention-fusion + early-stopping 版本的完整 stage1 binary 实验：
+
+```bash
+cd /home/shuora/Traffic/FusionModel
+conda activate FusionModel
+
+RUN_DATE=$(date +%F)
+RUN_ID="stage1-binary-$(date +%H%M%S)"
+
+python -m src.experiments.stage1_binary \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --protocol-mode paper_balanced \
+  --output outputs/protocol/stage1_binary_manifest.csv
+
+python -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets ISCX MFCP MTA \
+  --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
+  --label-mode binary \
+  --num-classes 2 \
+  --run-root "runs/${RUN_DATE}" \
+  --run-id "${RUN_ID}" \
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 24 \
+  --lr 1e-3 \
+  --seed 42 \
+  --best-metric val_acc \
+  --early-stopping-patience 5 \
+  --early-stopping-min-delta 0.001 \
+  --hidden-dim 192 \
+  --num-heads 6 \
+  --device cuda \
+  --num-workers 4
+
+python -m src.evaluate \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
+  --split test \
+  --checkpoint best \
+  --device cuda
+
+python -m src.report \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
+```
+
+跑完后先检查这两个文件：
+
+- `runs/${RUN_DATE}/${RUN_ID}/config.yaml`
+  - 应该看到 `best_metric: val_acc`
+  - 应该看到 `early_stopping_patience: 5`
+  - 应该看到 `hidden_dim: 192`
+  - 应该看到 `num_heads: 6`
+- `runs/${RUN_DATE}/${RUN_ID}/eval_test.json`
+  - 应该看到 `decision_threshold`
 
 ### 3.3 评估
 
 ```bash
 python -m src.evaluate \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --split test \
   --checkpoint best \
   --device auto
@@ -194,7 +303,7 @@ python -m src.evaluate \
 
 ```bash
 python -m src.evaluate \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --split test \
   --checkpoint best \
   --device auto \
@@ -205,7 +314,7 @@ python -m src.evaluate \
 
 ```bash
 python -m src.report \
-  --run-dir runs/stage1-binary
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
 ```
 
 ### 3.5 最小 smoke test
@@ -232,8 +341,8 @@ python -m src.train \
   --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
   --label-mode binary \
   --num-classes 2 \
-  --run-root runs \
-  --run-id stage1-binary-smoke \
+  --run-root "runs/${RUN_DATE}" \
+  --run-id "${RUN_ID}-smoke" \
   --stage fusion \
   --epochs 1 \
   --batch-size 8 \
@@ -247,7 +356,7 @@ python -m src.train \
 
 ```bash
 python -m src.evaluate \
-  --run-dir runs/stage1-binary-smoke \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}-smoke" \
   --split test \
   --checkpoint best \
   --device auto \
@@ -258,7 +367,7 @@ python -m src.evaluate \
 
 ```bash
 python -m src.report \
-  --run-dir runs/stage1-binary-smoke
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}-smoke"
 ```
 
 约束说明：
@@ -492,6 +601,29 @@ python -m src.report \
 - 系统内存紧张或卡死：先把 `--num-workers 4` 降到 `0`，再降低 `--train-max-samples`
 - 只是想确认链路能通：先跑 smoke test
 
+### 4.7 一键脚本（每个数据集从头到尾）
+
+已提供脚本：`docs/commands/stage2-multiclass-e2e.sh`，包含每个数据集的完整流程：
+
+- 预处理（`session_full`）
+- 训练（`fusion`）
+- 评估（`evaluate`）
+- 报告（`report`）
+
+运行全部多分类数据集（`MTA + MFCP + USTC-TFC2016`）：
+
+```bash
+bash docs/commands/stage2-multiclass-e2e.sh
+```
+
+只运行单个数据集：
+
+```bash
+bash docs/commands/stage2-multiclass-e2e.sh mta
+bash docs/commands/stage2-multiclass-e2e.sh mfcp
+bash docs/commands/stage2-multiclass-e2e.sh ustc
+```
+
 ## 5. 单独训练某个数据集
 
 ### 5.1 只跑 MFCP
@@ -559,7 +691,7 @@ python -m src.train \
 
 ```bash
 python -m src.evaluate \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --split test \
   --checkpoint best \
   --device auto
@@ -569,7 +701,7 @@ python -m src.evaluate \
 
 ```bash
 python -m src.evaluate \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --split test \
   --checkpoint best \
   --device auto \
@@ -580,7 +712,7 @@ python -m src.evaluate \
 
 ```bash
 python -m src.report \
-  --run-dir runs/stage1-binary
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
 ```
 
 ## 8. stacking / moe（可选）
@@ -589,7 +721,7 @@ python -m src.report \
 
 ```bash
 python -m src.stacking \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --n-splits 3 \
   --oof-epochs 2 \
   --batch-size 64 \
@@ -600,7 +732,7 @@ python -m src.stacking \
 
 ```bash
 python -m src.moe \
-  --run-dir runs/stage1-binary \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --epochs 5 \
   --batch-size 64 \
   --lr 1e-3 \
@@ -609,13 +741,21 @@ python -m src.moe \
 
 ## 9. 日志、进度条、指标、混淆矩阵
 
+下面示例里的 `<run-dir>` 推荐理解为：
+
+- `runs/<date>/<run-id>`
+
+例如：
+
+- `runs/2026-03-21/stage1-binary-153012`
+
 ### 9.1 日志
 
 有。
 
 训练会输出结构化日志到终端，同时写入：
 
-- `runs/<run-id>/train.log`
+- `<run-dir>/train.log`
 
 常见事件包括：
 
@@ -642,7 +782,7 @@ python -m src.moe \
 
 训练过程会写入：
 
-- `runs/<run-id>/metrics.csv`
+- `<run-dir>/metrics.csv`
 
 当前会包含的核心列通常有：
 
@@ -660,7 +800,7 @@ python -m src.moe \
 
 评估后会生成：
 
-- `runs/<run-id>/eval_test.json`
+- `<run-dir>/eval_test.json`
 - 若回退，也可能是：
   - `eval_val.json`
 
@@ -679,8 +819,10 @@ python -m src.moe \
 
 评估后会生成：
 
-- `runs/<run-id>/figures/confusion_matrix_<split>.csv`
-- `runs/<run-id>/figures/confusion_matrix_<split>.png`
+- `<run-dir>/figures/confusion_matrix_<split>.csv`
+- `<run-dir>/figures/confusion_matrix_<split>.png`
+- `<run-dir>/figures/classification_report_<split>.csv`
+- `<run-dir>/figures/classification_report_<split>.json`
 
 例如：
 
@@ -691,14 +833,14 @@ python -m src.moe \
 
 `report` 会生成：
 
-- `runs/<run-id>/report.md`
-- `runs/<run-id>/figures/learning_curve.png`
+- `<run-dir>/report.md`
+- `<run-dir>/figures/learning_curve.png`
 
 ### 9.7 stacking / moe 指标
 
 如果你额外运行：
 
 - `stacking` 会生成：
-  - `runs/<run-id>/stacking/meta_metrics.json`
+  - `<run-dir>/stacking/meta_metrics.json`
 - `moe` 会生成：
-  - `runs/<run-id>/moe/moe_metrics.json`
+  - `<run-dir>/moe/moe_metrics.json`
