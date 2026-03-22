@@ -2,6 +2,39 @@
 
 ## 2026-03-22
 
+- 启动“session_full 实验命令重写”任务，已读取：
+  - `AGENTS.md`
+  - `docs/commands/session-full-experiments.md`
+  - `docs/planning-with-files/{task_plan,findings,progress}.md`
+  - `using-superpowers` / `planning-with-files` 技能说明
+- 已检查工作区状态：
+  - `git status --short` 为空，当前工作区干净
+- 已确认本轮限制条件：
+  - 默认环境无 `python`
+  - `python3` 基础环境缺少 `numpy/pandas/matplotlib`
+  - 需要改为源码核对 + 现有环境路径核对的方式重建命令文档
+- 已进一步使用 `/home/shuora/miniconda3/envs/FusionModel/bin/python` 复核真实 CLI help：
+  - `preprocess_runner`
+  - `stage1_binary`
+  - `stage2_multiclass`
+  - `train`
+  - `evaluate`
+  - `report`
+- 已核对关键实现细节：
+  - `stage1_binary --execute` 只透传 `device/num-workers/best-metric`
+  - `train` 已无 `early-stopping` 参数
+  - `train` 在缺失 `val` split 时会从 `train` 派生验证集
+  - `evaluate` 会输出 confusion matrix 与 classification report 产物
+  - `stage2_multiclass --execute` 默认追加 USTC 限样任务
+  - `report` 的 `Best Validation` 仍固定按 `val_macro_f1` 展示
+- 已完成 `docs/commands/session-full-experiments.md` 全量重写：
+  - 删除旧的 early-stopping、过期参数和冗余命令
+  - 统一为当前仓库真实可执行的 `preprocess -> stage1 -> stage2 -> evaluate -> report` 流程
+  - 补充 `PYTHON_BIN` 回退写法，避免默认 shell 无 `python` 时直接失效
+  - 明确 Stage2 的基础任务、额外 USTC 限样 run，以及现有 `stage2-multiclass-e2e.sh` 的用法
+
+## 2026-03-22
+
 - 启动“模型结构调研”任务，已读取：
   - `AGENTS.md`
   - `docs/planning-with-files/{task_plan,findings,progress}.md`
