@@ -51,7 +51,7 @@ DATASET_ALIASES: Dict[str, Tuple[str, ...]] = {
 
 
 def _log(message: str) -> None:
-    print(f"[Stage1Binary] {message}", flush=True)
+    print(f"[Stage1Binary][阶段1协议] {message}", flush=True)
 
 
 def _load_session_manifest(dataset_dir: Path, policy: str) -> pd.DataFrame:
@@ -70,15 +70,15 @@ def _resolve_dataset_manifest(processed_root: Path, dataset: str, policy: str) -
     for alias in aliases:
         dataset_dir = processed_root / alias
         if not dataset_dir.exists():
-            _log(f"Skip alias={alias}: path not found")
+            _log(f"跳过 alias={alias}: 路径不存在")
             continue
         try:
             df = _load_session_manifest(dataset_dir, policy)
         except FileNotFoundError:
-            _log(f"Skip alias={alias}: manifest missing under policy={policy}")
+            _log(f"跳过 alias={alias}: policy={policy} 下未找到 manifest")
             continue
         if df.empty:
-            _log(f"Skip alias={alias}: manifest is empty")
+            _log(f"跳过 alias={alias}: manifest 为空")
             continue
         raw_name = alias
         if "dataset" in df.columns and not df.empty:
@@ -86,7 +86,7 @@ def _resolve_dataset_manifest(processed_root: Path, dataset: str, policy: str) -
         df = df.copy()
         df["dataset_raw"] = raw_name
         df["dataset"] = dataset
-        _log(f"Loaded dataset={dataset} via alias={alias}, rows={len(df)}")
+        _log(f"已加载 dataset={dataset}（alias={alias}）, rows={len(df)}")
         return df
     raise FileNotFoundError(f"missing manifest for dataset={dataset} aliases={aliases} policy={policy}")
 
@@ -98,7 +98,7 @@ def build_stage1_manifest(
     protocol_mode: str = "paper_balanced",
 ) -> pd.DataFrame:
     processed_root = Path(processed_root)
-    _log(f"Build manifest start: processed_root={processed_root}, policy={policy}")
+    _log(f"开始构建 manifest: processed_root={processed_root}, policy={policy}")
     if protocol_mode not in {"paper_strict", "paper_balanced"}:
         raise ValueError(f"unsupported stage1 protocol_mode: {protocol_mode}")
     missing: List[str] = []
@@ -127,7 +127,7 @@ def build_stage1_manifest(
         raise ValueError("stage1 manifest empty: required datasets contain no samples")
     merged["label_binary"] = np.where(merged["dataset"] == "ISCX", 0, 1).astype(np.int64)
     merged["label_text"] = np.where(merged["label_binary"] == 0, "normal", "malicious")
-    _log(f"Build manifest done: total_rows={len(merged)}")
+    _log(f"manifest 构建完成: total_rows={len(merged)}")
     return merged
 
 
@@ -320,7 +320,7 @@ def _log_subset_summary(
     protocol_mode: str,
 ) -> None:
     _log(
-        "subset_summary "
+        "子集统计 "
         f"mode={protocol_mode} dataset={dataset} group={group_name} "
         f"paper_train={paper_train} paper_test={paper_test} "
         f"available_train={available_train} available_test={available_test} "
@@ -331,21 +331,21 @@ def _log_subset_summary(
 
 def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:
     if stage in {"warmup", "fusion"}:
-        _log(f"Evaluate step start: run_dir={run_dir}, split=test")
+        _log(f"评估步骤开始: run_dir={run_dir}, split=test")
         eval_code = evaluate_main(["--run-dir", str(run_dir), "--split", "test", "--device", device])
         if eval_code != 0:
-            _log(f"Evaluate step failed: exit_code={eval_code}")
+            _log(f"评估步骤失败: exit_code={eval_code}")
             return eval_code
-        _log("Evaluate step done")
+        _log("评估步骤完成")
     else:
-        _log(f"Skip evaluate for stage={stage}; report will use stage artifacts directly")
+        _log(f"跳过评估：stage={stage}；report 将直接使用阶段产物")
 
-    _log(f"Report step start: run_dir={run_dir}")
+    _log(f"报告步骤开始: run_dir={run_dir}")
     report_code = report_main(["--run-dir", str(run_dir)])
     if report_code != 0:
-        _log(f"Report step failed: exit_code={report_code}")
+        _log(f"报告步骤失败: exit_code={report_code}")
         return report_code
-    _log("Report step done")
+    _log("报告步骤完成")
     return 0
 
 
@@ -364,13 +364,13 @@ def run_stage1_protocol(
     num_workers: int,
     protocol_mode: str,
 ) -> int:
-    _log("Protocol execute mode enabled")
+    _log("协议执行模式已启用")
     manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode=protocol_mode)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output_manifest, index=False)
-    _log(f"Manifest saved: {output_manifest} (rows={len(manifest)})")
+    _log(f"Manifest 已保存: {output_manifest} (rows={len(manifest)})")
 
-    _log("Train step start")
+    _log("训练步骤开始")
     train_code = train_main(
         [
             "--processed-root",
@@ -406,9 +406,9 @@ def run_stage1_protocol(
         ]
     )
     if train_code != 0:
-        _log(f"Train step failed: exit_code={train_code}")
+        _log(f"训练步骤失败: exit_code={train_code}")
         return train_code
-    _log("Train step done")
+    _log("训练步骤完成")
 
     run_dir = run_root / run_id
     return _run_stage_report(run_dir=run_dir, stage=stage, device=device)
@@ -436,7 +436,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     output = Path(args.output)
 
     _log(
-        f"Start: processed_root={processed_root}, policy={args.policy}, output={output}, execute={args.execute}"
+        f"启动: processed_root={processed_root}, policy={args.policy}, output={output}, execute={args.execute}"
     )
     if args.execute:
         return run_stage1_protocol(
@@ -458,7 +458,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     manifest = build_stage1_manifest(processed_root=processed_root, policy=args.policy, protocol_mode=args.protocol_mode)
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output, index=False)
-    _log(f"Manifest saved: {output} (rows={len(manifest)})")
+    _log(f"Manifest 已保存: {output} (rows={len(manifest)})")
     return 0
 
 

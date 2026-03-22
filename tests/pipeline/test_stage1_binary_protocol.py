@@ -636,4 +636,4 @@ def test_stage1_main_emits_progress_logs(
     assert exit_code == 0
     captured = capsys.readouterr()
     assert "Stage1Binary" in captured.out
-    assert "Manifest saved" in captured.out
+    assert "Manifest 已保存" in captured.out

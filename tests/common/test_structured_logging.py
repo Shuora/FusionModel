@@ -11,8 +11,8 @@ def test_format_log_line_contains_icons_and_fields():
     )
 
     assert "2026-02-23 14:30:00" in line
-    assert "✅SUCCESS" in line
-    assert "🧱 Data" in line
+    assert "✅成功" in line
+    assert "🧱 数据" in line
     assert "dataset_loaded" in line
     assert "samples=123" in line
     assert "families=10" in line
@@ -27,6 +27,6 @@ def test_format_log_line_unknown_level_module_fallback():
         timestamp="2026-02-23 14:31:00",
     )
 
-    assert "ℹ️INFO" in line
-    assert "🧩 Custom" in line
+    assert "ℹ️信息" in line
+    assert "🧩 模块:custom" in line
     assert "k=v" in line
