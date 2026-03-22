@@ -198,3 +198,25 @@
   - `pytest -q tests/common/test_structured_logging.py tests/data/test_preprocess_pipeline.py::test_preprocess_source_writes_expected_outputs tests/pipeline/test_stage1_binary_protocol.py::test_stage1_main_emits_progress_logs`
   - 结果：`4 passed`
 - 额外执行快速兼容性检查，确认 `config_summary` 等英文 event code 仍在日志文本中保留。
+
+- 在独立 worktree `.worktrees/stage1-acc-fix` 创建分支 `fix-stage1-acc-report`，隔离本次修复。
+- 已完成问题复盘：
+  - 最新二分类 test 指标约 `96.5%`；
+  - 训练日志缺少阈值口径 acc；
+  - `report` best row 忽略 `best_metric` 配置。
+- 已建立本轮实施计划，下一步按 TDD 先补失败测试再改实现。
+- 已按 TDD 新增并跑红：
+  - `test_report_selects_best_epoch_by_configured_best_metric`
+  - `test_train_records_val_acc_at_decision_threshold`
+- 已完成实现：
+  - `src/train.py` 增加 `val_acc_at_decision_threshold` 计算、日志与 CSV 输出；
+  - `src/train.py` 增加 `--best-metric` 与 best checkpoint 选择逻辑；
+  - `src/report.py` 按 `config.best_metric` 选 best epoch，并展示阈值口径 acc。
+- 已完成验证：
+  - `pytest -q tests/pipeline/test_train_eval_report.py -k 'report_selects_best_epoch_by_configured_best_metric or train_records_val_acc_at_decision_threshold'` 通过；
+  - `python -m py_compile src/train.py src/report.py` 通过；
+  - 端到端快速链路：
+    - `python -m src.train ... --run-id stage1-binary-e2e-accfix-fast --train-max-samples 256 --num-workers 0`
+    - `python -m src.evaluate --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast --split test --device cpu`
+    - `python -m src.report --run-dir runs/2026-03-22/stage1-binary-e2e-accfix-fast`
+  - 产物核对通过：train.log 与 report.md 均出现新增字段。

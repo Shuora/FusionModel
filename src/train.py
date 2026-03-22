@@ -86,9 +86,9 @@ def _evaluate_loader(
     epoch: int,
     total_epochs: int,
     lr: float,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float, float | None, float | None]:
     if len(loader) == 0:
-        return 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, None, None
 
     model.eval()
     ce = nn.CrossEntropyLoss()
@@ -96,6 +96,7 @@ def _evaluate_loader(
     preds: List[np.ndarray] = []
     labels: List[np.ndarray] = []
     gate_means: List[float] = []
+    positive_probs: List[np.ndarray] = []
 
     iterator = tqdm(
         loader,
@@ -121,18 +122,70 @@ def _evaluate_loader(
             preds.append(pred.cpu().numpy())
             labels.append(y_b.cpu().numpy())
             gate_means.append(float(out["gate"].mean().item()))
+            if pred_logits.shape[1] == 2:
+                probs = torch.softmax(pred_logits, dim=1)[:, 1]
+                positive_probs.append(probs.detach().cpu().numpy())
             iterator.set_postfix(loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}", lr=f"{lr:.2e}")
 
     y_true = np.concatenate(labels, axis=0) if labels else np.zeros((0,), dtype=np.int64)
     y_pred = np.concatenate(preds, axis=0) if preds else np.zeros((0,), dtype=np.int64)
     if y_true.size == 0:
-        return 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, None, None
 
     val_loss = float(np.mean(losses))
     val_acc = float(np.mean(y_true == y_pred))
     val_macro_f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
     val_gate_mean = float(np.mean(gate_means)) if gate_means else 0.0
-    return val_loss, val_acc, val_macro_f1, val_gate_mean
+    val_decision_threshold: float | None = None
+    val_acc_at_decision_threshold: float | None = None
+    if positive_probs:
+        threshold, threshold_acc = choose_best_binary_threshold(
+            positive_probs=np.concatenate(positive_probs, axis=0),
+            y_true=y_true,
+        )
+        val_decision_threshold = float(threshold)
+        val_acc_at_decision_threshold = float(threshold_acc)
+
+    return (
+        val_loss,
+        val_acc,
+        val_macro_f1,
+        val_gate_mean,
+        val_decision_threshold,
+        val_acc_at_decision_threshold,
+    )
+
+
+def choose_best_binary_threshold(positive_probs: np.ndarray, y_true: np.ndarray) -> tuple[float, float]:
+    probs = np.asarray(positive_probs, dtype=np.float32).reshape(-1)
+    labels = np.asarray(y_true, dtype=np.int64).reshape(-1)
+    if probs.size == 0 or labels.size == 0 or probs.size != labels.size:
+        return 0.5, 0.0
+    if np.unique(labels).size < 2:
+        pred = (probs >= 0.5).astype(np.int64)
+        return 0.5, float(np.mean(pred == labels))
+
+    candidates = sorted({0.5, *[float(x) for x in np.unique(probs).tolist()]})
+    best_threshold = 0.5
+    best_acc = -1.0
+    best_distance = float("inf")
+    for threshold in candidates:
+        pred = (probs >= threshold).astype(np.int64)
+        acc = float(np.mean(pred == labels))
+        distance = abs(float(threshold) - 0.5)
+        if acc > best_acc or (acc == best_acc and distance < best_distance):
+            best_threshold = float(threshold)
+            best_acc = acc
+            best_distance = distance
+    return best_threshold, best_acc
+
+
+def _select_best_metric_value(best_metric: str, val_acc: float, val_macro_f1: float) -> float:
+    if best_metric == "val_acc":
+        return float(val_acc)
+    if best_metric == "val_macro_f1":
+        return float(val_macro_f1)
+    raise ValueError(f"unsupported best metric: {best_metric}")
 
 
 def _derive_validation_mask_from_train(
@@ -287,6 +340,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
     parser.add_argument("--grad-explode-threshold", type=float, default=1e4)
+    parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--no-progress", action="store_true")
@@ -373,6 +427,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "device": resolved_device,
         "device_fallback": device_fallback,
         "num_workers": args.num_workers,
+        "best_metric": args.best_metric,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -397,6 +452,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "device": resolved_device,
             "device_fallback": device_fallback,
             "num_workers": args.num_workers,
+            "best_metric": args.best_metric,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -517,9 +573,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
 
     rows: List[dict] = []
-    best_f1 = -1.0
+    best_value = -1.0
     show_progress = not args.no_progress
     loss_stage = "warmup" if args.stage == "warmup" else "fusion"
+    best_decision_threshold: float | None = None
 
     for epoch in range(1, args.epochs + 1):
         start = time.time()
@@ -599,7 +656,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         train_gate_mean = float(np.mean(train_gates)) if train_gates else 0.0
 
-        val_loss, val_acc, val_macro_f1, val_gate_mean = _evaluate_loader(
+        (
+            val_loss,
+            val_acc,
+            val_macro_f1,
+            val_gate_mean,
+            val_decision_threshold,
+            val_acc_at_decision_threshold,
+        ) = _evaluate_loader(
             model=model,
             loader=val_loader,
             device=device,
@@ -623,6 +687,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "val_acc": val_acc,
             "val_macro_f1": val_macro_f1,
             "val_gate_mean": val_gate_mean,
+            "val_decision_threshold": val_decision_threshold,
+            "val_acc_at_decision_threshold": val_acc_at_decision_threshold,
             "lr": args.lr,
             "epoch_time": epoch_time,
         }
@@ -640,6 +706,12 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "val_loss": f"{val_loss:.4f}",
                 "val_acc": f"{val_acc:.4f}",
                 "val_macroF1": f"{val_macro_f1:.4f}",
+                "val_decision_threshold": (
+                    "none" if val_decision_threshold is None else f"{val_decision_threshold:.4f}"
+                ),
+                "val_acc_at_decision_threshold": (
+                    "none" if val_acc_at_decision_threshold is None else f"{val_acc_at_decision_threshold:.4f}"
+                ),
                 "gate_mean": f"{val_gate_mean:.4f}",
                 "lr": args.lr,
                 "time_s": f"{epoch_time:.2f}",
@@ -647,18 +719,37 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
 
         last_path = ckpt_dir / "last.ckpt"
-        torch.save({"model_state": model.state_dict(), "config": cfg, "epoch": epoch}, last_path)
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": cfg,
+                "epoch": epoch,
+                "decision_threshold": val_decision_threshold,
+            },
+            last_path,
+        )
         log("success", "save", "checkpoint_saved", {"path": str(last_path), "sha8": _sha8(last_path)})
 
-        if val_macro_f1 >= best_f1:
-            best_f1 = val_macro_f1
+        current_best_value = _select_best_metric_value(
+            best_metric=args.best_metric,
+            val_acc=val_acc,
+            val_macro_f1=val_macro_f1,
+        )
+        if current_best_value >= best_value:
+            best_value = current_best_value
+            best_decision_threshold = val_decision_threshold
+            cfg["decision_threshold"] = best_decision_threshold
+            cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
             best_path = ckpt_dir / "best.ckpt"
             torch.save(
                 {
                     "model_state": model.state_dict(),
                     "config": cfg,
                     "epoch": epoch,
-                    "best_val_macro_f1": best_f1,
+                    "best_metric": args.best_metric,
+                    "best_metric_value": best_value,
+                    "best_val_macro_f1": val_macro_f1,
+                    "decision_threshold": best_decision_threshold,
                 },
                 best_path,
             )
@@ -666,7 +757,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "success",
                 "save",
                 "best_checkpoint_saved",
-                {"path": str(best_path), "best_val_macro_f1": f"{best_f1:.4f}", "sha8": _sha8(best_path)},
+                {
+                    "path": str(best_path),
+                    "best_metric": args.best_metric,
+                    "best_metric_value": f"{best_value:.4f}",
+                    "best_val_macro_f1": f"{val_macro_f1:.4f}",
+                    "sha8": _sha8(best_path),
+                },
             )
 
     pd.DataFrame(rows).to_csv(metrics_path, index=False)

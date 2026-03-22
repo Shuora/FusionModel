@@ -219,3 +219,25 @@
 - `src/experiments/stage1_binary.py` 的直出日志已翻译为中文语义（如“评估步骤开始”“Manifest 已保存”等）。
 - `src/ablation.py` 的 CLI 输出日志已翻译为中文（如“ablation 计划已保存”）。
 - 现有与日志文案直接耦合的测试已同步更新，并完成针对性回归通过。
+
+## Stage1 Binary Acc 可解释性修复发现（2026-03-22）
+
+- 最新 run `runs/2026-03-22/stage1-binary-153827` 的 `test top1` 实际为 `0.9655`，并非固定 `0.95`。
+- 训练日志当前只输出 `val_acc(argmax)` 与 `val_decision_threshold`，缺少“阈值校准后 acc”字段，易造成口径误读。
+- `report.py` 当前 best row 固定按 `val_macro_f1` 排序，忽略了 `config.best_metric`，在 `best_metric=val_acc` 时会出现“配置与报告不一致”。
+- 在当前沙箱环境，`num_workers>0` 的真实训练会触发 multiprocessing socket 权限错误（`PermissionError: [Errno 1] Operation not permitted`），端到端验证需使用 `--num-workers 0`。
+
+## Stage1 Binary Acc 可解释性修复实现结论（2026-03-22）
+
+- `src/train.py` 已新增：
+  - `choose_best_binary_threshold(...)`，在验证集上搜索使 accuracy 最大的阈值；
+  - `val_acc_at_decision_threshold` 指标，写入 `metrics.csv` 且输出到 `epoch_done` 日志；
+  - `--best-metric {val_macro_f1,val_acc}` 参数，best checkpoint 选择不再固定 `val_macro_f1`；
+  - `best.ckpt` 与 `config.yaml` 写入 `decision_threshold`。
+- `src/report.py` 已调整：
+  - `Best Validation` 的 best row 由 `config.best_metric` 决定（缺失时回退 `val_macro_f1`）；
+  - 当 `metrics.csv` 含 `val_acc_at_decision_threshold` 时，报告展示 `Val Acc @ Decision Threshold`。
+- 端到端快速验证 run：
+  - `runs/2026-03-22/stage1-binary-e2e-accfix-fast`
+  - 训练日志已出现 `val_acc_at_decision_threshold=...`
+  - 报告已出现 `Best Metric: val_acc` 与 `Val Acc @ Decision Threshold: ...`
