@@ -1,80 +1,50 @@
-# Session Full 实验命令（MobileViT + ET-BERT Adapter）
+# Session Full 实验命令（按当前仓库重写）
 
-本文档按当前仓库代码整理一套可直接执行的分步骤命令，适合你从环境准备、预处理、阶段1、阶段2一路手动跑通。
+本文档按当前仓库实现整理，已对照：
 
-实验执行部分按 `train -> evaluate -> report` 拆开写，方便你手动控制每一步。
+- `src.data.preprocess_runner`
+- `src.experiments.stage1_binary`
+- `src.experiments.stage2_multiclass`
+- `src.train`
+- `src.evaluate`
+- `src.report`
+- `docs/commands/stage2-multiclass-e2e.sh`
 
-当前 `train/evaluate` 已支持：
+目标不是保留旧命令，而是给出“现在这份仓库真正能跑”的命令集合。
 
-- `--device {auto,cpu,cuda}`
-- `--num-workers <int>`（训练）
-- `--best-metric {val_macro_f1,val_acc}`（训练）
-- `--early-stopping-patience <int>`（训练）
-- `--early-stopping-min-delta <float>`（训练）
+## 0. 约定
 
-建议：
-
-- 单卡优先使用 `--device auto`
-- 若机器内存较小（如 8GB RAM），优先从 `--num-workers 4` 开始
-- 若目标是优先抬当前协议下的最终 `accuracy`，binary 训练可加 `--best-metric val_acc`
-
-当前主线说明：
-
-- 预处理：`PCAP -> Session PCAP -> RGB + ET-BERT(input_ids/attention_mask/token_type_ids)`
-- 图像主干：`transformers.MobileViTForImageClassification.mobilevit`
-- 文本主干：`ETBertBackbone` 兼容适配器
-- 融合主干：`learnable query + MultiheadAttention` 注意力融合
-- 实验协议：
-  - 阶段1：二分类
-  - 阶段2：多分类
-
-说明：当前 ET-BERT 侧不是原始 UER ET-BERT 的完整复刻，而是兼容其 `vocab/config/checkpoint` 形态的工程化 adapter。
-
-## 0. 环境准备
-
-若环境还没创建：
-
-```bash
-cd /home/shuora/Traffic/FusionModel
-conda env create -f environment.yml
-conda activate FusionModel
-pip install -r requirements.txt
-```
-
-若环境已经存在，只需要：
+以下命令默认在仓库根目录执行：
 
 ```bash
 cd /home/shuora/Traffic/FusionModel
 conda activate FusionModel
-pip install -r requirements.txt
+
+PYTHON_BIN=python
+command -v "${PYTHON_BIN}" >/dev/null 2>&1 || PYTHON_BIN=/home/shuora/miniconda3/envs/FusionModel/bin/python
 ```
 
-## 1. 数据目录检查
+当前仓库内常见目录：
 
-建议先确认默认目录存在：
+- 原始数据：`SourceData/`
+- 预处理输出：`outputs/processed/`
+- 协议文件：`outputs/protocol/`
+- 训练产物：`runs/`
 
-```bash
-ls SourceData
-```
+当前 `SourceData/` 下可见数据集：
 
-当前主线通常会用到：
+- `CICAndMal2017`
+- `ISCX-VPN-NonVPN-2016`
+- `MFCP`
+- `MTA`
+- `USTC-TFC2016`
 
-- `SourceData/ISCX` 或 `SourceData/ISCX-VPN-NonVPN-2016`
-- `SourceData/MFCP`
-- `SourceData/MTA`
-- `SourceData/USTC-TFC2016`
+## 1. 预处理
 
-说明：
-
-- 阶段1默认需要：`ISCX + MFCP + MTA`
-- 阶段2默认基础任务包括：`MTA + MFCP + USTC-TFC2016`
-
-## 2. 预处理
-
-### 2.1 全量预处理
+### 1.1 全量 `session_full` 预处理
 
 ```bash
-python -m src.data.preprocess_runner \
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
   --source-root SourceData \
   --output-root outputs/processed \
   --policies session_full \
@@ -83,10 +53,10 @@ python -m src.data.preprocess_runner \
   --preview-per-family 20
 ```
 
-### 2.2 中断后断点续跑
+### 1.2 中断后续跑
 
 ```bash
-python -m src.data.preprocess_runner \
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
   --source-root SourceData \
   --output-root outputs/processed \
   --policies session_full \
@@ -96,10 +66,10 @@ python -m src.data.preprocess_runner \
   --resume
 ```
 
-### 2.3 只处理指定数据集
+### 1.3 只处理指定数据集
 
 ```bash
-python -m src.data.preprocess_runner \
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
   --source-root SourceData \
   --output-root outputs/processed \
   --policies session_full \
@@ -109,10 +79,10 @@ python -m src.data.preprocess_runner \
   --preview-per-family 20
 ```
 
-### 2.4 调试时保留 session pcap
+### 1.4 调试时保留切分后的 session 文件
 
 ```bash
-python -m src.data.preprocess_runner \
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
   --source-root SourceData \
   --output-root outputs/processed \
   --policies session_full \
@@ -120,61 +90,91 @@ python -m src.data.preprocess_runner \
   --preview-per-family 20
 ```
 
-## 3. 阶段1：二分类
+说明：
 
-标签规则：
+- `preprocess_runner` 当前支持的参数只有：
+  - `--source-root`
+  - `--output-root`
+  - `--policies`
+  - `--datasets`
+  - `--seed`
+  - `--cleanup-sessions / --keep-sessions`
+  - `--preview-per-family`
+  - `--resume / --no-resume`
+  - `--no-progress`
+- 当前默认 policy 映射里，主线实验应使用 `session_full`。
 
-- `ISCX = normal (0)`
-- `MFCP/MTA = malicious (1)`
+## 2. Stage1 二分类
 
-论文口径说明：
+标签口径：
 
-- `stage1_binary` 支持两种论文风格协议，只使用 `ISCX + MTA + MFCP`
-- 默认推荐：`paper_balanced`
-  - 保留论文 Table 1-3 的类别/家族集合
-  - 不强制逐组精确等于论文配额
-  - 对超大组做上限裁样，对不足组全保留
-- 严格对照：`paper_strict`
-  - 严格按论文配额检查
-  - 任一组样本不足直接报错
-- 当前仓库实现的是“论文风格近似复现”：
-  - 类别/家族集合尽量对齐论文
-  - 具体 session 通过仓库现有 `session_full` manifest 稳定裁样得到
-  - 不是论文作者原始逐 session 列表的逐条还原
+- `ISCX` -> `normal (0)`
+- `MFCP + MTA` -> `malicious (1)`
 
-### 3.1 只生成 manifest
+当前 `stage1_binary` 的固定依赖数据集是：
+
+- `ISCX`
+- `MFCP`
+- `MTA`
+
+### 2.1 只生成 manifest
 
 ```bash
-python -m src.experiments.stage1_binary \
+"${PYTHON_BIN}" -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
   --protocol-mode paper_balanced \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
-### 3.2 训练
+当前支持两种协议模式：
+
+- `paper_balanced`
+  - 默认值
+  - 保留论文类别集合
+  - 对超大组裁到论文配额的 120%
+  - 对不足组全保留
+- `paper_strict`
+  - 严格按论文 train/test 配额取样
+  - 任一组不足会直接失败
+
+### 2.2 推荐：手动执行完整流程
+
+推荐手动拆成 `manifest -> train -> evaluate -> report`。原因很简单：
+
+- `stage1_binary --execute` 只会透传：
+  - `--device`
+  - `--num-workers`
+  - `--best-metric`
+- 它不会透传 `src.train` 里这些可调参数：
+  - `--hidden-dim`
+  - `--num-heads`
+  - `--alpha`
+  - `--beta`
+  - `--val-fraction`
+  - `--train-max-samples`
 
 先生成 manifest：
 
 ```bash
-python -m src.experiments.stage1_binary \
+"${PYTHON_BIN}" -m src.experiments.stage1_binary \
   --processed-root outputs/processed \
   --policy session_full \
   --protocol-mode paper_balanced \
   --output outputs/protocol/stage1_binary_manifest.csv
 ```
 
-推荐先定义本次 run 的日期分区和 run id：
+定义本次 run：
 
 ```bash
 export RUN_DATE=$(date +%F)
 export RUN_ID="stage1-binary-$(date +%H%M%S)"
 ```
 
-再训练：
+训练：
 
 ```bash
-python -m src.train \
+"${PYTHON_BIN}" -m src.train \
   --processed-root outputs/processed \
   --policy session_full \
   --datasets ISCX MFCP MTA \
@@ -188,166 +188,9 @@ python -m src.train \
   --batch-size 24 \
   --lr 1e-3 \
   --seed 42 \
-  --best-metric val_acc \
-  --early-stopping-patience 5 \
-  --early-stopping-min-delta 0.001 \
   --hidden-dim 192 \
   --num-heads 6 \
-  --device cuda \
-  --num-workers 4
-```
-
-说明：
-
-- 当 manifest 没有显式 `val` 时，`train` 会从 train 内派生 validation，并按 label 分层抽样。
-- binary 任务会在 validation 上自动搜索更优的 `decision_threshold`，并在 `evaluate` 阶段自动复用。
-- 当前推荐配置是 attention fusion：`hidden_dim=192`、`num_heads=6`
-- 若显存不足，优先把 `--batch-size 24` 降到 `16`；再不够就改成 `--hidden-dim 128 --num-heads 4`
-
-如果想一口气从 manifest 到训练/评估/报告都自动跑完，可以继续用 `--execute`，但注意：
-
-- 当前 `stage1_binary --execute` 还不能透传 `--hidden-dim / --num-heads / --early-stopping-*`
-- 所以它适合通用流程，不是当前 attention-fusion 的推荐命令
-
-通用一键命令如下：
-
-```bash
-RUN_DATE=$(date +%F) RUN_ID="stage1-binary-$(date +%H%M%S)" && \
-python -m src.experiments.stage1_binary \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --output outputs/protocol/stage1_binary_manifest.csv \
-  --execute \
-  --run-root "runs/${RUN_DATE}" \
-  --run-id "${RUN_ID}" \
-  --stage fusion \
-  --epochs 30 \
-  --batch-size 24 \
-  --lr 0.001 \
-  --seed 42 \
   --best-metric val_acc \
-  --device cuda \
-  --num-workers 4 \
-  --protocol-mode paper_balanced && \
-echo "report: runs/${RUN_DATE}/${RUN_ID}/report.md"
-```
-
-推荐直接复制下面这段，先激活环境，再跑当前 attention-fusion + early-stopping 版本的完整 stage1 binary 实验：
-
-```bash
-cd /home/shuora/Traffic/FusionModel
-conda activate FusionModel
-
-RUN_DATE=$(date +%F)
-RUN_ID="stage1-binary-$(date +%H%M%S)"
-
-python -m src.experiments.stage1_binary \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --protocol-mode paper_balanced \
-  --output outputs/protocol/stage1_binary_manifest.csv
-
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets ISCX MFCP MTA \
-  --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
-  --label-mode binary \
-  --num-classes 2 \
-  --run-root "runs/${RUN_DATE}" \
-  --run-id "${RUN_ID}" \
-  --stage fusion \
-  --epochs 30 \
-  --batch-size 24 \
-  --lr 1e-3 \
-  --seed 42 \
-  --best-metric val_acc \
-  --early-stopping-patience 5 \
-  --early-stopping-min-delta 0.001 \
-  --hidden-dim 192 \
-  --num-heads 6 \
-  --device cuda \
-  --num-workers 4
-
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --split test \
-  --checkpoint best \
-  --device cuda
-
-python -m src.report \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
-```
-
-跑完后先检查这两个文件：
-
-- `runs/${RUN_DATE}/${RUN_ID}/config.yaml`
-  - 应该看到 `best_metric: val_acc`
-  - 应该看到 `early_stopping_patience: 5`
-  - 应该看到 `hidden_dim: 192`
-  - 应该看到 `num_heads: 6`
-- `runs/${RUN_DATE}/${RUN_ID}/eval_test.json`
-  - 应该看到 `decision_threshold`
-
-### 3.3 评估
-
-```bash
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --split test \
-  --checkpoint best \
-  --device auto
-```
-
-如果请求的 split 不存在，允许自动回退：
-
-```bash
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --split test \
-  --checkpoint best \
-  --device auto \
-  --allow-split-fallback
-```
-
-### 3.4 生成报告
-
-```bash
-python -m src.report \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
-```
-
-### 3.5 最小 smoke test
-
-想先快速确认流程能通：
-
-先生成 manifest：
-
-```bash
-python -m src.experiments.stage1_binary \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --protocol-mode paper_balanced \
-  --output outputs/protocol/stage1_binary_manifest.csv
-```
-
-再训练 1 epoch：
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets ISCX MFCP MTA \
-  --session-filter-manifest outputs/protocol/stage1_binary_manifest.csv \
-  --label-mode binary \
-  --num-classes 2 \
-  --run-root "runs/${RUN_DATE}" \
-  --run-id "${RUN_ID}-smoke" \
-  --stage fusion \
-  --epochs 1 \
-  --batch-size 8 \
-  --lr 1e-3 \
-  --seed 42 \
   --device auto \
   --num-workers 4
 ```
@@ -355,103 +198,95 @@ python -m src.train \
 评估：
 
 ```bash
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}-smoke" \
+"${PYTHON_BIN}" -m src.evaluate \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
   --split test \
   --checkpoint best \
-  --device auto \
-  --allow-split-fallback
+  --device auto
 ```
 
 报告：
 
 ```bash
-python -m src.report \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}-smoke"
+"${PYTHON_BIN}" -m src.report \
+  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
 ```
 
-约束说明：
+当前实现下的重要说明：
 
-- 必须存在 `ISCX`（或 `ISCX-VPN-NonVPN-2016` 别名）、`MFCP`、`MTA` 三个数据集的 `session_full/manifest/session_manifest.*`
-- 若缺失，阶段1会直接报错退出
+- `src.train` 当前支持：
+  - `--hidden-dim`
+  - `--num-heads`
+  - `--alpha`
+  - `--beta`
+  - `--val-fraction`
+  - `--train-max-samples`
+  - `--best-metric {val_macro_f1,val_acc}`
+- 当前已经没有 `early-stopping` 相关参数，旧文档里的 `--early-stopping-patience` / `--early-stopping-min-delta` 已过期。
+- 当 manifest 没有显式 `val` split 时，`src.train` 会从 `train` 中按 `--val-fraction`（默认 `0.1`）派生验证集。
+- 二分类下，训练会为验证集搜索 `decision_threshold`，`src.evaluate` 会自动复用 `best.ckpt` 或 `config.yaml` 中保存的该阈值。
+- 如果你把 `--best-metric` 设为 `val_acc`，`best.ckpt` 会按 `val_acc` 保存；但当前 `src.report` 的 `Best Validation` 段仍按 `val_macro_f1` 排序展示，这一点和 checkpoint 选择逻辑不是完全一致。
 
-## 4. 阶段2：多分类
+### 2.3 一键执行版本
 
-### 4.1 只生成任务文件
+如果你只想快速跑通而不是精调参数，可以直接用：
 
 ```bash
-python -m src.experiments.stage2_multiclass \
-  --output outputs/protocol/stage2_tasks.json
+"${PYTHON_BIN}" -m src.experiments.stage1_binary \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --protocol-mode paper_balanced \
+  --output outputs/protocol/stage1_binary_manifest.csv \
+  --execute \
+  --run-root runs \
+  --run-id stage1-binary \
+  --stage fusion \
+  --epochs 30 \
+  --batch-size 32 \
+  --lr 1e-3 \
+  --seed 42 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4
 ```
 
 说明：
 
-- `stage2_tasks.json` 只写入 3 个基础任务：
-  - `MTA`
-  - `MFCP`
-  - `USTC-TFC2016`
+- `--execute` 在 `stage in {warmup, fusion}` 时会自动调用：
+  - `train`
+  - `evaluate --split test`
+  - `report`
+- 若 `stage` 是 `stacking` 或 `moe`，会跳过 `evaluate`，然后直接生成报告。
 
-### 4.2 训练基础任务
+## 3. Stage2 多分类
 
-先生成任务文件：
+当前 `stage2_multiclass` 的基础任务固定为：
+
+- `MTA`，`num_classes=7`
+- `MFCP`，`num_classes=6`
+- `USTC-TFC2016`，`num_classes=10`
+
+### 3.1 只生成任务文件
 
 ```bash
-python -m src.experiments.stage2_multiclass \
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
   --output outputs/protocol/stage2_tasks.json
 ```
 
-#### 4.2.1 训练 MTA
+注意：
+
+- `stage2_tasks.json` 只会写入上面 3 个基础任务。
+- `USTC 4000/3000/2000` 限样任务不会写入这个 JSON。
+
+### 3.2 一键执行全部基础任务
 
 ```bash
-python -m src.train \
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
   --processed-root outputs/processed \
   --policy session_full \
-  --datasets MTA \
-  --label-mode multiclass \
-  --num-classes 7 \
   --run-root runs \
-  --run-id stage2-mta \
-  --stage fusion \
-  --epochs 30 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4
-```
-
-#### 4.2.2 训练 MFCP
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets MFCP \
-  --label-mode multiclass \
-  --num-classes 6 \
-  --run-root runs \
-  --run-id stage2-mfcp \
-  --stage fusion \
-  --epochs 30 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4
-```
-
-#### 4.2.3 训练 USTC-TFC2016
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets USTC-TFC2016 \
-  --label-mode multiclass \
-  --num-classes 10 \
-  --train-max-samples 2000 \
-  --run-root runs \
-  --run-id stage2-ustc-tfc2016 \
   --stage fusion \
   --epochs 12 \
   --batch-size 16 \
@@ -461,18 +296,95 @@ python -m src.train \
   --num-workers 4
 ```
 
-默认基础任务：
+当前行为：
 
-- `MTA` 7 类
-- `MFCP` 6 类
-- `USTC-TFC2016` 10 类
+- 会先跑：
+  - `stage2-mta`
+  - `stage2-mfcp`
+  - `stage2-ustc-tfc2016`
+- 默认还会继续跑额外的 USTC 限样任务：
+  - `stage2-ustc-tfc2016-train4000`
+  - `stage2-ustc-tfc2016-train3000`
+  - `stage2-ustc-tfc2016-train2000`
+- 汇总结果会写到：
+  - `runs/stage2_execution_summary.json`
 
-### 4.3 分别评估基础任务
-
-评估 MTA：
+如果你只想跑 3 个基础任务，不跑额外 USTC 限样任务：
 
 ```bash
-python -m src.evaluate \
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --device auto \
+  --num-workers 4 \
+  --skip-ustc-limited
+```
+
+如果想自定义 USTC 限样规模：
+
+```bash
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --device auto \
+  --num-workers 4 \
+  --ustc-train-limits 5000 2500 1000
+```
+
+### 3.3 按数据集分别跑
+
+仓库里已经有可直接复用的脚本：
+
+```bash
+bash docs/commands/stage2-multiclass-e2e.sh
+```
+
+支持：
+
+- `bash docs/commands/stage2-multiclass-e2e.sh`
+- `bash docs/commands/stage2-multiclass-e2e.sh mta`
+- `bash docs/commands/stage2-multiclass-e2e.sh mfcp`
+- `bash docs/commands/stage2-multiclass-e2e.sh ustc`
+
+该脚本当前与代码实现保持一致：
+
+- 先按数据集做 `session_full` 预处理
+- 再执行 `train`
+- 然后执行 `evaluate --allow-split-fallback`
+- 最后执行 `report`
+
+## 4. 通用评估与报告
+
+### 4.1 单独评估
+
+```bash
+"${PYTHON_BIN}" -m src.evaluate \
+  --run-dir runs/stage2-mta \
+  --split test \
+  --checkpoint best \
+  --device auto
+```
+
+当目标 split 不存在时，可以允许回退：
+
+```bash
+"${PYTHON_BIN}" -m src.evaluate \
   --run-dir runs/stage2-mta \
   --split test \
   --checkpoint best \
@@ -480,367 +392,50 @@ python -m src.evaluate \
   --allow-split-fallback
 ```
 
-评估 MFCP：
+回退顺序是：
+
+- 先尝试请求的 split
+- 再尝试 `val`
+- 最后尝试 `all`
+
+### 4.2 单独生成报告
 
 ```bash
-python -m src.evaluate \
-  --run-dir runs/stage2-mfcp \
-  --split test \
-  --checkpoint best \
-  --device auto \
-  --allow-split-fallback
-```
-
-评估 USTC-TFC2016：
-
-```bash
-python -m src.evaluate \
-  --run-dir runs/stage2-ustc-tfc2016 \
-  --split test \
-  --checkpoint best \
-  --device auto \
-  --allow-split-fallback
-```
-
-### 4.4 分别生成基础任务报告
-
-MTA：
-
-```bash
-python -m src.report \
+"${PYTHON_BIN}" -m src.report \
   --run-dir runs/stage2-mta
 ```
 
-MFCP：
-
-```bash
-python -m src.report \
-  --run-dir runs/stage2-mfcp
-```
-
-USTC-TFC2016：
-
-```bash
-python -m src.report \
-  --run-dir runs/stage2-ustc-tfc2016
-```
-
-### 4.5 可选：USTC 限样训练 / 评估 / 报告
-
-例如训练 `train_max_samples=4000`：
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets USTC-TFC2016 \
-  --label-mode multiclass \
-  --num-classes 10 \
-  --train-max-samples 4000 \
-  --run-root runs \
-  --run-id stage2-ustc-tfc2016-train4000 \
-  --stage fusion \
-  --epochs 12 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4
-```
-
-评估：
-
-```bash
-python -m src.evaluate \
-  --run-dir runs/stage2-ustc-tfc2016-train4000 \
-  --split test \
-  --checkpoint best \
-  --device auto \
-  --allow-split-fallback
-```
-
-报告：
-
-```bash
-python -m src.report \
-  --run-dir runs/stage2-ustc-tfc2016-train4000
-```
-
-其余限样值同理，把 `4000` 改成 `3000` 或 `2000` 即可。
-
-### 4.6 针对 `RTX 4060 Laptop 8GB + i7-13700 + 8GB RAM` 的推荐值
-
-推荐原则：
-
-- 优先 `--device auto`
-- `--num-workers 4` 作为起点，不建议一开始开太高
-- 当前代码会把选中的数据一次性读入内存，所以 `8GB RAM` 往往比 `8GB VRAM` 更早成为瓶颈
-
-推荐训练参数：
-
-- `stage1 binary`：
-  - `--epochs 12`
-  - `--batch-size 16`
-  - `--lr 1e-3`
-  - `--num-workers 4`
-- `stage2 MTA / MFCP`：
-  - `--epochs 12`
-  - `--batch-size 16`
-  - `--lr 1e-3`
-  - `--num-workers 4`
-- `stage2 USTC-TFC2016`：
-  - `--epochs 12`
-  - `--batch-size 16`
-  - `--lr 1e-3`
-  - `--num-workers 4`
-  - `--train-max-samples 2000` 起步
-
-如果出现问题：
-
-- CUDA OOM：先把 `--batch-size 16` 降到 `8`
-- 系统内存紧张或卡死：先把 `--num-workers 4` 降到 `0`，再降低 `--train-max-samples`
-- 只是想确认链路能通：先跑 smoke test
-
-### 4.7 一键脚本（每个数据集从头到尾）
-
-已提供脚本：`docs/commands/stage2-multiclass-e2e.sh`，包含每个数据集的完整流程：
-
-- 预处理（`session_full`）
-- 训练（`fusion`）
-- 评估（`evaluate`）
-- 报告（`report`）
-
-运行全部多分类数据集（`MTA + MFCP + USTC-TFC2016`）：
-
-```bash
-bash docs/commands/stage2-multiclass-e2e.sh
-```
-
-只运行单个数据集：
-
-```bash
-bash docs/commands/stage2-multiclass-e2e.sh mta
-bash docs/commands/stage2-multiclass-e2e.sh mfcp
-bash docs/commands/stage2-multiclass-e2e.sh ustc
-```
-
-## 5. 单独训练某个数据集
-
-### 5.1 只跑 MFCP
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets MFCP \
-  --label-mode multiclass \
-  --num-classes 6 \
-  --stage fusion \
-  --run-root runs \
-  --run-id mfcp-fusion \
-  --epochs 30 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4
-```
-
-### 5.2 只跑 MTA
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets MTA \
-  --label-mode multiclass \
-  --num-classes 7 \
-  --stage fusion \
-  --run-root runs \
-  --run-id mta-fusion \
-  --epochs 30 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4
-```
-
-### 5.3 只跑 USTC-TFC2016
-
-```bash
-python -m src.train \
-  --processed-root outputs/processed \
-  --policy session_full \
-  --datasets USTC-TFC2016 \
-  --label-mode multiclass \
-  --num-classes 10 \
-  --stage fusion \
-  --run-root runs \
-  --run-id ustc-fusion \
-  --epochs 12 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --seed 42 \
-  --device auto \
-  --num-workers 4 \
-  --train-max-samples 2000
-```
-
-## 6. 单独评估
-
-```bash
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --split test \
-  --checkpoint best \
-  --device auto
-```
-
-如果请求的 split 不存在，允许自动回退：
-
-```bash
-python -m src.evaluate \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --split test \
-  --checkpoint best \
-  --device auto \
-  --allow-split-fallback
-```
-
-## 7. 单独生成报告
-
-```bash
-python -m src.report \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}"
-```
-
-## 8. stacking / moe（可选）
-
-### 8.1 stacking
-
-```bash
-python -m src.stacking \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --n-splits 3 \
-  --oof-epochs 2 \
-  --batch-size 64 \
-  --seed 42
-```
-
-### 8.2 moe
-
-```bash
-python -m src.moe \
-  --run-dir "runs/${RUN_DATE}/${RUN_ID}" \
-  --epochs 5 \
-  --batch-size 64 \
-  --lr 1e-3 \
-  --seed 42
-```
-
-## 9. 日志、进度条、指标、混淆矩阵
-
-下面示例里的 `<run-dir>` 推荐理解为：
-
-- `runs/<date>/<run-id>`
-
-例如：
-
-- `runs/2026-03-21/stage1-binary-153012`
-
-### 9.1 日志
-
-有。
-
-训练会输出结构化日志到终端，同时写入：
-
-- `<run-dir>/train.log`
-
-常见事件包括：
-
-- `run_bootstrap`
-- `config_summary`
-- `dataset_stats`
-- `epoch_done`
-- `checkpoint_saved`
-
-### 9.2 进度条
-
-有。
-
-- 预处理：`tqdm`
-- 训练：`tqdm`
-- 验证：`tqdm`
-
-关闭方式：
-
-- 预处理加 `--no-progress`
-- 训练加 `--no-progress`
-
-### 9.3 训练指标
-
-训练过程会写入：
-
-- `<run-dir>/metrics.csv`
-
-当前会包含的核心列通常有：
-
-- `train_loss`
-- `train_acc`
-- `train_macro_f1`
-- `train_gate_mean`
-- `val_loss`
-- `val_acc`
-- `val_macro_f1`
-- `val_gate_mean`
-- `epoch_time`
-
-### 9.4 评估指标
-
-评估后会生成：
-
-- `<run-dir>/eval_test.json`
-- 若回退，也可能是：
-  - `eval_val.json`
-
-常见字段：
-
-- `top1`
-- `macro_precision`
-- `macro_f1`
-- `macro_recall`
-- `gate_mean`
-- `num_samples`
-- `requested_split`
-- `effective_split`
-
-### 9.5 混淆矩阵
-
-评估后会生成：
-
-- `<run-dir>/figures/confusion_matrix_<split>.csv`
-- `<run-dir>/figures/confusion_matrix_<split>.png`
-- `<run-dir>/figures/classification_report_<split>.csv`
-- `<run-dir>/figures/classification_report_<split>.json`
-
-例如：
-
-- `confusion_matrix_test.csv`
-- `confusion_matrix_test.png`
-
-### 9.6 学习曲线和汇总报告
-
-`report` 会生成：
-
-- `<run-dir>/report.md`
-- `<run-dir>/figures/learning_curve.png`
-
-### 9.7 stacking / moe 指标
-
-如果你额外运行：
-
-- `stacking` 会生成：
-  - `<run-dir>/stacking/meta_metrics.json`
-- `moe` 会生成：
-  - `<run-dir>/moe/moe_metrics.json`
+当前 `evaluate` 会产出：
+
+- `eval_<split>.json`
+- `figures/confusion_matrix_<split>.csv`
+- `figures/confusion_matrix_<split>.png`
+- `figures/classification_report_<split>.csv`
+- `figures/classification_report_<split>.json`
+
+当前 `report` 会：
+
+- 生成 `figures/learning_curve.png`
+- 汇总 `metrics.csv` 与评估 JSON
+- 在 `report.md` 中直接渲染：
+  - `Confusion Matrix`
+  - `Classification Report`
+  - `Paper-Compatible Metrics`
+
+## 5. 当前文档替换掉的旧内容
+
+下面这些旧说法已经不再适用，因此本次已整体删除：
+
+- 训练支持 `early-stopping` 参数
+- `stage1_binary --execute` 能透传 attention-fusion 的所有训练参数
+- 文档里默认直接使用系统 `python` 一定可行
+- Stage2 只会跑 3 个基础任务，不会额外生成 USTC 限样 run
+
+如果后续代码再改，优先以这几个入口文件为准，而不是继续在旧文档上打补丁：
+
+- `src/data/preprocess_runner.py`
+- `src/experiments/stage1_binary.py`
+- `src/experiments/stage2_multiclass.py`
+- `src/train.py`
+- `src/evaluate.py`
+- `src/report.py`

@@ -1,5 +1,35 @@
 # Documentation Sync Plan (MobileViT + ET-BERT Adapter)
 
+## Session Full 命令重写计划（2026-03-22）
+
+## Goal
+
+基于仓库当前最新实现，删除并重写 `docs/commands/session-full-experiments.md`，让实验命令、参数说明、执行顺序与现有代码严格对齐。
+
+## Status
+
+- Completed on 2026-03-22
+
+## Scope
+
+- `docs/commands/session-full-experiments.md`
+- `docs/planning-with-files/task_plan.md`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+- `src/data/preprocess_runner.py`
+- `src/experiments/stage1_binary.py`
+- `src/experiments/stage2_multiclass.py`
+- `src/train.py`
+- `src/evaluate.py`
+- `src/report.py`
+
+## Plan
+
+1. 核对仓库当前实验入口、CLI 参数、推荐路径与已有辅助脚本，确认旧文档哪些内容已过期。
+2. 提炼“当前可执行的最小完整流程”，统一环境、预处理、stage1、stage2、evaluate、report 的命令风格。
+3. 直接删除旧版 `session-full-experiments.md` 内容并按现状重写。
+4. 同步更新 findings/progress，记录这次命令文档重构的依据与限制。
+
 ## Goal
 
 将项目文档与当前代码实现对齐，重点覆盖架构口径、环境准备、实验命令和验证记录。

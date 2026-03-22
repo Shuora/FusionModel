@@ -1,5 +1,32 @@
 # Findings
 
+## Session Full 命令重写发现（2026-03-22）
+
+- 当前仓库工作区是干净的，`git status --short` 无未提交改动。
+- `docs/planning-with-files/` 已存在，可直接沿用，不需要新建重复目录。
+- 当前 shell 环境里默认没有 `python` 命令，只有 `python3`；旧文档里的 `python` 需要按仓库实际运行环境重新表述。
+- 直接运行系统 `python3 -m ... --help` 无法获得 CLI 帮助，因为当前基础环境缺失项目依赖：
+  - `numpy`
+  - `pandas`
+  - `matplotlib`
+- 因此本轮命令文档重写不能依赖“裸环境 help 输出”，需要结合：
+  - 仓库源码中的 argparse 定义
+  - 现有文档与脚本
+  - 项目已有 conda 环境路径（若存在）
+- 使用 `/home/shuora/miniconda3/envs/FusionModel/bin/python -m ... --help` 复核后，当前真实 CLI 情况是：
+  - `src.train` 支持 `--best-metric`，但不支持任何 `early-stopping` 参数
+  - `src.evaluate` 仅支持 `--run-dir / --split / --checkpoint / --device / --allow-split-fallback`
+  - `src.report` 仅支持 `--run-dir`
+- `src.experiments.stage1_binary --execute` 当前只会向训练/评估链路透传：
+  - `--device`
+  - `--num-workers`
+  - `--best-metric`
+- `src.experiments.stage2_multiclass --execute` 当前默认不仅跑 3 个基础任务，还会追加：
+  - `USTC-TFC2016 train4000`
+  - `USTC-TFC2016 train3000`
+  - `USTC-TFC2016 train2000`
+- `src.report` 当前 `Best Validation` 区块固定按 `metrics.csv` 中的 `val_macro_f1` 选最佳 epoch；当训练使用 `--best-metric val_acc` 时，报告展示与 `best.ckpt` 选择依据可能不一致。
+
 ## 模型结构调研发现（2026-03-22）
 
 - 模型代码主入口位于 `src/models/`，包含：
