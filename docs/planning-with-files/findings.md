@@ -570,3 +570,31 @@
   - 新增 `fusion_dropout=0.2`
 - 综合判断：
   - 主因不是“cross-attention 天生比 gate 差”，而是当前这版 bidirectional multi-token fusion 把预训练表征的稳定路径切断了，同时又没有 warmup/残差兜底，导致在类不平衡 stage1 binary 上迅速掉进多数类塌缩解。
+
+## Cross-Attention Stabilization + Early Stopping 实现结论（2026-03-23）
+
+- 本轮已在隔离 worktree `./.worktrees/codex-cross-attn-stabilization` 中完成实现。
+- 模型侧修复点：
+  - `src/models/fusion_model.py` 中，`head_img` 与 `head_tls` 已改回监督 pre-fusion pooled feature
+  - fusion 主头现在吃 `fused image context + fused text context + pre-fusion pooled image + pre-fusion pooled text`
+  - `return_features` 与三路 logits 的外部接口保持不变
+- 训练侧修复点：
+  - `src/train.py` 新增 `--early-stopping-patience`
+  - sentinel 为 `0`，表示禁用
+  - early stopping 监控指标复用 `--best-metric`
+  - 只有严格更优才重置 patience；持平不算 improvement
+  - 触发时会写 `early_stopping_triggered` 日志，并保留已写出的 `best.ckpt` / `metrics.csv`
+- 协议入口修复点：
+  - `src.experiments.stage1_binary.py` 已支持并透传 `--early-stopping-patience`
+- 测试侧新增/修正约束：
+  - 模型测试已从“aux heads 吃 fused context”改为“aux heads 吃 pre-fusion pooled feature”
+  - 新增 fusion head pooled shortcut 测试
+  - 新增 early stopping 的 trigger、`best-metric` 绑定、tie 语义、默认关闭、stage1 协议透传测试
+- 本轮验证命令需要显式清空环境污染的 Python 路径：
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest ...`
+  - 原因是当前桌面环境默认把 Python 3.12 的 `~/.py-user` 注入到 Python 3.9 conda 环境中
+- 已完成定向回归：
+  - `tests/models/test_fusion_model.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `tests/pipeline/test_protocol_execution.py`
+  - 结果：`48 passed`

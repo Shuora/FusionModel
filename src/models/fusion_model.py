@@ -128,7 +128,7 @@ class MobileViTETBertFusionClassifier(nn.Module):
             dropout=dropout,
         )
         self.fusion_proj = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+            nn.Linear(hidden_dim * 4, hidden_dim * 2),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim * 2, hidden_dim),
@@ -148,6 +148,8 @@ class MobileViTETBertFusionClassifier(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         img_features = self.image_backbone.forward_features(rgb)
         txt_features = self.text_backbone.forward_features(input_ids, attention_mask, token_type_ids)
+        img_pooled_pre = img_features["pooled"]
+        txt_pooled_pre = txt_features["pooled"]
         img_tokens = img_features["tokens"]
         txt_tokens = txt_features["tokens"]
         if use_fusion:
@@ -159,13 +161,13 @@ class MobileViTETBertFusionClassifier(nn.Module):
             img_ctx = img_tokens.mean(dim=1)
             txt_ctx = _masked_mean(txt_tokens, txt_features["mask"])
         else:
-            img_ctx = img_features["pooled"]
-            txt_ctx = txt_features["pooled"]
-        fused = self.fusion_proj(torch.cat([img_ctx, txt_ctx], dim=-1))
+            img_ctx = img_pooled_pre
+            txt_ctx = txt_pooled_pre
+        fused = self.fusion_proj(torch.cat([img_ctx, txt_ctx, img_pooled_pre, txt_pooled_pre], dim=-1))
         out = {
             "logits_fuse": self.head_fuse(fused),
-            "logits_img": self.head_img(img_ctx),
-            "logits_tls": self.head_tls(txt_ctx),
+            "logits_img": self.head_img(img_pooled_pre),
+            "logits_tls": self.head_tls(txt_pooled_pre),
         }
         if return_features:
             out["img_tokens"] = img_tokens

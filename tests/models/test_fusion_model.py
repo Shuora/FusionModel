@@ -34,7 +34,7 @@ def test_mobilevit_etbert_fusion_model_handles_partial_attention_mask():
     assert "gate" not in out
 
 
-def test_mobilevit_etbert_fusion_model_aux_heads_use_fused_context_features():
+def test_mobilevit_etbert_fusion_model_aux_heads_use_prefusion_pooled_features():
     class DummyImageBackbone(nn.Module):
         def forward_features(self, rgb):
             batch = rgb.shape[0]
@@ -86,9 +86,63 @@ def test_mobilevit_etbert_fusion_model_aux_heads_use_fused_context_features():
 
     out = model(rgb, input_ids, attention_mask, token_type_ids)
 
-    assert torch.allclose(model.head_img.last_input, torch.full((2, 4), 3.0))
-    assert torch.allclose(model.head_tls.last_input, torch.full((2, 4), 4.0))
+    assert torch.allclose(model.head_img.last_input, torch.full((2, 4), 10.0))
+    assert torch.allclose(model.head_tls.last_input, torch.full((2, 4), 20.0))
     assert out["logits_fuse"].shape == (2, 1)
+
+
+def test_mobilevit_etbert_fusion_model_fusion_head_keeps_prefusion_shortcut():
+    class DummyImageBackbone(nn.Module):
+        def forward_features(self, rgb):
+            batch = rgb.shape[0]
+            pooled = torch.full((batch, 4), 10.0, dtype=rgb.dtype, device=rgb.device)
+            tokens = torch.full((batch, 2, 4), 1.0, dtype=rgb.dtype, device=rgb.device)
+            return {"tokens": tokens, "pooled": pooled}
+
+    class DummyTextBackbone(nn.Module):
+        def forward_features(self, input_ids, attention_mask, token_type_ids):
+            batch = input_ids.shape[0]
+            pooled = torch.full((batch, 4), 20.0, dtype=torch.float32, device=input_ids.device)
+            tokens = torch.full((batch, 3, 4), 2.0, dtype=torch.float32, device=input_ids.device)
+            mask = torch.ones((batch, 3), dtype=attention_mask.dtype, device=attention_mask.device)
+            return {"tokens": tokens, "mask": mask, "pooled": pooled}
+
+    class DummyFusionEncoder(nn.Module):
+        def forward(self, image_tokens, text_tokens, text_mask):
+            return (
+                torch.full_like(image_tokens, 3.0),
+                torch.full_like(text_tokens, 4.0),
+            )
+
+    class RecorderModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.last_input = None
+
+        def forward(self, x):
+            self.last_input = x.detach().clone()
+            return x
+
+    class SumHead(nn.Module):
+        def forward(self, x):
+            return x.sum(dim=1, keepdim=True)
+
+    model = MobileViTETBertFusionClassifier(num_classes=1, hidden_dim=4, vocab_size=128, max_tokens=8)
+    model.image_backbone = DummyImageBackbone()
+    model.text_backbone = DummyTextBackbone()
+    model.fusion_encoder = DummyFusionEncoder()
+    model.fusion_proj = RecorderModule()
+    model.head_fuse = SumHead()
+
+    rgb = torch.rand(2, 3, 28, 28)
+    input_ids = torch.randint(0, 128, (2, 8))
+    attention_mask = torch.ones(2, 8, dtype=torch.long)
+    token_type_ids = torch.zeros(2, 8, dtype=torch.long)
+
+    model(rgb, input_ids, attention_mask, token_type_ids)
+
+    expected = torch.tensor([[3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0, 10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0, 20.0]])
+    assert torch.allclose(model.fusion_proj.last_input, expected.repeat(2, 1))
 
 
 def test_mobilevit_etbert_fusion_model_warmup_bypasses_fusion_encoder_and_uses_pooled_features():

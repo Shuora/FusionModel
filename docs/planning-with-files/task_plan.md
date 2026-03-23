@@ -8,7 +8,7 @@
 
 ## Status
 
-- In progress on 2026-03-23
+- Completed on 2026-03-23
 
 ## Scope
 
