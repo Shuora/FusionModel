@@ -12,12 +12,12 @@ _LEVEL_MAP = {
 }
 
 _MODULE_MAP = {
-    "data": ("🧱", "数据"),
-    "model": ("🧠", "模型"),
-    "eval": ("🧪", "评估"),
-    "save": ("💾", "保存"),
-    "time": ("⏱️", "时间"),
-    "metric": ("📈", "指标"),
+    "data": ("🧱", "Data"),
+    "model": ("🧠", "Model"),
+    "eval": ("🧪", "Eval"),
+    "save": ("💾", "Save"),
+    "time": ("⏱️", "Time"),
+    "metric": ("📈", "Metric"),
 }
 
 _EVENT_MAP = {
@@ -63,7 +63,7 @@ def format_log_line(
 ) -> str:
     level_icon, level_text = _LEVEL_MAP.get(level.lower(), _LEVEL_MAP["info"])
     module_icon, module_text = _MODULE_MAP.get(
-        module.lower(), ("🧩", f"模块:{module}")
+        module.lower(), ("🧩", f"Module:{module}")
     )
 
     ts = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
