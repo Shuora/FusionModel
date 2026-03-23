@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-03-23
+
+- 启动“cross-attention 融合改造”任务，已读取：
+  - `AGENTS.md`
+  - `docs/planning-with-files/{task_plan,findings,progress}.md`
+  - `src/models/{fusion_model,mobilevit_backbone,etbert_backbone}.py`
+  - `tests/models/test_fusion_model.py`
+  - `README.md`
+  - `using-superpowers` / `brainstorming` / `planning-with-files` / `test-driven-development` / `using-git-worktrees` 技能说明
+- 已确认当前融合方式是 gate feature fusion，不是多模态 cross-attention。
+- 已确认接口兼容边界：
+  - 训练链路当前依赖 `logits_fuse/logits_img/logits_tls/gate`
+  - 因此改造时优先保持这些输出 key 仍可用
+- 已发现一个环境差异：
+  - `planning-with-files` skill 文档里给出的 `session-catchup.py` 默认路径在当前机器不存在
+  - 本轮已记录该问题，后续不重复尝试同一路径
+- 当前仍处于 brainstorm/design 阶段，尚未进入实现或创建 worktree。
+- 用户已进一步确认：本轮以性能上限为优先，不要求保持现有模型输出或训练接口基本不变。
+
 ## 2026-03-22
 
 - 启动“session_full 实验命令重写”任务，已读取：
