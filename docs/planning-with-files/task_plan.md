@@ -1,5 +1,121 @@
 # Cross-Attention Fusion Plan (2026-03-23)
 
+## Cross-Attention Stabilization + Early Stopping Plan (2026-03-23)
+
+## Goal
+
+修复当前 cross-attention 融合模型在 `stage1 binary` 上塌缩到多数类的问题，并为训练入口补充通用 early stopping 机制。
+
+## Status
+
+- In progress on 2026-03-23
+
+## Scope
+
+- `src/models/fusion_model.py`
+- `src/train.py`
+- `src/experiments/stage1_binary.py`
+- `tests/models/test_fusion_model.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `tests/pipeline/test_protocol_execution.py`
+- `docs/superpowers/specs/2026-03-23-cross-attention-stabilization-design.md`
+- `docs/superpowers/plans/2026-03-23-cross-attention-stabilization.md`
+- `docs/planning-with-files/{task_plan,findings,progress}.md`
+
+## Plan
+
+1. 将本轮修复设计固化为 spec，并完成 spec review。
+2. 将实现拆成 TDD 任务计划，明确模型修复、early stopping 与测试覆盖范围。
+3. 创建隔离 worktree，先补红灯测试，再最小实现模型稳定路径与 early stopping。
+4. 跑定向回归，确认模型接口、训练流程与 stage1 协议透传不回退。
+
+## Cross-Attention Stage1 Acc Regression Investigation (2026-03-23)
+
+## Goal
+
+只读排查当前 cross-attention 融合实现里，与旧 gate 模型相比最可能导致 `stage1 acc` 降到约 `70%` 的结构性问题，不改代码，只输出结论与证据路径。
+
+## Status
+
+- Completed on 2026-03-23
+
+## Scope
+
+- `src/models/fusion_model.py`
+- `src/models/mobilevit_backbone.py`
+- `src/models/etbert_backbone.py`
+- `src/train.py`
+- `src/evaluate.py`
+- `src/experiments/stage1_binary.py`
+- `tests/models/test_fusion_model.py`
+- `tests/models/test_pretrained_backbones.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+- `docs/superpowers/specs/2026-03-21-stage1-accuracy-training-design.md`
+- `docs/superpowers/plans/2026-03-23-bidirectional-fusion-encoder-plan.md`
+- `docs/superpowers/plans/2026-03-21-stage1-accuracy-training-plan.md`
+- `runs/stage1-binary/config.yaml`
+
+## Plan
+
+1. 核对 cross-attention 设计文档与测试约束，提取 warmup、fusion token、aux heads、loss 的预期行为。
+2. 阅读当前 `fusion_model` 与两个 backbone，定位 token 数、信息瓶颈、随机初始化模块和与旧 gate 的结构差异。
+3. 阅读 `train/evaluate/stage1_binary`，确认 warmup 是否真的绕过 fusion，以及实际 stage1 run 是否用到了 warmup。
+4. 收敛最可能伤害 `stage1 acc` 的结构性问题，并记录证据路径。
+
+## Stage1 Evaluate OOM Fix Plan (2026-03-23)
+
+## Goal
+
+修复 `runs/stage1-binary` 在评估阶段因为整批上 GPU 导致的 CUDA OOM，同时保持现有 `stage1_binary -> evaluate -> report` 协议接口可继续直接使用。
+
+## Status
+
+- Completed on 2026-03-23
+
+## Scope
+
+- `src/evaluate.py`
+- `tests/pipeline/test_train_eval_report.py`
+- `tests/pipeline/test_protocol_execution.py`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 用单测复现“evaluate 需要按 batch 多次前向”的行为约束。
+2. 在 `src/evaluate.py` 中引入评估批大小参数，并将整批推理改为逐批聚合 logits。
+3. 回归 `train_eval_report` 与 `protocol_execution`，确认 stage1 协议执行链路不回退。
+
+## Stage1 Evaluate Failure Investigation (2026-03-23)
+
+## Goal
+
+只读排查 `runs/stage1-binary` 在 stage1 协议评估阶段的失败根因，确认 OOM 与 `state_dict` mismatch 是否属于同一问题。
+
+## Status
+
+- Completed on 2026-03-23
+
+## Scope
+
+- `src/evaluate.py`
+- `src/pipeline_data.py`
+- `src/models/fusion_model.py`
+- `src/experiments/stage1_binary.py`
+- `runs/stage1-binary/config.yaml`
+- `runs/stage1-binary/checkpoints/best.ckpt`
+- `runs/stage1-binary/train.log`
+- `runs/2026-03-21/stage1-binary-195511/config.yaml`
+- `runs/2026-03-22/stage1-binary-131314/config.yaml`
+
+## Plan
+
+1. 核对 `stage1_binary -> evaluate` 调用链，确认报错发生位置。
+2. 检查 `runs/stage1-binary` 当前 config 与 checkpoint key，判断是否为新 cross-attention run。
+3. 对比旧 run 的 checkpoint 结构，确认 `Missing key / Unexpected key` 的真实来源。
+4. 核对 test split 样本量与 `evaluate.py` 的张量搬运方式，判断 OOM 是否由全量一次性评估触发。
+
 ## Goal
 
 将当前 `MobileViTETBertFusionClassifier` 从门控特征融合改为 cross-attention 融合，同时尽量保持训练/评估主链路接口稳定。
@@ -44,6 +160,36 @@
   - 将实验命令更新为新模型参数口径
   - 删除 `docs/commands/stage2-multiclass-e2e.sh`
   - 将其命令并入 `docs/commands/session-full-experiments.md`
+
+---
+
+# Evaluate Checkpoint 兼容性排查计划（2026-03-23）
+
+## Goal
+
+只读排查 `src/evaluate.py` 在加载 checkpoint 时出现 `Missing key(s)` / `Unexpected key(s)` 的根因，并区分它与同轮出现的 CUDA OOM 是否属于同一问题。
+
+## Status
+
+- Completed on 2026-03-23
+
+## Scope
+
+- `src/evaluate.py`
+- `src/models/fusion_model.py`
+- `src/models/mobilevit_backbone.py`
+- `src/experiments/stage1_binary.py`
+- `runs/stage1-binary/config.yaml`
+- `runs/stage1-binary/checkpoints/best.ckpt`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 核对当前 `evaluate.py` 实例化的模型结构与配置来源。
+2. 读取 `runs/stage1-binary` 的配置与 checkpoint key，确认它期望的架构特征。
+3. 对比当前代码与历史 `gate` 版本模型，判断报错来自 run 目录不匹配、代码升级，还是两者叠加。
+4. 记录本次只读排查结论，并向用户说明 OOM 与 state_dict mismatch 的区别。
 
 # Documentation Sync Plan (MobileViT + ET-BERT Adapter)
 

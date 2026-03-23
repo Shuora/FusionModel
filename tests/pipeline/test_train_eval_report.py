@@ -1058,3 +1058,75 @@ def test_evaluate_warmup_disables_fusion_path(tmp_path: Path, monkeypatch):
 
     code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
     assert code == 0
+
+
+def test_evaluate_batches_forward_pass_to_avoid_full_split_oom(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "batched-eval-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "batched-eval-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((5, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((5, 128), dtype=np.int32),
+            "attention_mask": np.ones((5, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((5, 128), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1, 0], dtype=np.int32),
+            "split": np.array(["test", "test", "test", "test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+
+    batch_sizes = []
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, return_features=False, use_fusion=True):
+            batch_sizes.append(int(rgb.shape[0]))
+            logits = torch.zeros((rgb.shape[0], 2), dtype=torch.float32, device=rgb.device)
+            logits[:, 0] = 3.0
+            logits[:, 1] = 1.0
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--split",
+            "test",
+            "--device",
+            "cpu",
+            "--eval-batch-size",
+            "2",
+        ]
+    )
+    assert code == 0
+
+    payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
+    assert batch_sizes == [2, 2, 1]
+    assert payload["num_samples"] == 5
