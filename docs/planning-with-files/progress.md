@@ -2,6 +2,86 @@
 
 ## 2026-03-23
 
+- 启动“cross-attention stage1 acc 回退排查”只读任务，已按要求读取：
+  - `src/models/fusion_model.py`
+  - `src/models/mobilevit_backbone.py`
+  - `src/models/etbert_backbone.py`
+  - `src/train.py`
+  - `src/evaluate.py`
+  - `src/experiments/stage1_binary.py`
+  - `tests/models/test_fusion_model.py`
+  - `tests/models/test_pretrained_backbones.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+  - `docs/superpowers/specs/2026-03-21-stage1-accuracy-training-design.md`
+  - `docs/superpowers/plans/2026-03-23-bidirectional-fusion-encoder-plan.md`
+  - `docs/superpowers/plans/2026-03-21-stage1-accuracy-training-plan.md`
+  - `runs/stage1-binary/config.yaml`
+- 已补充历史对照：
+  - `git show d72aec7^:src/models/fusion_model.py`
+  - `git show d72aec7^:src/models/mobilevit_backbone.py`
+- 已确认 warmup 语义：
+  - `stage=warmup` 时，`train/evaluate` 都会通过 `use_fusion=False` 绕开 fusion encoder
+  - 但当前 `stage1_binary` 默认入口仍是 `stage=fusion`
+  - `runs/stage1-binary/config.yaml` 实际也是 `stage: fusion`
+  - `src/train.py` 不存在任何 checkpoint resume、冻结/解冻或阶段衔接逻辑
+- 已使用项目 conda 环境做只读验证：
+  - `MobileViTForImageClassification` 在 `28x28` 输入下的末三层 hidden state 形状分别是：
+    - `(96, 4, 4)`
+    - `(128, 2, 2)`
+    - `(160, 1, 1)`
+  - 当前 `MobileViTBackbone.forward_features()` 会生成 `21` 个 image tokens
+  - 当前模型中新增随机模块的参数量约为：
+    - `fusion_encoder`: `793088`
+    - `fusion_proj`: `98688`
+    - `image_backbone.token_proj`: `49536`
+- 当前结论已收敛：
+  - 最可疑问题是实际 stage1 fusion run 没有 warmup 过渡，且随机初始化的 cross-attention/token projection 从第一步就参与训练
+  - 辅助头已不再监督原始单模态表示，而是监督融合后上下文
+  - `alpha/beta` 默认值偏差存在，但不是当前 `runs/stage1-binary` 的主因
+- 本轮任务保持只读，未修改业务代码；仅同步 planning-with-files 文档。
+
+- 启动“stage1 evaluate OOM 修复”任务，按要求只处理第一个问题，不碰旧 checkpoint 兼容层。
+- 已按 `using-git-worktrees` 在 `.worktrees/codex-eval-batched` 创建隔离工作区，并确认基线测试：
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_train_eval_report.py`
+  - 结果：`21 passed`
+- 已按 TDD 新增红灯测试：
+  - `tests/pipeline/test_train_eval_report.py::test_evaluate_batches_forward_pass_to_avoid_full_split_oom`
+  - 首次失败原因符合预期：`evaluate.py` 尚不支持 `--eval-batch-size`
+- 已完成最小实现：
+  - `src/evaluate.py` 新增 `--eval-batch-size`
+  - 默认回退到训练 `batch_size`
+  - 评估前向改为按 batch 切片上卡、逐批聚合 `logits_*`
+- 已完成回归验证：
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_train_eval_report.py`
+  - 结果：`22 passed`
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_protocol_execution.py`
+  - 结果：`15 passed`
+
+- 启动“evaluate checkpoint 兼容性排查”只读任务，已读取：
+  - `src/evaluate.py`
+  - `src/models/fusion_model.py`
+  - `src/models/mobilevit_backbone.py`
+  - `src/experiments/stage1_binary.py`
+  - `runs/stage1-binary/config.yaml`
+  - `runs/stage1-binary/checkpoints/best.ckpt`
+  - `git log -p` 中 `2026-03-23` 的模型升级提交
+- 已确认这轮用户贴出的两个错误不是同一个根因：
+  - `runs/stage1-binary` 评估失败是 forward 阶段 CUDA OOM
+  - `state_dict` 加载失败更像是另一个旧 run 目录在用 gate 时代 checkpoint
+- 已通过实际读取 `best.ckpt` key 验证：
+  - `runs/stage1-binary` 当前 checkpoint 已包含 `fusion_encoder` / `fusion_proj` / `token_proj`
+  - 因而它与当前代码结构匹配，不会产生 `Unexpected key(s): gate.*`
+- 已补充历史对比证据：
+  - 当前 `fusion_model.py` 为 bidirectional fusion encoder
+  - `d72aec7^` 旧版本仍是 `gate` 融合
+  - 当前 `mobilevit_backbone.py` 有 `token_proj`
+  - 旧版本 `mobilevit_backbone.py` 无 `token_proj`
+- 下一步输出给用户的结论将明确区分：
+  - OOM 的触发位置与原因
+  - checkpoint mismatch 的触发条件与历史兼容性原因
+- 本轮只读排查已完成，未修改业务代码。
+
 - 启动“cross-attention 融合改造”任务，已读取：
   - `AGENTS.md`
   - `docs/planning-with-files/{task_plan,findings,progress}.md`
@@ -449,3 +529,32 @@
   - 结果：`2 passed, 11 deselected`
   - `python -m py_compile src/experiments/stage1_binary.py`
   - 结果：通过
+
+## 2026-03-23
+
+- 启动“cross-attention stage1 acc regression”只读排查，已读取：
+  - `docs/planning-with-files/{task_plan,findings,progress}.md`
+  - `src/models/{fusion_model,mobilevit_backbone,etbert_backbone}.py`
+  - `src/{train,evaluate}.py`
+  - `src/experiments/stage1_binary.py`
+  - `tests/models/test_fusion_model.py`
+  - `docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+- 已按要求使用并行 subagent：
+  - 一条线核对最近 stage1 run 的真实训练/验证/测试证据
+  - 一条线核对 cross-attention 结构相对旧 gate/attention 版本的退化点
+- 已确认用户提到的“70 acc”对应当前完整 run：
+  - `runs/stage1-binary`
+  - `git_commit=d72aec7`
+  - 不是 `runs/2026-03-23/stage1-binary-164557`，后者仍是 gate 时代且未完整结束
+- 已确认该 run 不是评估脚本误报，而是训练塌缩：
+  - 从 epoch 2 起，`train_acc/val_acc` 基本钉死在 `~0.692`
+  - `eval_test.json` 的 `top1=0.692725...`
+  - 对应二分类多数类基线
+- 已用只读脚本对 `runs/stage1-binary/checkpoints/best.ckpt` 做分支级复算：
+  - `fuse/img/tls/warmup_avg` 四种读法全部是 `positive_rate=1.0`
+  - 说明不是单独某个 fusion 头坏掉，而是整条训练路径都掉进了“全预测恶意类”
+- 已补充结构性证据：
+  - 当前 `use_fusion=True` 时，辅助头不再吃 backbone pooled feature，而是吃 fusion 后 context
+  - `MobileViT` 预训练最稳的 pooled image feature 在 fusion 训练路径里被绕开
+  - stage1 当前又直接以 `stage=fusion` 从头训练，没有 warmup 兜底
+- 本轮结论已同步写入 `findings.md`，本次任务保持只读，未改业务代码。

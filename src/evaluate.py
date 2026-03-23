@@ -86,6 +86,14 @@ def _confidence_mean(out: dict, stage: str) -> float:
     return float(probs.max(dim=1).values.mean().item())
 
 
+def _concat_eval_outputs(batches: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    return {
+        "logits_fuse": torch.cat([batch["logits_fuse"] for batch in batches], dim=0),
+        "logits_img": torch.cat([batch["logits_img"] for batch in batches], dim=0),
+        "logits_tls": torch.cat([batch["logits_tls"] for batch in batches], dim=0),
+    }
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate TLS fusion model")
     parser.add_argument("--run-dir", required=True)
@@ -93,6 +101,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--checkpoint", default="best")
     parser.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"])
     parser.add_argument("--allow-split-fallback", action="store_true", default=False)
+    parser.add_argument("--eval-batch-size", type=int, default=None)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     run_dir = resolve_run_dir(args.run_dir)
@@ -141,10 +150,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         return 2
 
-    rgb_eval = torch.from_numpy(rgb[mask]).float().to(device)
-    input_eval = torch.from_numpy(input_ids[mask]).long().to(device)
-    attn_eval = torch.from_numpy(attention_mask[mask]).long().to(device)
-    token_type_eval = torch.from_numpy(token_type_ids[mask]).long().to(device)
+    rgb_eval = rgb[mask]
+    input_eval = input_ids[mask]
+    attn_eval = attention_mask[mask]
+    token_type_eval = token_type_ids[mask]
     y_eval = y[mask]
 
     ckpt_name = "best.ckpt" if args.checkpoint == "best" else "last.ckpt"
@@ -159,14 +168,21 @@ def main(argv: Iterable[str] | None = None) -> int:
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
+    eval_batch_size = int(args.eval_batch_size or cfg.get("eval_batch_size") or cfg.get("batch_size", 32))
+    eval_batch_size = max(1, eval_batch_size)
     with torch.no_grad():
-        out = model(
-            rgb_eval,
-            input_eval,
-            attn_eval,
-            token_type_eval,
-            use_fusion=cfg.get("stage") != "warmup",
-        )
+        out_batches = []
+        for start in range(0, len(y_eval), eval_batch_size):
+            end = start + eval_batch_size
+            batch_out = model(
+                torch.from_numpy(rgb_eval[start:end]).float().to(device),
+                torch.from_numpy(input_eval[start:end]).long().to(device),
+                torch.from_numpy(attn_eval[start:end]).long().to(device),
+                torch.from_numpy(token_type_eval[start:end]).long().to(device),
+                use_fusion=cfg.get("stage") != "warmup",
+            )
+            out_batches.append({key: value.detach().cpu() for key, value in batch_out.items() if key.startswith("logits_")})
+        out = _concat_eval_outputs(out_batches)
     if cfg.get("stage") == "warmup":
         logits = (out["logits_img"] + out["logits_tls"]) / 2.0
     else:
@@ -209,6 +225,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "num_samples": int(mask.sum()),
         "checkpoint": ckpt_name,
         "decision_threshold": decision_threshold,
+        "eval_batch_size": eval_batch_size,
         "device_requested": requested_device,
         "device": resolved_device,
         "device_fallback": device_fallback,

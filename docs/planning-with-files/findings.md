@@ -1,5 +1,103 @@
 # Findings
 
+## Cross-Attention Stage1 Acc 回退排查结论（2026-03-23）
+
+- 与旧 gate 模型相比，当前最可疑的结构性问题不是“warmup 逻辑写错”，而是“实际 stage1 run 根本没有走 warmup”：
+  - `stage1_binary` 默认 `--stage fusion`，见 `src/experiments/stage1_binary.py`
+  - 当前 `runs/stage1-binary/config.yaml` 也明确记录 `stage: fusion`
+  - `src/train.py` 没有任何 `resume / preload / requires_grad` 冻结解冻逻辑，说明 fusion run 会从随机初始化的 fusion 模块直接开训
+  - 这与设计文档里“warmup 先训 backbone + 单模态头，再进入 fusion”的语义并不一致
+- 当前实现里，真正新增且未预训练的关键模块规模不小：
+  - `image_backbone.token_proj`
+  - `fusion_encoder`
+  - `fusion_proj`
+  其中 `MobileViTBackbone` 先加载 `self.model` checkpoint，再创建 `token_proj / proj`，因此这两类投影层必然随机初始化。
+  - 使用项目 conda 环境实测，`fusion_encoder + fusion_proj + image token_proj` 参数量约为 `94` 万；对比旧 gate 版本只新增了一个很浅的 `gate`
+- 当前文本 backbone 也并没有在训练入口使用任何 ET-BERT 预训练 checkpoint：
+  - `ETBertBackbone` 支持 `checkpoint_path`
+  - 但 `src/train.py` 实例化 `MobileViTETBertFusionClassifier` 时没有向 `text_backbone` 传入任何 checkpoint/config
+  - 因而在 fusion run 中，强预训练的图像分支会从第一步开始反复与随机初始化的文本 token 以及随机初始化的 cross-attention 交互，这比旧 gate 模型更容易污染图像主干表示
+- token 数本身不是最直接的问题，但它放大了上述风险：
+  - 设计文档明确因为 `28x28` 输入下最终层只剩单 image token，所以改成多尺度 image tokens
+  - 实际使用项目 conda 环境验证，当前 `MobileViTBackbone.forward_features()` 在 `28x28` 输入下会产出 `21` 个 image tokens（来自 `4x4 + 2x2 + 1x1`）
+  - 这解决了“单 token”瓶颈，但也让随机初始化的 fusion 模块在每个 batch 都要处理更多跨模态交互
+- 辅助头“还能学”，但语义已明显偏离旧 gate 模型，对稳定训练不利：
+  - 旧 gate 模型中 `logits_img/logits_tls` 直接监督各自 backbone 的 pooled feature
+  - 新模型与测试约束都明确要求 `head_img/head_tls` 吃的是融合后的 `img_ctx/txt_ctx`
+  - 这意味着辅助监督不再是“保护单模态主干”，而是在给已经被 cross-attention 改写过的表示继续加损失；在文本侧未预训练时，这种监督更可能把噪声反向灌进图像侧
+- warmup “是否真的绕过 fusion”的答案是：
+  - 是，代码层面确实绕过了
+  - 但这只能说明 `stage=warmup` 时行为正确，不能缓解当前 `stage1-binary` 实际 run 直接使用 `stage=fusion` 的问题
+- `loss` 配比不是当前 `runs/stage1-binary` 回退到约 `70%` 的首要嫌疑：
+  - 设计文档建议 `alpha=0.2 / beta=0.2`
+  - 当前 CLI 默认值仍是 `0.3 / 0.3`
+  - 但 `runs/stage1-binary/config.yaml` 实际记录的是 `alpha: 0.2 / beta: 0.2`
+  - 因此“loss 配比不匹配”是默认入口的隐患，不是这次已生成 run 的最强解释
+- 综上，最可能伤害 `stage1 acc` 的差异排序是：
+  1. 实际 fusion run 没有任何真正的 warmup/分阶段衔接，随机初始化 fusion 模块从 step 1 就参与训练
+  2. 新增 cross-attention/token projection 大量未预训练参数，且直接作用于原本强势的 MobileViT 表征
+  3. ET-BERT 侧仍未预训练，但新结构不再允许模型像旧 gate 那样轻易“忽略弱文本分支”
+  4. 辅助头从单模态监督变成融合后监督，削弱了 aux loss 原本的稳定器作用
+  5. `alpha/beta` 默认值与 spec 不一致，但不是当前 `runs/stage1-binary` 的主因
+
+## Stage1 Evaluate OOM 修复结论（2026-03-23）
+
+- `src/evaluate.py` 的根因不是模型加载，而是评估时把整个目标 split 一次性搬上设备并单次前向。
+- 当前已将评估路径改为 mini-batch 推理：
+  - 新增 CLI 参数 `--eval-batch-size`
+  - 未显式传入时，默认回退到 `config.yaml` 中训练期 `batch_size`
+  - 因此像 `runs/stage1-binary` 这类未带新参数的旧命令，也会自动按训练 batch size 分批评估
+- 新实现会逐批：
+  - 从 numpy 切片构造 tensor
+  - `.to(device)` 后前向
+  - 立刻把 `logits_*` 拉回 CPU 聚合
+  这样能显著降低新版 token-level fusion 模型在评估阶段的显存峰值。
+- 新增回归测试 `test_evaluate_batches_forward_pass_to_avoid_full_split_oom`：
+  - 使用 5 条 test 样本
+  - 显式传入 `--eval-batch-size 2`
+  - 断言模型前向批次为 `[2, 2, 1]`
+  - 断言 `eval_test.json` 中 `num_samples == 5`
+
+## Evaluate Checkpoint 兼容性排查发现（2026-03-23）
+
+- 当前 `src/evaluate.py` 会根据 `config.yaml` 实例化新版 `MobileViTETBertFusionClassifier`：
+  - `hidden_dim`
+  - `vocab_size`
+  - `fusion_layers`
+  - `fusion_heads`
+  - `fusion_dropout`
+  见 `src/evaluate.py:152-159`。
+- 当前主模型已经不是旧 `gate` 融合，而是双向 cross-attention 风格融合：
+  - `fusion_encoder`
+  - `fusion_proj`
+  - `head_fuse/head_img/head_tls`
+  见 `src/models/fusion_model.py:121-138`。
+- 当前图像分支也已从“只返回 pooled vector”升级为“多尺度 tokens + pooled”：
+  - 新增 `token_proj`
+  - `forward_features()` 返回 `tokens` 与 `pooled`
+  见 `src/models/mobilevit_backbone.py:25-28`、`src/models/mobilevit_backbone.py:52-66`。
+- `runs/stage1-binary/checkpoints/best.ckpt` 实际包含新版 key：
+  - `fusion_encoder.layers.*`
+  - `fusion_proj.*`
+  - `image_backbone.token_proj.*`
+  - `head_fuse/head_img/head_tls`
+  说明当前 `runs/stage1-binary` 不是旧 gate checkpoint。
+- 因此用户贴出的第二个 `state_dict` 报错，大概率不是来自 `runs/stage1-binary`，而是来自另一个旧 run 目录：
+  - 用户手工命令使用的是 `runs/${RUN_DATE}/${RUN_ID}`
+  - traceback 中出现 `Unexpected key(s): gate.*`
+  - 同时缺失 `token_proj.* / fusion_encoder.* / fusion_proj.*`
+  这与 2026-03-23 之前的旧 gate 模型完全一致。
+- Git 历史证据明确显示：`2026-03-23` 提交 `d72aec7` 将模型从 gate 融合切换为 bidirectional fusion encoder：
+  - 旧版 `fusion_model.py` 只有 `self.gate`
+  - 新版新增 `fusion_encoder/fusion_proj`
+  - 旧版 `evaluate.py` 还在消费 `out["gate"]`
+- 旧版 `MobileViTBackbone` 也没有 `token_proj`，只保留 `proj` 和 `forward()` pooled 输出，见 `git show d72aec7^:src/models/mobilevit_backbone.py`。
+- 这说明 `Missing key(s)` / `Unexpected key(s)` 的根因是“当前代码已升级为新版融合结构，但你手工指定的某个旧 run checkpoint 仍是 gate 时代产物”，属于历史 checkpoint 兼容性断裂，不是单纯 checkpoint 损坏。
+- 与此分离的另一个问题是 CUDA OOM：
+  - `stage1_binary` 的协议执行会直接调用 `evaluate_main(["--run-dir", ..., "--split", "test", ...])`，见 `src/experiments/stage1_binary.py:332-339`
+  - `evaluate.py` 会把整个 eval split 一次性 `.to(device)` 并整批前向，见 `src/evaluate.py:144-169`
+  - 这会在新版 token-level fusion 模型上显著抬高显存占用，因此与 checkpoint mismatch 不是同一个根因。
+
 ## Cross-Attention 融合改造发现（2026-03-23）
 
 - 用户明确表示本轮优化目标是“最终效果优先”，不是“尽量兼容当前训练/输出接口”。
@@ -433,3 +531,42 @@
 - 本轮修复后：
   - `stage1_binary` CLI 已支持 `--best-metric {val_macro_f1,val_acc}`
   - `--execute` 路径会将该参数继续传给 `src.train`
+
+## Cross-Attention Stage1 70% Acc 排查结论（2026-03-23）
+
+- 当前 cross-attention 改造后的完整失败 run 是：
+  - `runs/stage1-binary`
+  - `train.log` 记录的 git commit 为 `d72aec7`
+  - `config.yaml` 已包含 `fusion_layers / fusion_heads / fusion_dropout`
+  - 指标观测字段也从旧版 `gate_mean` 变为 `fuse_conf_mean`
+- 这次失败不是评估口径问题，也不是中途崩溃，而是训练在第 2 个 epoch 起快速塌缩为“全预测恶意类”：
+  - `train_acc / val_acc / test_top1` 长期稳定在 `~0.69`
+  - 该数值与整体 malicious 占比 `47854 / 69144 = 0.692` 基本一致
+  - `eval_test.json` 中：
+    - `top1 = 0.692725...`
+    - `macro_precision = 0.3463`
+    - `macro_recall = 0.5`
+    - `macro_f1 = 0.4092`
+  - 这组数值与“二分类里全预测为正类/恶意类”的行为一致
+- 进一步用 `runs/stage1-binary/checkpoints/best.ckpt` 做分支级只读复算后，确认不是只有融合头坏掉，而是三路头全部塌缩：
+  - `fuse`：`acc=0.6927`，`positive_rate=1.0`
+  - `img`：`acc=0.6927`，`positive_rate=1.0`
+  - `tls`：`acc=0.6927`，`positive_rate=1.0`
+  - `warmup_avg`：`acc=0.6927`，`positive_rate=1.0`
+- 和旧高分 run 对比：
+  - `runs/2026-03-22/stage1-binary-153827`（gate 时代）可以稳定收敛到：
+    - `val_acc ≈ 0.9617`
+    - `test_top1 ≈ 0.9655`
+  - 说明数据协议与评估链路本身没有突然变成只能跑 70%，回退点在模型/训练路径
+- 当前 cross-attention 实现里，最可能直接伤害 stage1 收敛的结构性变化有三项：
+  - 旧 gate / attention 版本中，`head_img` 和 `head_tls` 直接吃 backbone 的 pooled feature；当前版本在 `use_fusion=True` 时，两个辅助头吃的是 fusion 后的 `img_ctx/txt_ctx`，不再承担“稳定单模态监督”的作用
+  - `MobileViTBackbone` 在 fusion 路径下不再直接使用已有的 pooled image feature，而是改走多尺度 hidden state -> 随机初始化 `token_proj` -> fusion encoder；这等于把最强的图像预训练表征绕开了
+  - 当前 stage1 run 直接以 `stage=fusion` 从头训练，没有 warmup 阶段；因此 `token_proj + fusion_encoder + fusion_proj + 三个 head` 在不平衡二分类上同步从随机状态优化，最容易收敛到多数类解
+- 当前 run 的超参也比旧高分 run 更激进，放大了上述不稳定性：
+  - `hidden_dim: 128 -> 192`
+  - `batch_size: 16 -> 32`
+  - `alpha/beta: 0.3/0.3 -> 0.2/0.2`
+  - 新增 `fusion_layers=3`
+  - 新增 `fusion_dropout=0.2`
+- 综合判断：
+  - 主因不是“cross-attention 天生比 gate 差”，而是当前这版 bidirectional multi-token fusion 把预训练表征的稳定路径切断了，同时又没有 warmup/残差兜底，导致在类不平衡 stage1 binary 上迅速掉进多数类塌缩解。
