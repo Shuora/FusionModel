@@ -13,7 +13,10 @@
   - 支持按 `num_layers` 对 encoder 层数截断（不超过配置层数）。
   - 兼容多种外部 key 风格并输出 `last_checkpoint_report/checkpoint_report` 诊断信息。
 - 融合头：`src/models/fusion_model.py`
-  - `MobileViTETBertFusionClassifier` 输出 `logits_fuse/logits_img/logits_tls/gate`，供 train/evaluate/stacking/moe 全链路复用。
+  - `MobileViTETBertFusionClassifier` 当前使用 `2-layer bidirectional fusion encoder`，不再使用旧的 gate fusion。
+  - 图像侧从 `MobileViT` 多尺度 hidden states 提取并投影 image tokens，以适配当前 `28x28` RGB 输入。
+  - 文本侧输出 `tokens + mask + pooled`，与图像 token 一起进入双向 cross-attention 融合。
+  - 模型输出当前为 `logits_fuse/logits_img/logits_tls`，供 train/evaluate/stacking/moe 全链路复用。
 
 说明：当前 ET-BERT 侧是“ET-BERT 风格兼容适配器”，并非原始 UER ET-BERT 预训练模型的完整等价实现。
 

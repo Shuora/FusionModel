@@ -43,12 +43,15 @@ def _router_features(out: dict) -> torch.Tensor:
     def entropy(p: torch.Tensor) -> torch.Tensor:
         return -(p * torch.log(p.clamp_min(1e-8))).sum(dim=1, keepdim=True)
 
+    def agreement(p_a: torch.Tensor, p_b: torch.Tensor) -> torch.Tensor:
+        return (p_a * p_b).sum(dim=1, keepdim=True)
+
     f = torch.cat(
         [
             entropy(p_img),
             entropy(p_tls),
             entropy(p_fuse),
-            out["gate"],
+            agreement(p_img, p_tls),
             p_img.max(dim=1, keepdim=True).values,
             p_tls.max(dim=1, keepdim=True).values,
             p_fuse.max(dim=1, keepdim=True).values,
@@ -129,6 +132,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
+        fusion_layers=int(cfg.get("fusion_layers", 2)),
+        fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
+        dropout=float(cfg.get("fusion_dropout", 0.1)),
     ).to(device)
     best_ckpt = torch.load(run_dir / "checkpoints" / "best.ckpt", map_location="cpu")
     model.load_state_dict(best_ckpt["model_state"])

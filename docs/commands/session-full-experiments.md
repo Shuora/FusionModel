@@ -8,7 +8,6 @@
 - `src.train`
 - `src.evaluate`
 - `src.report`
-- `docs/commands/stage2-multiclass-e2e.sh`
 
 目标不是保留旧命令，而是给出“现在这份仓库真正能跑”的命令集合。
 
@@ -142,17 +141,23 @@ command -v "${PYTHON_BIN}" >/dev/null 2>&1 || PYTHON_BIN=/home/shuora/miniconda3
 
 推荐手动拆成 `manifest -> train -> evaluate -> report`。原因很简单：
 
-- `stage1_binary --execute` 只会透传：
-  - `--device`
-  - `--num-workers`
-  - `--best-metric`
-- 它不会透传 `src.train` 里这些可调参数：
+- 现在 `stage1_binary --execute` 已经能透传主训练超参数：
   - `--hidden-dim`
-  - `--num-heads`
+  - `--fusion-layers`
+  - `--fusion-heads`
+  - `--fusion-dropout`
   - `--alpha`
   - `--beta`
   - `--val-fraction`
   - `--train-max-samples`
+  - `--best-metric`
+  - `--device`
+  - `--num-workers`
+- 但如果你想单独控制：
+  - `evaluate` 的回退策略
+  - `report` 生成时机
+  - `max-grad-norm / grad-explode-threshold / no-progress`
+  仍然建议手动拆成 4 步。
 
 先生成 manifest：
 
@@ -189,7 +194,12 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --lr 1e-3 \
   --seed 42 \
   --hidden-dim 192 \
-  --num-heads 6 \
+  --fusion-layers 3 \
+  --fusion-heads 6 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
   --best-metric val_acc \
   --device auto \
   --num-workers 4
@@ -216,12 +226,15 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
 
 - `src.train` 当前支持：
   - `--hidden-dim`
-  - `--num-heads`
+  - `--fusion-layers`
+  - `--fusion-heads`
+  - `--fusion-dropout`
   - `--alpha`
   - `--beta`
   - `--val-fraction`
   - `--train-max-samples`
   - `--best-metric {val_macro_f1,val_acc}`
+- 为兼容旧命令，`--num-heads` 仍可作为 `--fusion-heads` 的 alias 使用，但新文档统一写 `--fusion-heads`。
 - 当前已经没有 `early-stopping` 相关参数，旧文档里的 `--early-stopping-patience` / `--early-stopping-min-delta` 已过期。
 - 当 manifest 没有显式 `val` split 时，`src.train` 会从 `train` 中按 `--val-fraction`（默认 `0.1`）派生验证集。
 - 二分类下，训练会为验证集搜索 `decision_threshold`，`src.evaluate` 会自动复用 `best.ckpt` 或 `config.yaml` 中保存的该阈值。
@@ -245,6 +258,13 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --batch-size 32 \
   --lr 1e-3 \
   --seed 42 \
+  --hidden-dim 192 \
+  --fusion-layers 3 \
+  --fusion-heads 6 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
   --best-metric val_acc \
   --device auto \
   --num-workers 4
@@ -292,6 +312,14 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --batch-size 16 \
   --lr 1e-3 \
   --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
   --device auto \
   --num-workers 4
 ```
@@ -323,6 +351,14 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --batch-size 16 \
   --lr 1e-3 \
   --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
   --device auto \
   --num-workers 4 \
   --skip-ustc-limited
@@ -342,32 +378,164 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --batch-size 16 \
   --lr 1e-3 \
   --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
   --device auto \
   --num-workers 4 \
   --ustc-train-limits 5000 2500 1000
 ```
 
-### 3.3 按数据集分别跑
+### 3.3 按数据集分别手动跑
 
-仓库里已经有可直接复用的脚本：
+下面这些命令就是旧 `stage2-multiclass-e2e.sh` 的替代版本，直接写在总文档里维护。
+
+#### 3.3.1 MTA
 
 ```bash
-bash docs/commands/stage2-multiclass-e2e.sh
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
+  --source-root SourceData \
+  --output-root outputs/processed \
+  --policies session_full \
+  --datasets MTA \
+  --seed 42 \
+  --cleanup-sessions \
+  --preview-per-family 20
+
+"${PYTHON_BIN}" -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets MTA \
+  --label-mode multiclass \
+  --num-classes 7 \
+  --run-root runs \
+  --run-id stage2-mta \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4
+
+"${PYTHON_BIN}" -m src.evaluate \
+  --run-dir runs/stage2-mta \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+
+"${PYTHON_BIN}" -m src.report \
+  --run-dir runs/stage2-mta
 ```
 
-支持：
+#### 3.3.2 MFCP
 
-- `bash docs/commands/stage2-multiclass-e2e.sh`
-- `bash docs/commands/stage2-multiclass-e2e.sh mta`
-- `bash docs/commands/stage2-multiclass-e2e.sh mfcp`
-- `bash docs/commands/stage2-multiclass-e2e.sh ustc`
+```bash
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
+  --source-root SourceData \
+  --output-root outputs/processed \
+  --policies session_full \
+  --datasets MFCP \
+  --seed 42 \
+  --cleanup-sessions \
+  --preview-per-family 20
 
-该脚本当前与代码实现保持一致：
+"${PYTHON_BIN}" -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets MFCP \
+  --label-mode multiclass \
+  --num-classes 6 \
+  --run-root runs \
+  --run-id stage2-mfcp \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4
 
-- 先按数据集做 `session_full` 预处理
-- 再执行 `train`
-- 然后执行 `evaluate --allow-split-fallback`
-- 最后执行 `report`
+"${PYTHON_BIN}" -m src.evaluate \
+  --run-dir runs/stage2-mfcp \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+
+"${PYTHON_BIN}" -m src.report \
+  --run-dir runs/stage2-mfcp
+```
+
+#### 3.3.3 USTC-TFC2016
+
+```bash
+"${PYTHON_BIN}" -m src.data.preprocess_runner \
+  --source-root SourceData \
+  --output-root outputs/processed \
+  --policies session_full \
+  --datasets USTC-TFC2016 \
+  --seed 42 \
+  --cleanup-sessions \
+  --preview-per-family 20
+
+"${PYTHON_BIN}" -m src.train \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --datasets USTC-TFC2016 \
+  --label-mode multiclass \
+  --num-classes 10 \
+  --train-max-samples 2000 \
+  --run-root runs \
+  --run-id stage2-ustc-tfc2016 \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4
+
+"${PYTHON_BIN}" -m src.evaluate \
+  --run-dir runs/stage2-ustc-tfc2016 \
+  --split test \
+  --checkpoint best \
+  --device auto \
+  --allow-split-fallback
+
+"${PYTHON_BIN}" -m src.report \
+  --run-dir runs/stage2-ustc-tfc2016
+```
 
 ## 4. 通用评估与报告
 

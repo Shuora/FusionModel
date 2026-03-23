@@ -364,6 +364,14 @@ def run_stage1_protocol(
     num_workers: int,
     best_metric: str,
     protocol_mode: str,
+    hidden_dim: int,
+    fusion_layers: int,
+    fusion_heads: int,
+    fusion_dropout: float,
+    alpha: float,
+    beta: float,
+    val_fraction: float,
+    train_max_samples: int | None,
 ) -> int:
     _log("协议执行模式已启用")
     manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode=protocol_mode)
@@ -372,42 +380,57 @@ def run_stage1_protocol(
     _log(f"Manifest 已保存: {output_manifest} (rows={len(manifest)})")
 
     _log("训练步骤开始")
-    train_code = train_main(
-        [
-            "--processed-root",
-            str(processed_root),
-            "--policy",
-            policy,
-            "--stage",
-            stage,
-            "--run-root",
-            str(run_root),
-            "--run-id",
-            run_id,
-            "--epochs",
-            str(epochs),
-            "--batch-size",
-            str(batch_size),
-            "--lr",
-            str(lr),
-            "--seed",
-            str(seed),
-            "--device",
-            device,
-            "--num-workers",
-            str(num_workers),
-            "--best-metric",
-            str(best_metric),
-            "--datasets",
-            *list(REQUIRED_STAGE1_DATASETS),
-            "--session-filter-manifest",
-            str(output_manifest),
-            "--label-mode",
-            "binary",
-            "--num-classes",
-            "2",
-        ]
-    )
+    train_args = [
+        "--processed-root",
+        str(processed_root),
+        "--policy",
+        policy,
+        "--stage",
+        stage,
+        "--run-root",
+        str(run_root),
+        "--run-id",
+        run_id,
+        "--epochs",
+        str(epochs),
+        "--batch-size",
+        str(batch_size),
+        "--lr",
+        str(lr),
+        "--seed",
+        str(seed),
+        "--device",
+        device,
+        "--num-workers",
+        str(num_workers),
+        "--best-metric",
+        str(best_metric),
+        "--hidden-dim",
+        str(hidden_dim),
+        "--fusion-layers",
+        str(fusion_layers),
+        "--fusion-heads",
+        str(fusion_heads),
+        "--fusion-dropout",
+        str(fusion_dropout),
+        "--alpha",
+        str(alpha),
+        "--beta",
+        str(beta),
+        "--val-fraction",
+        str(val_fraction),
+        "--datasets",
+        *list(REQUIRED_STAGE1_DATASETS),
+        "--session-filter-manifest",
+        str(output_manifest),
+        "--label-mode",
+        "binary",
+        "--num-classes",
+        "2",
+    ]
+    if train_max_samples is not None:
+        train_args.extend(["--train-max-samples", str(train_max_samples)])
+    train_code = train_main(train_args)
     if train_code != 0:
         _log(f"训练步骤失败: exit_code={train_code}")
         return train_code
@@ -433,6 +456,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--hidden-dim", type=int, default=128)
+    parser.add_argument("--fusion-layers", type=int, default=2)
+    parser.add_argument("--fusion-heads", "--num-heads", dest="fusion_heads", type=int, default=4)
+    parser.add_argument("--fusion-dropout", type=float, default=0.1)
+    parser.add_argument("--alpha", type=float, default=0.3)
+    parser.add_argument("--beta", type=float, default=0.3)
+    parser.add_argument("--val-fraction", type=float, default=0.1)
+    parser.add_argument("--train-max-samples", type=int, default=None)
     parser.add_argument("--protocol-mode", default="paper_balanced", choices=["paper_strict", "paper_balanced"])
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -458,6 +489,14 @@ def main(argv: Iterable[str] | None = None) -> int:
             num_workers=args.num_workers,
             best_metric=args.best_metric,
             protocol_mode=args.protocol_mode,
+            hidden_dim=args.hidden_dim,
+            fusion_layers=args.fusion_layers,
+            fusion_heads=args.fusion_heads,
+            fusion_dropout=args.fusion_dropout,
+            alpha=args.alpha,
+            beta=args.beta,
+            val_fraction=args.val_fraction,
+            train_max_samples=args.train_max_samples,
         )
 
     manifest = build_stage1_manifest(processed_root=processed_root, policy=args.policy, protocol_mode=args.protocol_mode)

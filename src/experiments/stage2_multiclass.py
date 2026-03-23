@@ -43,6 +43,14 @@ def _run_stage2_task(
     seed: int,
     device: str,
     num_workers: int,
+    hidden_dim: int,
+    fusion_layers: int,
+    fusion_heads: int,
+    fusion_dropout: float,
+    alpha: float,
+    beta: float,
+    val_fraction: float,
+    best_metric: str,
     train_max_samples: int | None = None,
     run_id_suffix: str = "",
 ) -> int:
@@ -66,6 +74,22 @@ def _run_stage2_task(
         str(lr),
         "--seed",
         str(seed),
+        "--hidden-dim",
+        str(hidden_dim),
+        "--fusion-layers",
+        str(fusion_layers),
+        "--fusion-heads",
+        str(fusion_heads),
+        "--fusion-dropout",
+        str(fusion_dropout),
+        "--alpha",
+        str(alpha),
+        "--beta",
+        str(beta),
+        "--val-fraction",
+        str(val_fraction),
+        "--best-metric",
+        str(best_metric),
         "--device",
         device,
         "--num-workers",
@@ -101,6 +125,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--hidden-dim", type=int, default=128)
+    parser.add_argument("--fusion-layers", type=int, default=2)
+    parser.add_argument("--fusion-heads", "--num-heads", dest="fusion_heads", type=int, default=4)
+    parser.add_argument("--fusion-dropout", type=float, default=0.1)
+    parser.add_argument("--alpha", type=float, default=0.3)
+    parser.add_argument("--beta", type=float, default=0.3)
+    parser.add_argument("--val-fraction", type=float, default=0.1)
+    parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
     parser.add_argument("--ustc-train-limits", nargs="+", type=int, default=[4000, 3000, 2000])
     parser.add_argument("--skip-ustc-limited", action="store_true", default=False)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -136,6 +168,14 @@ def main(argv: Iterable[str] | None = None) -> int:
             seed=args.seed,
             device=args.device,
             num_workers=args.num_workers,
+            hidden_dim=args.hidden_dim,
+            fusion_layers=args.fusion_layers,
+            fusion_heads=args.fusion_heads,
+            fusion_dropout=args.fusion_dropout,
+            alpha=args.alpha,
+            beta=args.beta,
+            val_fraction=args.val_fraction,
+            best_metric=args.best_metric,
         )
         summary.append(
             {
@@ -166,6 +206,14 @@ def main(argv: Iterable[str] | None = None) -> int:
                     seed=args.seed,
                     device=args.device,
                     num_workers=args.num_workers,
+                    hidden_dim=args.hidden_dim,
+                    fusion_layers=args.fusion_layers,
+                    fusion_heads=args.fusion_heads,
+                    fusion_dropout=args.fusion_dropout,
+                    alpha=args.alpha,
+                    beta=args.beta,
+                    val_fraction=args.val_fraction,
+                    best_metric=args.best_metric,
                     train_max_samples=int(limit),
                     run_id_suffix=f"-train{int(limit)}",
                 )

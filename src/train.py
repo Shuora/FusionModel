@@ -75,6 +75,15 @@ def _loss_and_logits(
     return loss, pred_logits
 
 
+def _confidence_mean(out: dict, stage: str) -> float:
+    if stage == "warmup":
+        logits = 0.5 * (out["logits_img"] + out["logits_tls"])
+    else:
+        logits = out["logits_fuse"]
+    probs = torch.softmax(logits, dim=1)
+    return float(probs.max(dim=1).values.mean().item())
+
+
 def _evaluate_loader(
     model: nn.Module,
     loader: DataLoader,
@@ -95,7 +104,7 @@ def _evaluate_loader(
     losses: List[float] = []
     preds: List[np.ndarray] = []
     labels: List[np.ndarray] = []
-    gate_means: List[float] = []
+    fuse_conf_means: List[float] = []
     positive_probs: List[np.ndarray] = []
     seen_samples = 0
     correct_samples = 0
@@ -115,7 +124,7 @@ def _evaluate_loader(
             attn_b = attn_b.to(device)
             token_type_b = token_type_b.to(device)
             y_b = y_b.to(device)
-            out = model(rgb_b, input_ids_b, attn_b, token_type_b)
+            out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=stage != "warmup")
             loss, pred_logits = _loss_and_logits(out, y_b, stage, ce, alpha, beta)
             pred = pred_logits.argmax(dim=1)
             batch_acc = float((pred == y_b).float().mean().item())
@@ -124,7 +133,7 @@ def _evaluate_loader(
             losses.append(float(loss.item()))
             preds.append(pred.cpu().numpy())
             labels.append(y_b.cpu().numpy())
-            gate_means.append(float(out["gate"].mean().item()))
+            fuse_conf_means.append(_confidence_mean(out, stage=stage))
             seen_samples += batch_size
             correct_samples += int((pred == y_b).sum().item())
             if pred_logits.shape[1] == 2:
@@ -142,7 +151,7 @@ def _evaluate_loader(
     val_loss = float(np.mean(losses))
     val_acc = float(np.mean(y_true == y_pred))
     val_macro_f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
-    val_gate_mean = float(np.mean(gate_means)) if gate_means else 0.0
+    val_fuse_conf_mean = float(np.mean(fuse_conf_means)) if fuse_conf_means else 0.0
     decision_threshold = None
     if positive_probs:
         threshold, _ = choose_best_binary_threshold(
@@ -150,7 +159,7 @@ def _evaluate_loader(
             y_true=y_true,
         )
         decision_threshold = threshold
-    return val_loss, val_acc, val_macro_f1, val_gate_mean, decision_threshold
+    return val_loss, val_acc, val_macro_f1, val_fuse_conf_mean, decision_threshold
 
 
 def _derive_validation_mask_from_train(
@@ -350,7 +359,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--num-heads", type=int, default=4)
+    parser.add_argument("--fusion-layers", type=int, default=2)
+    parser.add_argument("--fusion-heads", "--num-heads", dest="fusion_heads", type=int, default=4)
+    parser.add_argument("--fusion-dropout", type=float, default=0.1)
     parser.add_argument("--alpha", type=float, default=0.3)
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
@@ -433,7 +444,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "seed": args.seed,
         "model_type": "MobileViTETBertFusionClassifier",
         "hidden_dim": args.hidden_dim,
-        "num_heads": args.num_heads,
+        "fusion_layers": args.fusion_layers,
+        "fusion_heads": args.fusion_heads,
+        "fusion_dropout": args.fusion_dropout,
+        "num_heads": args.fusion_heads,
         "vocab_size": vocab_size,
         "num_classes": num_classes,
         "alpha": args.alpha,
@@ -461,6 +475,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
+            "hidden_dim": args.hidden_dim,
+            "fusion_layers": args.fusion_layers,
+            "fusion_heads": args.fusion_heads,
+            "fusion_dropout": args.fusion_dropout,
             "alpha": args.alpha,
             "beta": args.beta,
             "device_requested": requested_device,
@@ -569,6 +587,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         num_classes=num_classes,
         hidden_dim=args.hidden_dim,
         vocab_size=vocab_size,
+        fusion_layers=args.fusion_layers,
+        fusion_heads=args.fusion_heads,
+        dropout=args.fusion_dropout,
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
     ce = nn.CrossEntropyLoss()
@@ -601,7 +622,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         train_losses: List[float] = []
         train_preds: List[np.ndarray] = []
         train_targets: List[np.ndarray] = []
-        train_gates: List[float] = []
+        train_fuse_confidences: List[float] = []
         clipped_steps = 0
         train_seen_samples = 0
         train_correct_samples = 0
@@ -621,7 +642,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             token_type_b = token_type_b.to(device)
             y_b = y_b.to(device)
             optim.zero_grad()
-            out = model(rgb_b, input_ids_b, attn_b, token_type_b)
+            out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=loss_stage != "warmup")
             loss, pred_logits = _loss_and_logits(out, y_b, loss_stage, ce, args.alpha, args.beta)
             if not torch.isfinite(loss):
                 log("error", "model", "nan_loss", {"epoch": epoch, "stage": args.stage})
@@ -651,7 +672,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             train_losses.append(float(loss.item()))
             train_preds.append(pred.cpu().numpy())
             train_targets.append(y_b.cpu().numpy())
-            train_gates.append(float(out["gate"].mean().item()))
+            train_fuse_confidences.append(_confidence_mean(out, stage=loss_stage))
             train_seen_samples += batch_size
             train_correct_samples += int((pred == y_b).sum().item())
             running_loss = float(np.mean(train_losses)) if train_losses else float(loss.item())
@@ -677,9 +698,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         train_macro_f1 = (
             float(f1_score(y_true, y_pred, average="macro", zero_division=0)) if y_true.size > 0 else 0.0
         )
-        train_gate_mean = float(np.mean(train_gates)) if train_gates else 0.0
+        train_fuse_conf_mean = float(np.mean(train_fuse_confidences)) if train_fuse_confidences else 0.0
 
-        val_loss, val_acc, val_macro_f1, val_gate_mean, val_decision_threshold = _evaluate_loader(
+        val_loss, val_acc, val_macro_f1, val_fuse_conf_mean, val_decision_threshold = _evaluate_loader(
             model=model,
             loader=val_loader,
             device=device,
@@ -698,11 +719,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             "train_loss": train_loss,
             "train_acc": train_acc,
             "train_macro_f1": train_macro_f1,
-            "train_gate_mean": train_gate_mean,
+            "train_fuse_conf_mean": train_fuse_conf_mean,
             "val_loss": val_loss,
             "val_acc": val_acc,
             "val_macro_f1": val_macro_f1,
-            "val_gate_mean": val_gate_mean,
+            "val_fuse_conf_mean": val_fuse_conf_mean,
             "val_decision_threshold": val_decision_threshold,
             "lr": args.lr,
             "epoch_time": epoch_time,
@@ -722,7 +743,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "val_acc": f"{val_acc:.4f}",
                 "val_macroF1": f"{val_macro_f1:.4f}",
                 "val_decision_threshold": "none" if val_decision_threshold is None else f"{val_decision_threshold:.4f}",
-                "gate_mean": f"{val_gate_mean:.4f}",
+                "fuse_conf_mean": f"{val_fuse_conf_mean:.4f}",
                 "lr": args.lr,
                 "time_s": f"{epoch_time:.2f}",
             },

@@ -205,7 +205,7 @@ def test_train_evaluate_report_smoke(tmp_path: Path):
     assert "Paper-Compatible Metrics" in report_text
     assert "Paper Macro-F1" in report_text
     train_log = (run_dir / "train.log").read_text(encoding="utf-8")
-    assert "gate_mean" in train_log
+    assert "fuse_conf_mean" in train_log
     assert "git_commit=" in train_log
     assert "config_summary" in train_log
     assert "dataset_stats" in train_log
@@ -361,7 +361,7 @@ def test_evaluate_writes_classification_report_artifacts(tmp_path: Path, monkeyp
         def load_state_dict(self, state):
             return
 
-        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, use_fusion=True):
             logits = torch.tensor(
                 [
                     [3.0, 1.0],
@@ -372,8 +372,7 @@ def test_evaluate_writes_classification_report_artifacts(tmp_path: Path, monkeyp
                 dtype=torch.float32,
                 device=rgb.device,
             )
-            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
-            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
 
     monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
 
@@ -425,7 +424,7 @@ def test_evaluate_fallback_writes_classification_report_with_effective_split(tmp
         def load_state_dict(self, state):
             return
 
-        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, use_fusion=True):
             logits = torch.tensor(
                 [
                     [3.0, 1.0],
@@ -436,8 +435,7 @@ def test_evaluate_fallback_writes_classification_report_with_effective_split(tmp
                 dtype=torch.float32,
                 device=rgb.device,
             )
-            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
-            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
 
     monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
 
@@ -568,14 +566,13 @@ def test_evaluate_accepts_short_run_dir_and_resolves_dated_partition(tmp_path: P
         def load_state_dict(self, state):
             return
 
-        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, use_fusion=True):
             logits = torch.tensor(
                 [[3.0, 1.0], [1.0, 3.0], [1.0, 3.0], [3.0, 1.0]],
                 dtype=torch.float32,
                 device=rgb.device,
             )
-            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
-            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
 
     monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
 
@@ -858,6 +855,76 @@ def test_train_writes_best_metric_to_config(tmp_path: Path, monkeypatch):
     assert cfg["best_metric"] == "val_acc"
 
 
+def test_train_writes_fusion_hyperparams_to_config(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+
+    class StopAfterLoaderInit(Exception):
+        pass
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        train_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.random.default_rng(21).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
+            "input_ids": np.random.default_rng(22).integers(0, 1024, size=(6, 128), dtype=np.int32),
+            "attention_mask": np.ones((6, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((6, 128), dtype=np.uint8),
+            "y": np.array([0, 0, 0, 1, 1, 1], dtype=np.int32),
+            "split": np.array(["train", "train", "train", "val", "val", "val"], dtype="U8"),
+        },
+    )
+
+    def fake_dataloader(*args, **kwargs):
+        raise StopAfterLoaderInit()
+
+    monkeypatch.setattr(train_module, "DataLoader", fake_dataloader)
+
+    with pytest.raises(StopAfterLoaderInit):
+        train_main(
+            [
+                "--processed-root",
+                str(tmp_path / "outputs" / "processed"),
+                "--policy",
+                "strict",
+                "--stage",
+                "fusion",
+                "--run-root",
+                str(run_root),
+                "--run-id",
+                "fusion-hparams-run",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--hidden-dim",
+                "160",
+                "--fusion-layers",
+                "3",
+                "--fusion-heads",
+                "5",
+                "--fusion-dropout",
+                "0.2",
+                "--alpha",
+                "0.25",
+                "--beta",
+                "0.15",
+                "--val-fraction",
+                "0.2",
+                "--no-progress",
+            ]
+        )
+
+    cfg = yaml.safe_load((run_root / "fusion-hparams-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert int(cfg["hidden_dim"]) == 160
+    assert int(cfg["fusion_layers"]) == 3
+    assert int(cfg["fusion_heads"]) == 5
+    assert float(cfg["fusion_dropout"]) == pytest.approx(0.2)
+    assert float(cfg["alpha"]) == pytest.approx(0.25)
+    assert float(cfg["beta"]) == pytest.approx(0.15)
+    assert float(cfg["val_fraction"]) == pytest.approx(0.2)
+
+
 def test_choose_best_binary_threshold_maximizes_accuracy():
     positive_probs = np.array([0.20, 0.49, 0.52, 0.90], dtype=np.float32)
     y_true = np.array([0, 0, 1, 1], dtype=np.int32)
@@ -919,7 +986,7 @@ def test_evaluate_uses_binary_decision_threshold(tmp_path: Path, monkeypatch):
         def load_state_dict(self, state):
             return
 
-        def forward(self, rgb, input_ids, attention_mask, token_type_ids):
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, use_fusion=True):
             logits = torch.tensor(
                 [
                     [0.0, 0.8],
@@ -928,8 +995,7 @@ def test_evaluate_uses_binary_decision_threshold(tmp_path: Path, monkeypatch):
                 dtype=torch.float32,
                 device=rgb.device,
             )
-            gate = torch.full((rgb.shape[0], 1), 0.5, dtype=torch.float32, device=rgb.device)
-            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits, "gate": gate}
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
 
     monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
 
@@ -939,3 +1005,56 @@ def test_evaluate_uses_binary_decision_threshold(tmp_path: Path, monkeypatch):
     payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
     assert payload["decision_threshold"] == pytest.approx(0.8)
     assert payload["top1"] == pytest.approx(1.0)
+
+
+def test_evaluate_warmup_disables_fusion_path(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "warmup-eval-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "warmup-eval-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "warmup",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((2, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((2, 128), dtype=np.int32),
+            "attention_mask": np.ones((2, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((2, 128), dtype=np.uint8),
+            "y": np.array([0, 1], dtype=np.int32),
+            "split": np.array(["test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, return_features=False, use_fusion=True):
+            assert use_fusion is False
+            logits = torch.tensor([[3.0, 1.0], [1.0, 3.0]], dtype=torch.float32, device=rgb.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
+    assert code == 0

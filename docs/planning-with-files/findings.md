@@ -3,6 +3,11 @@
 ## Cross-Attention 融合改造发现（2026-03-23）
 
 - 用户明确表示本轮优化目标是“最终效果优先”，不是“尽量兼容当前训练/输出接口”。
+- 用户最终确认采用的设计路线是：
+  - 保留 `MobileViT + ET-BERT`
+  - 不替换 backbone
+  - 将融合层升级为 `2-layer bidirectional fusion encoder`
+  - 删除旧 `gate` 语义，不再为兼容性保留占位输出
 - 当前 `MobileViTETBertFusionClassifier` 不是 attention-level 多模态融合，而是 feature-level gate 融合：
   - 先取 `img_feature` 与 `tls_feature`
   - 再经 `Linear -> ReLU -> Linear -> Sigmoid` 得到单标量 `gate`
@@ -16,12 +21,40 @@
     - `gate`
 - 文本分支内部已存在 self-attention，但它只发生在 `ETBertBackbone` 内部，不是图文 cross-attention。
 - `MobileViTBackbone` 当前只返回 pooled image feature，不返回 spatial tokens；如果要做真正的 image-text cross-attention，图像分支大概率需要暴露 token-level 序列而不只是 pooled vector。
+- 当前数据与测试里的 RGB 输入默认是 `28x28`；实际验证发现：
+  - `MobileViT` 最后一层 `last_hidden_state` 在 `28x28` 下只有 `1x1`
+  - 直接拿最终层做 image tokens 会退化成单 token，严重削弱 co-attention 价值
+  - 因此实现上更合理的路线是：启用 `output_hidden_states=True`，从多个中后期 hidden states 提取多尺度 image tokens 并投影后拼接
 - 现有模型测试只覆盖：
   - 输出 logits shape
   - `gate` shape/range
   - `attention_mask` 部分有效时的前向可运行
   说明测试还没有约束 cross-attention 的中间表示或新输出字段。
 - `planning-with-files` skill 推荐的 `session-catchup.py` 路径 `/home/shuora/.codex/skills/planning-with-files/scripts/session-catchup.py` 在当前环境不存在；本机可读到的 skill 文件位于 `/mnt/c/Users/11098/.codex/skills/planning-with-files/SKILL.md`，后续需要按实际路径适配。
+- 本轮实现结果：
+  - `MobileViTBackbone` 现在通过多个中后期 hidden states 构造多尺度 image tokens，再投影到统一 `hidden_dim`
+  - `ETBertBackbone` 现在同时输出 `tokens / mask / pooled`
+  - `MobileViTETBertFusionClassifier` 已移除 gate fusion，改为 `2-layer bidirectional fusion encoder`
+  - 辅助头继续保留三路 logits，但 `gate` 已不再是模型输出的一部分
+  - `train/evaluate` 的观测统计从 `gate_mean` 改为 `fuse_conf_mean`
+  - `stacking/moe` 不再依赖 `gate`，而是使用基于专家概率的模态一致性特征
+- 用户进一步要求：
+  - 删除 `docs/commands/stage2-multiclass-e2e.sh`
+  - 将该脚本中的 stage2 命令并入总文档 `docs/commands/session-full-experiments.md`
+- 本轮补齐的缺口：
+  - `logits_img` / `logits_tls` 已从“融合前 pooled feature”切到“融合后 `img_ctx` / `txt_ctx`”
+  - `forward(..., return_features=True)` 现在可选返回 `img_tokens` / `txt_tokens`
+  - `stacking` 现在会复用主 run 的 `hidden_dim / fusion_layers / fusion_heads / fusion_dropout / lr / alpha / beta`
+  - `src.train` / `stage1_binary` / `stage2_multiclass` 现已暴露并透传：
+    - `--fusion-layers`
+    - `--fusion-heads`
+    - `--fusion-dropout`
+  - `docs/commands/stage2-multiclass-e2e.sh` 已删除，命令已并入总文档
+- 后续 code review 暴露出的关键偏差也已修正：
+  - `warmup` 现在会显式绕开 fusion encoder
+  - `warmup` 下 `logits_img / logits_tls` 回退到未融合的 pooled feature
+  - `evaluate` 在 `stage=warmup` 的 run 上也会禁用融合路径
+  - `warmup` 的置信度统计不再假设融合头是主输出
 
 ## Session Full 命令重写发现（2026-03-22）
 

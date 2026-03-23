@@ -6,7 +6,7 @@
 
 ## Status
 
-- In progress on 2026-03-23
+- Completed on 2026-03-23
 
 ## Scope
 
@@ -25,6 +25,25 @@
 2. 在改代码前补测试，先让“cross-attention 输出契约”失败，避免直接凭感觉改实现。
 3. 新建 worktree，在隔离工作区实现最小可行 cross-attention 融合，并尽量保持训练/评估链路兼容。
 4. 跑模型相关定向测试，必要时补文档并同步 planning 文件。
+
+## Notes
+
+- 设计文档已写入：`docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+- 实现计划已写入：`docs/superpowers/plans/2026-03-23-bidirectional-fusion-encoder-plan.md`
+- 当前设计结论：
+  - 保留 `MobileViT + ET-BERT`
+  - 删除旧 gate fusion
+  - 升级为 `2-layer bidirectional fusion encoder`
+  - 优先目标为性能上限，而非旧接口兼容
+- 已完成实现与定向验证：
+  - `MobileViTBackbone` 新增多尺度 `forward_features`
+  - `ETBertBackbone` 新增 `forward_features`
+  - `fusion_model` 已切换为 bidirectional fusion encoder
+  - `train/evaluate/stacking/moe` 已移除 `gate` 依赖
+- 当前新增文档收尾目标：
+  - 将实验命令更新为新模型参数口径
+  - 删除 `docs/commands/stage2-multiclass-e2e.sh`
+  - 将其命令并入 `docs/commands/session-full-experiments.md`
 
 # Documentation Sync Plan (MobileViT + ET-BERT Adapter)
 
