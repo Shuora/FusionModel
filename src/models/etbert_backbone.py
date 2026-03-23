@@ -341,6 +341,14 @@ class ETBertBackbone(nn.Module):
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor,
     ) -> torch.Tensor:
+        return self.forward_features(input_ids, attention_mask, token_type_ids)["pooled"]
+
+    def forward_features(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
         token_len = min(input_ids.size(1), self.max_tokens)
         input_ids = input_ids[:, :token_len]
         attention_mask = attention_mask[:, :token_len]
@@ -353,7 +361,8 @@ class ETBertBackbone(nn.Module):
         if all_masked.any():
             key_padding_mask = key_padding_mask.clone()
             key_padding_mask[all_masked, 0] = False
-        x = self.encoder(x, src_key_padding_mask=key_padding_mask)
+        tokens = self.encoder(x, src_key_padding_mask=key_padding_mask)
         valid = attention_mask.float().unsqueeze(-1)
         denom = valid.sum(dim=1).clamp(min=1.0)
-        return (x * valid).sum(dim=1) / denom
+        pooled = (tokens * valid).sum(dim=1) / denom
+        return {"tokens": tokens, "mask": attention_mask, "pooled": pooled}

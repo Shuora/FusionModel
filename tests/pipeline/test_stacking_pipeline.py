@@ -6,7 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
+import src.stacking as stacking_module
 from src.stacking import main as stacking_main
 from src.train import main as train_main
 
@@ -112,3 +114,89 @@ def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path):
     assert "top1" in metrics
     assert "macro_f1" in metrics
     assert metrics["n_train_samples"] > 0
+
+
+def test_stacking_reuses_run_hyperparams_for_base_model(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-hparams-run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "stack-hparams-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "label_mode": "multiclass",
+                "hidden_dim": 160,
+                "fusion_layers": 3,
+                "fusion_heads": 5,
+                "fusion_dropout": 0.2,
+                "lr": 0.0007,
+                "alpha": 0.25,
+                "beta": 0.15,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        stacking_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.random.default_rng(1).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
+            "input_ids": np.random.default_rng(2).integers(0, 256, size=(6, 16), dtype=np.int32),
+            "attention_mask": np.ones((6, 16), dtype=np.uint8),
+            "token_type_ids": np.zeros((6, 16), dtype=np.uint8),
+            "y": np.array([0, 1, 0, 1, 0, 1], dtype=np.int32),
+            "split": np.array(["train", "train", "val", "val", "test", "test"], dtype="U8"),
+        },
+    )
+
+    captured = []
+
+    def fake_train_base_model(*args, **kwargs):
+        captured.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(stacking_module, "_train_base_model", fake_train_base_model)
+    monkeypatch.setattr(
+        stacking_module,
+        "_predict_meta",
+        lambda *args, **kwargs: np.zeros((2, 3 * 2 + 7), dtype=np.float32),
+    )
+
+    class DummyMetaModel:
+        def predict(self, x):
+            return np.zeros((x.shape[0],), dtype=np.int64)
+
+        def save_model(self, path):
+            Path(path).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel())
+
+    code = stacking_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--n-splits",
+            "2",
+            "--oof-epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--device",
+            "cpu",
+            "--num-workers",
+            "0",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for item in captured:
+        assert item["hidden_dim"] == 160
+        assert item["fusion_layers"] == 3
+        assert item["fusion_heads"] == 5
+        assert item["fusion_dropout"] == 0.2
+        assert item["lr"] == 0.0007
+        assert item["alpha"] == 0.25
+        assert item["beta"] == 0.15

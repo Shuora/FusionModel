@@ -41,6 +41,9 @@ def _compute_meta_features(out: dict) -> np.ndarray:
             return torch.zeros((logits.shape[0], 1), dtype=logits.dtype, device=logits.device)
         return (top2[:, 0] - top2[:, 1]).unsqueeze(1)
 
+    def agreement(p_a: torch.Tensor, p_b: torch.Tensor) -> torch.Tensor:
+        return (p_a * p_b).sum(dim=1, keepdim=True)
+
     feats = torch.cat(
         [
             logits_img,
@@ -52,7 +55,7 @@ def _compute_meta_features(out: dict) -> np.ndarray:
             margin(logits_img),
             margin(logits_tls),
             margin(logits_fuse),
-            out["gate"],
+            agreement(p_img, p_tls),
         ],
         dim=1,
     )
@@ -72,15 +75,25 @@ def _train_base_model(
     device: torch.device,
     num_workers: int,
     seed: int,
+    hidden_dim: int,
+    fusion_layers: int,
+    fusion_heads: int,
+    fusion_dropout: float,
+    lr: float,
+    alpha: float,
+    beta: float,
 ) -> MobileViTETBertFusionClassifier:
     torch.manual_seed(seed)
     np.random.seed(seed)
     model = MobileViTETBertFusionClassifier(
         num_classes=num_classes,
-        hidden_dim=128,
+        hidden_dim=hidden_dim,
         vocab_size=vocab_size,
+        fusion_layers=fusion_layers,
+        fusion_heads=fusion_heads,
+        dropout=fusion_dropout,
     ).to(device)
-    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optim = torch.optim.Adam(model.parameters(), lr=lr)
     ce = nn.CrossEntropyLoss()
     loader = DataLoader(
         TensorDataset(
@@ -106,9 +119,7 @@ def _train_base_model(
             y_b = y_b.to(device)
             optim.zero_grad()
             out = model(rgb_b, input_b, att_b, type_b)
-            loss = ce(out["logits_fuse"], y_b) + 0.3 * ce(out["logits_img"], y_b) + 0.3 * ce(
-                out["logits_tls"], y_b
-            )
+            loss = ce(out["logits_fuse"], y_b) + alpha * ce(out["logits_img"], y_b) + beta * ce(out["logits_tls"], y_b)
             loss.backward()
             optim.step()
     return model
@@ -226,6 +237,13 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     num_classes = int(np.max(y)) + 1
     vocab_size = int(max(30522, int(input_ids.max()) + 1))
+    hidden_dim = int(cfg.get("hidden_dim", 128))
+    fusion_layers = int(cfg.get("fusion_layers", 2))
+    fusion_heads = int(cfg.get("fusion_heads", cfg.get("num_heads", 4)))
+    fusion_dropout = float(cfg.get("fusion_dropout", 0.1))
+    lr = float(cfg.get("lr", 1e-3))
+    alpha = float(cfg.get("alpha", 0.3))
+    beta = float(cfg.get("beta", 0.3))
 
     # OOF meta features
     n_splits = min(args.n_splits, int(np.bincount(y_tv).min()) if len(y_tv) > 0 else 2)
@@ -246,6 +264,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             device=device,
             num_workers=args.num_workers,
             seed=args.seed + fold_id,
+            hidden_dim=hidden_dim,
+            fusion_layers=fusion_layers,
+            fusion_heads=fusion_heads,
+            fusion_dropout=fusion_dropout,
+            lr=lr,
+            alpha=alpha,
+            beta=beta,
         )
         oof_x[va_idx] = _predict_meta(
             model,
@@ -272,6 +297,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         device=device,
         num_workers=args.num_workers,
         seed=args.seed + 999,
+        hidden_dim=hidden_dim,
+        fusion_layers=fusion_layers,
+        fusion_heads=fusion_heads,
+        fusion_dropout=fusion_dropout,
+        lr=lr,
+        alpha=alpha,
+        beta=beta,
     )
     test_x = _predict_meta(
         final_model,

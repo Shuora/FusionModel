@@ -18,6 +18,82 @@
   - 本轮已记录该问题，后续不重复尝试同一路径
 - 当前仍处于 brainstorm/design 阶段，尚未进入实现或创建 worktree。
 - 用户已进一步确认：本轮以性能上限为优先，不要求保持现有模型输出或训练接口基本不变。
+- 已完成设计讨论并落盘正式 spec：
+  - `docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+- 已完成实现计划落盘：
+  - `docs/superpowers/plans/2026-03-23-bidirectional-fusion-encoder-plan.md`
+- 已检查 worktree 前置条件：
+  - `.worktrees/` 已存在
+  - `git check-ignore .worktrees` 返回已忽略
+- 设计结论已固定：
+  - backbone 仍为 `MobileViT + ET-BERT`
+  - 融合层升级为 `2-layer bidirectional fusion encoder`
+  - 删除旧 `gate fusion`
+- 下一步将按 TDD 先补失败测试，再进入 worktree 实现阶段。
+- 已完成第一轮 TDD 红灯验证：
+  - `tests/models/test_fusion_model.py`
+  - `tests/models/test_pretrained_backbones.py`
+  - 当前失败点符合预期：缺少 `forward_features`，且主模型仍返回 `gate`
+- 已补充一个重要实现结论：
+  - 当前 RGB 默认 `28x28`
+  - `MobileViT` 最终层在该分辨率下会退化为单 image token
+  - 实现时需要改为多尺度 image tokens，而不是单纯复用最终层
+- 已完成核心实现：
+  - `src/models/mobilevit_backbone.py`
+  - `src/models/etbert_backbone.py`
+  - `src/models/fusion_model.py`
+  - `src/train.py`
+  - `src/evaluate.py`
+  - `src/stacking.py`
+  - `src/moe.py`
+- 已同步更新测试与文档：
+  - `tests/models/test_fusion_model.py`
+  - `tests/models/test_pretrained_backbones.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `README.md`
+  - `docs/superpowers/specs/2026-03-23-bidirectional-fusion-encoder-design.md`
+  - `docs/superpowers/plans/2026-03-23-bidirectional-fusion-encoder-plan.md`
+- 已完成最终定向验证：
+  - 命令：
+    - `/home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py tests/models/test_pretrained_backbones.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_stacking_pipeline.py tests/pipeline/test_moe_pipeline.py`
+  - 结果：
+    - `33 passed`
+    - 伴随 `matplotlib` 的 `PyparsingDeprecationWarning`
+    - 伴随一条 `torch nested tensors` prototype warning
+- 新一轮文档对齐要求已确认：
+  - 更新实验命令为新模型参数口径
+  - 删除 `docs/commands/stage2-multiclass-e2e.sh`
+  - 将其内容合并到 `docs/commands/session-full-experiments.md`
+- 已补测试并跑红：
+  - `tests/models/test_fusion_model.py`
+  - `tests/pipeline/test_stacking_pipeline.py`
+  - 失败点分别锁定：
+    - 辅助头仍在吃融合前特征
+    - `forward` 缺少可选 debug token 输出
+    - `stacking` 未复用主 run 的 `lr / alpha / beta`
+- 已完成缺口修补：
+  - `src/models/fusion_model.py`
+  - `src/stacking.py`
+  - `src/train.py`
+  - `src/evaluate.py`
+  - `src/moe.py`
+  - `src/experiments/stage1_binary.py`
+  - `src/experiments/stage2_multiclass.py`
+  - `docs/commands/session-full-experiments.md`
+  - 删除 `docs/commands/stage2-multiclass-e2e.sh`
+- 根据后续 review，再次按 TDD 修正 `warmup` 语义：
+  - 新增测试，锁定：
+    - warmup 时绕开 fusion encoder
+    - warmup eval 显式禁用融合路径
+  - 更新：
+    - `src/models/fusion_model.py`
+    - `src/train.py`
+    - `src/evaluate.py`
+    - `tests/models/test_fusion_model.py`
+    - `tests/pipeline/test_train_eval_report.py`
+- 已验证通过：
+  - `/home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_train_eval_report.py tests/models/test_fusion_model.py tests/pipeline/test_stacking_pipeline.py`
+  - 结果：`28 passed`
 
 ## 2026-03-22
 

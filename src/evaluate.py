@@ -72,6 +72,20 @@ def predict_from_logits(
     return np.argmax(logits_np, axis=1)
 
 
+def _fuse_confidence_mean(out: dict) -> float:
+    probs = torch.softmax(out["logits_fuse"], dim=1)
+    return float(probs.max(dim=1).values.mean().item())
+
+
+def _confidence_mean(out: dict, stage: str) -> float:
+    if stage == "warmup":
+        logits = 0.5 * (out["logits_img"] + out["logits_tls"])
+    else:
+        logits = out["logits_fuse"]
+    probs = torch.softmax(logits, dim=1)
+    return float(probs.max(dim=1).values.mean().item())
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate TLS fusion model")
     parser.add_argument("--run-dir", required=True)
@@ -139,11 +153,20 @@ def main(argv: Iterable[str] | None = None) -> int:
         num_classes=int(cfg["num_classes"]),
         hidden_dim=int(cfg.get("hidden_dim", 128)),
         vocab_size=int(cfg.get("vocab_size", 30522)),
+        fusion_layers=int(cfg.get("fusion_layers", 2)),
+        fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
+        dropout=float(cfg.get("fusion_dropout", 0.1)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     with torch.no_grad():
-        out = model(rgb_eval, input_eval, attn_eval, token_type_eval)
+        out = model(
+            rgb_eval,
+            input_eval,
+            attn_eval,
+            token_type_eval,
+            use_fusion=cfg.get("stage") != "warmup",
+        )
     if cfg.get("stage") == "warmup":
         logits = (out["logits_img"] + out["logits_tls"]) / 2.0
     else:
@@ -163,7 +186,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         decision_threshold=decision_threshold,
     )
     metrics = compute_classification_metrics(y_true=y_eval, pred=pred, num_classes=num_classes)
-    gate_mean = float(out["gate"].mean().item())
+    fuse_conf_mean = _confidence_mean(out, stage=str(cfg.get("stage", "fusion")))
     labels = list(range(num_classes))
     cm = confusion_matrix(y_eval, pred, labels=labels)
     class_report = classification_report(
@@ -182,7 +205,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "effective_split": effective_split,
         "fallback_used": fallback_used,
         **metrics,
-        "gate_mean": gate_mean,
+        "fuse_conf_mean": fuse_conf_mean,
         "num_samples": int(mask.sum()),
         "checkpoint": ckpt_name,
         "decision_threshold": decision_threshold,
@@ -216,7 +239,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "top1": f"{metrics['top1']:.4f}",
                 "macro_precision": f"{metrics['macro_precision']:.4f}",
                 "macro_f1": f"{metrics['macro_f1']:.4f}",
-                "gate_mean": f"{gate_mean:.4f}",
+                "fuse_conf_mean": f"{fuse_conf_mean:.4f}",
             },
         )
     )

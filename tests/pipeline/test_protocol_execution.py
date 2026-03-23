@@ -447,6 +447,65 @@ def test_stage1_binary_execute_forwards_best_metric_to_train(tmp_path: Path, mon
     assert "val_acc" in captured["argv"]
 
 
+def test_stage1_binary_execute_forwards_latest_fusion_train_args(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
+            [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal"}]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--hidden-dim",
+            "160",
+            "--fusion-layers",
+            "3",
+            "--fusion-heads",
+            "5",
+            "--fusion-dropout",
+            "0.2",
+            "--alpha",
+            "0.25",
+            "--beta",
+            "0.15",
+            "--val-fraction",
+            "0.2",
+            "--train-max-samples",
+            "123",
+        ]
+    )
+    assert code == 0
+    argv = captured["argv"]
+    assert "--hidden-dim" in argv and "160" in argv
+    assert "--fusion-layers" in argv and "3" in argv
+    assert "--fusion-heads" in argv and "5" in argv
+    assert "--fusion-dropout" in argv and "0.2" in argv
+    assert "--alpha" in argv and "0.25" in argv
+    assert "--beta" in argv and "0.15" in argv
+    assert "--val-fraction" in argv and "0.2" in argv
+    assert "--train-max-samples" in argv and "123" in argv
+    assert "--datasets" in argv
+    assert "--session-filter-manifest" in argv
+    assert "--label-mode" in argv and "binary" in argv
+    assert "--num-classes" in argv and "2" in argv
+
+
 def test_stage1_binary_execute_defaults_num_workers_to_four(tmp_path: Path, monkeypatch):
     from src.experiments import stage1_binary as stage1_mod
 
@@ -543,3 +602,63 @@ def test_stage2_multiclass_execute_defaults_num_workers_to_four(tmp_path: Path, 
     for argv in captured:
         assert "--num-workers" in argv
         assert "4" in argv
+
+
+def test_stage2_multiclass_execute_forwards_latest_fusion_train_args(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage2_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+            "--hidden-dim",
+            "160",
+            "--fusion-layers",
+            "3",
+            "--fusion-heads",
+            "5",
+            "--fusion-dropout",
+            "0.2",
+            "--alpha",
+            "0.25",
+            "--beta",
+            "0.15",
+            "--val-fraction",
+            "0.2",
+            "--best-metric",
+            "val_acc",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for argv in captured:
+        assert "--hidden-dim" in argv
+        assert "160" in argv
+        assert "--fusion-layers" in argv
+        assert "3" in argv
+        assert "--fusion-heads" in argv
+        assert "5" in argv
+        assert "--fusion-dropout" in argv
+        assert "0.2" in argv
+        assert "--alpha" in argv
+        assert "0.25" in argv
+        assert "--beta" in argv
+        assert "0.15" in argv
+        assert "--val-fraction" in argv
+        assert "0.2" in argv
+        assert "--best-metric" in argv
+        assert "val_acc" in argv

@@ -210,3 +210,32 @@ def test_mobilevit_backbone_projects_features():
     x = torch.rand(1, 3, 28, 28)
     y = model(x)
     assert y.shape == (1, 96)
+
+
+def test_mobilevit_backbone_forward_features_returns_tokens_and_pooled():
+    model = MobileViTBackbone(out_dim=64)
+    x = torch.rand(2, 3, 28, 28)
+
+    features = model.forward_features(x)
+
+    assert set(features.keys()) == {"tokens", "pooled"}
+    assert features["tokens"].shape[0] == 2
+    assert features["tokens"].shape[-1] == 64
+    assert features["tokens"].ndim == 3
+    assert features["tokens"].shape[1] >= 1
+    assert features["pooled"].shape == (2, 64)
+
+
+def test_etbert_backbone_forward_features_returns_tokens_mask_and_pooled():
+    model = ETBertBackbone(vocab_size=256, hidden_dim=32, max_tokens=16, num_layers=2)
+    input_ids = torch.randint(0, 256, (2, 16))
+    attention_mask = torch.zeros(2, 16, dtype=torch.long)
+    attention_mask[:, :6] = 1
+    token_type_ids = torch.zeros(2, 16, dtype=torch.long)
+
+    features = model.forward_features(input_ids, attention_mask, token_type_ids)
+
+    assert set(features.keys()) == {"tokens", "mask", "pooled"}
+    assert features["tokens"].shape == (2, 16, 32)
+    assert torch.equal(features["mask"], attention_mask)
+    assert features["pooled"].shape == (2, 32)
