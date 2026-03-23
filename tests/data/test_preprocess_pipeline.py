@@ -83,7 +83,7 @@ def test_preprocess_source_writes_expected_outputs(tmp_path: Path):
     assert summary["accepted_sessions"] == 1
     assert summary["dropped_sessions"] == 1
     assert any("✅SUCCESS" in line for line in logs)
-    assert any("🧱 数据" in line for line in logs)
+    assert any("🧱 Data" in line for line in logs)
 
     split_dir = output_root / "manifest"
     assert (split_dir / "split_manifest.csv").exists()
