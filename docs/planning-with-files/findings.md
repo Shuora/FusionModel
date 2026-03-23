@@ -1,5 +1,28 @@
 # Findings
 
+## Cross-Attention 融合改造发现（2026-03-23）
+
+- 用户明确表示本轮优化目标是“最终效果优先”，不是“尽量兼容当前训练/输出接口”。
+- 当前 `MobileViTETBertFusionClassifier` 不是 attention-level 多模态融合，而是 feature-level gate 融合：
+  - 先取 `img_feature` 与 `tls_feature`
+  - 再经 `Linear -> ReLU -> Linear -> Sigmoid` 得到单标量 `gate`
+  - 最后做 `gate * img + (1 - gate) * tls`
+- 当前多模态对外接口很稳定：
+  - 输入仍是 `rgb / input_ids / attention_mask / token_type_ids`
+  - 输出固定包含：
+    - `logits_fuse`
+    - `logits_img`
+    - `logits_tls`
+    - `gate`
+- 文本分支内部已存在 self-attention，但它只发生在 `ETBertBackbone` 内部，不是图文 cross-attention。
+- `MobileViTBackbone` 当前只返回 pooled image feature，不返回 spatial tokens；如果要做真正的 image-text cross-attention，图像分支大概率需要暴露 token-level 序列而不只是 pooled vector。
+- 现有模型测试只覆盖：
+  - 输出 logits shape
+  - `gate` shape/range
+  - `attention_mask` 部分有效时的前向可运行
+  说明测试还没有约束 cross-attention 的中间表示或新输出字段。
+- `planning-with-files` skill 推荐的 `session-catchup.py` 路径 `/home/shuora/.codex/skills/planning-with-files/scripts/session-catchup.py` 在当前环境不存在；本机可读到的 skill 文件位于 `/mnt/c/Users/11098/.codex/skills/planning-with-files/SKILL.md`，后续需要按实际路径适配。
+
 ## Session Full 命令重写发现（2026-03-22）
 
 - 当前仓库工作区是干净的，`git status --short` 无未提交改动。

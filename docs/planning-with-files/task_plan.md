@@ -1,3 +1,31 @@
+# Cross-Attention Fusion Plan (2026-03-23)
+
+## Goal
+
+将当前 `MobileViTETBertFusionClassifier` 从门控特征融合改为 cross-attention 融合，同时尽量保持训练/评估主链路接口稳定。
+
+## Status
+
+- In progress on 2026-03-23
+
+## Scope
+
+- `src/models/fusion_model.py`
+- `src/models/mobilevit_backbone.py`
+- `src/models/etbert_backbone.py`
+- `tests/models/test_fusion_model.py`
+- `README.md`
+- `docs/planning-with-files/task_plan.md`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 明确 cross-attention 的目标形态与接口约束，产出设计并获得用户确认。
+2. 在改代码前补测试，先让“cross-attention 输出契约”失败，避免直接凭感觉改实现。
+3. 新建 worktree，在隔离工作区实现最小可行 cross-attention 融合，并尽量保持训练/评估链路兼容。
+4. 跑模型相关定向测试，必要时补文档并同步 planning 文件。
+
 # Documentation Sync Plan (MobileViT + ET-BERT Adapter)
 
 ## Session Full 命令重写计划（2026-03-22）
