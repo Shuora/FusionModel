@@ -363,6 +363,7 @@ def run_stage1_protocol(
     device: str,
     num_workers: int,
     best_metric: str,
+    early_stopping_patience: int,
     protocol_mode: str,
     hidden_dim: int,
     fusion_layers: int,
@@ -405,6 +406,8 @@ def run_stage1_protocol(
         str(num_workers),
         "--best-metric",
         str(best_metric),
+        "--early-stopping-patience",
+        str(early_stopping_patience),
         "--hidden-dim",
         str(hidden_dim),
         "--fusion-layers",
@@ -456,6 +459,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--fusion-layers", type=int, default=2)
     parser.add_argument("--fusion-heads", "--num-heads", dest="fusion_heads", type=int, default=4)
@@ -488,6 +492,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             device=args.device,
             num_workers=args.num_workers,
             best_metric=args.best_metric,
+            early_stopping_patience=args.early_stopping_patience,
             protocol_mode=args.protocol_mode,
             hidden_dim=args.hidden_dim,
             fusion_layers=args.fusion_layers,

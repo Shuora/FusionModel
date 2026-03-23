@@ -925,6 +925,221 @@ def test_train_writes_fusion_hyperparams_to_config(tmp_path: Path, monkeypatch):
     assert float(cfg["val_fraction"]) == pytest.approx(0.2)
 
 
+def _early_stopping_dummy_payload() -> dict:
+    return {
+        "rgb": np.random.default_rng(31).integers(0, 256, size=(8, 3, 28, 28), dtype=np.uint8),
+        "input_ids": np.random.default_rng(32).integers(0, 1024, size=(8, 128), dtype=np.int32),
+        "attention_mask": np.ones((8, 128), dtype=np.uint8),
+        "token_type_ids": np.zeros((8, 128), dtype=np.uint8),
+        "y": np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
+        "split": np.array(["train", "train", "train", "train", "val", "val", "val", "val"], dtype="U8"),
+    }
+
+
+class _DummyTrainModel(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.bias = torch.nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, rgb, input_ids, attention_mask, token_type_ids, return_features=False, use_fusion=True):
+        batch = rgb.shape[0]
+        logits = torch.stack(
+            [
+                self.bias.expand(batch),
+                (-self.bias).expand(batch),
+            ],
+            dim=1,
+        )
+        return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
+
+
+def _patch_early_stopping_train_dependencies(monkeypatch: pytest.MonkeyPatch, metric_rows: list[tuple[float, float, float, float, float | None]]) -> None:
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(train_module, "load_policy_multimodal_data", lambda *args, **kwargs: _early_stopping_dummy_payload())
+    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", _DummyTrainModel)
+    metric_iter = iter(metric_rows)
+    monkeypatch.setattr(train_module, "_evaluate_loader", lambda *args, **kwargs: next(metric_iter))
+
+
+def test_train_early_stopping_triggers_and_records_artifacts(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.80, 0.78, 0.55, 0.61),
+            (0.8, 0.79, 0.77, 0.54, 0.61),
+            (0.8, 0.78, 0.76, 0.53, 0.61),
+        ],
+    )
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "early-stop-run",
+            "--epochs",
+            "8",
+            "--batch-size",
+            "2",
+            "--best-metric",
+            "val_acc",
+            "--early-stopping-patience",
+            "2",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "early-stop-run"
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    assert metrics["epoch"].tolist() == [1, 2, 3]
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["early_stopping_patience"] == 2
+    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
+    assert "early_stopping_triggered" in train_log
+    best_ckpt = torch.load(run_dir / "checkpoints" / "best.ckpt", map_location="cpu")
+    assert best_ckpt["epoch"] == 1
+    assert best_ckpt["best_metric_value"] == pytest.approx(0.80)
+
+
+def test_train_early_stopping_respects_best_metric(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.90, 0.40, 0.55, None),
+            (0.8, 0.85, 0.60, 0.54, None),
+            (0.8, 0.84, 0.59, 0.53, None),
+        ],
+    )
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "best-metric-early-stop-run",
+            "--epochs",
+            "6",
+            "--batch-size",
+            "2",
+            "--best-metric",
+            "val_macro_f1",
+            "--early-stopping-patience",
+            "1",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    best_ckpt = torch.load(run_root / "best-metric-early-stop-run" / "checkpoints" / "best.ckpt", map_location="cpu")
+    assert best_ckpt["epoch"] == 2
+    assert best_ckpt["best_metric"] == "val_macro_f1"
+    assert best_ckpt["best_metric_value"] == pytest.approx(0.60)
+
+
+def test_train_early_stopping_tie_does_not_reset_patience(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.80, 0.50, 0.55, None),
+            (0.8, 0.80, 0.49, 0.54, None),
+            (0.8, 0.79, 0.48, 0.53, None),
+        ],
+    )
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "tie-early-stop-run",
+            "--epochs",
+            "6",
+            "--batch-size",
+            "2",
+            "--best-metric",
+            "val_acc",
+            "--early-stopping-patience",
+            "1",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    metrics = pd.read_csv(run_root / "tie-early-stop-run" / "metrics.csv")
+    assert metrics["epoch"].tolist() == [1, 2]
+
+
+def test_train_early_stopping_disabled_by_default(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.80, 0.78, 0.55, None),
+            (0.8, 0.79, 0.77, 0.54, None),
+            (0.8, 0.78, 0.76, 0.53, None),
+        ],
+    )
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "early-stop-disabled-run",
+            "--epochs",
+            "3",
+            "--batch-size",
+            "2",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "early-stop-disabled-run"
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    assert metrics["epoch"].tolist() == [1, 2, 3]
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["early_stopping_patience"] == 0
+    train_log = (run_dir / "train.log").read_text(encoding="utf-8")
+    assert "early_stopping_triggered" not in train_log
+
+
 def test_choose_best_binary_threshold_maximizes_accuracy():
     positive_probs = np.array([0.20, 0.49, 0.52, 0.90], dtype=np.float32)
     y_true = np.array([0, 0, 1, 1], dtype=np.int32)

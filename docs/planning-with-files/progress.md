@@ -532,6 +532,50 @@
 
 ## 2026-03-23
 
+- 启动“cross-attention stabilization + early stopping”实现任务。
+- 已按 `using-git-worktrees` 创建隔离工作区：
+  - `/home/shuora/Traffic/FusionModel/.worktrees/codex-cross-attn-stabilization`
+  - 分支：`codex/cross-attn-stabilization`
+- 已将主工作区中已有但未提交的相关本地改动同步到 worktree：
+  - `src/evaluate.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `docs/planning-with-files/*`
+  - 新 spec / plan 文档
+- 已发现并绕过当前测试环境污染：
+  - 默认 `PYTHONPATH` 指向 `~/.py-user/lib/python3.12/site-packages`
+  - 需要使用：
+    - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest ...`
+  - 否则会把 Python 3.12 的 `numpy` 混入 Python 3.9 conda 环境，导致 collection 阶段 ImportError
+- 已确认 worktree 基线相关回归通过：
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_protocol_execution.py`
+  - 结果：`42 passed`
+- 已按 TDD 先补红灯测试并确认失败：
+  - 模型：
+    - `test_mobilevit_etbert_fusion_model_aux_heads_use_prefusion_pooled_features`
+    - `test_mobilevit_etbert_fusion_model_fusion_head_keeps_prefusion_shortcut`
+  - 训练 / 协议：
+    - `test_train_early_stopping_triggers_and_records_artifacts`
+    - `test_train_early_stopping_respects_best_metric`
+    - `test_train_early_stopping_tie_does_not_reset_patience`
+    - `test_train_early_stopping_disabled_by_default`
+    - `test_stage1_binary_execute_forwards_early_stopping_patience_to_train`
+- 已完成实现：
+  - `src/models/fusion_model.py`
+  - `src/train.py`
+  - `src/experiments/stage1_binary.py`
+  - `tests/models/test_fusion_model.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `tests/pipeline/test_protocol_execution.py`
+- 已完成关键定向验证：
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py -k 'aux_heads_use_prefusion_pooled_features or fusion_head_keeps_prefusion_shortcut or warmup_bypasses_fusion_encoder'`
+  - 结果：`3 passed`
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_train_eval_report.py -k 'early_stopping'`
+  - 结果：`4 passed`
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_protocol_execution.py -k 'early_stopping'`
+  - 结果：`1 passed`
+- 已完成整组目标回归：
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_protocol_execution.py`
+  - 结果：`48 passed`
 - 启动“cross-attention stage1 acc regression”只读排查，已读取：
   - `docs/planning-with-files/{task_plan,findings,progress}.md`
   - `src/models/{fusion_model,mobilevit_backbone,etbert_backbone}.py`

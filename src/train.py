@@ -369,6 +369,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--stacking-n-splits", type=int, default=3)
     parser.add_argument("--stacking-oof-epochs", type=int, default=2)
@@ -379,6 +380,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     torch.manual_seed(args.seed)
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience must be >= 0")
 
     requested_device, resolved_device, device_fallback = resolve_runtime_device(args.device)
     device = torch.device(resolved_device)
@@ -457,6 +460,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "device_fallback": device_fallback,
         "num_workers": args.num_workers,
         "best_metric": args.best_metric,
+        "early_stopping_patience": args.early_stopping_patience,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -486,6 +490,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "device_fallback": device_fallback,
             "num_workers": args.num_workers,
             "best_metric": args.best_metric,
+            "early_stopping_patience": args.early_stopping_patience,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -614,6 +619,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     show_progress = not args.no_progress
     loss_stage = "warmup" if args.stage == "warmup" else "fusion"
     best_decision_threshold: float | None = None
+    epochs_without_improvement = 0
 
     for epoch in range(1, args.epochs + 1):
         start = time.time()
@@ -766,7 +772,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             val_acc=val_acc,
             val_macro_f1=val_macro_f1,
         )
-        if current_best_value >= best_value:
+        if current_best_value > best_value:
             best_value = current_best_value
             best_decision_threshold = val_decision_threshold
             cfg["decision_threshold"] = best_decision_threshold
@@ -796,6 +802,23 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "sha8": _sha8(best_path),
                 },
             )
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if args.early_stopping_patience > 0 and epochs_without_improvement >= args.early_stopping_patience:
+                log(
+                    "warning",
+                    "model",
+                    "early_stopping_triggered",
+                    {
+                        "epoch": epoch,
+                        "best_metric": args.best_metric,
+                        "best_metric_value": f"{best_value:.4f}",
+                        "patience": args.early_stopping_patience,
+                        "epochs_without_improvement": epochs_without_improvement,
+                    },
+                )
+                break
 
     pd.DataFrame(rows).to_csv(metrics_path, index=False)
     log("success", "save", "metrics_saved", {"path": str(metrics_path)})
