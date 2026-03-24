@@ -1,5 +1,36 @@
 # Cross-Attention Fusion Plan (2026-03-23)
 
+## Stage1 98+ High-Score Redesign Plan (2026-03-24)
+
+## Goal
+
+围绕 `stage1 binary` 冲击 `98%+` 指标，允许同时重做数据协议、训练策略与 fusion 结构设计，并先输出经过评审的正式方案文档。
+
+## Status
+
+- In progress on 2026-03-24
+
+## Scope
+
+- `src/experiments/stage1_binary.py`
+- `src/train.py`
+- `src/models/fusion_model.py`
+- `src/pipeline_data.py`
+- `docs/commands/session-full-experiments.md`
+- `docs/superpowers/specs/2026-03-24-stage1-high-score-redesign-design.md`
+- `docs/planning-with-files/{task_plan,findings,progress}.md`
+
+## Plan
+
+1. 基于当前 `95.2%` run 与既有排查结论，定义“冲 98+”所允许的协议/训练/结构调整边界。
+2. 输出正式 spec，明确新 protocol mode、训练阶段设计、模型角色分工与验证标准。
+3. 对 spec 做 reviewer 审查，修正遗漏或自相矛盾项。
+4. 将最终 spec 交给用户确认，再进入 implementation planning。
+
+## Notes
+
+- 用户已确认进入 implementation planning 阶段。
+
 ## Cross-Attention Stabilization + Early Stopping Plan (2026-03-23)
 
 ## Goal

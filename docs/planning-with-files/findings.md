@@ -598,3 +598,57 @@
   - `tests/pipeline/test_train_eval_report.py`
   - `tests/pipeline/test_protocol_execution.py`
   - 结果：`48 passed`
+
+## 实验命令文档补丁结论（2026-03-23）
+
+- `docs/commands/session-full-experiments.md` 已补回当前真实可用的 `--early-stopping-patience` 参数说明。
+- 已同步更新两处 stage1 示例命令：
+  - 手动 `src.train` 训练命令
+  - `src.experiments.stage1_binary --execute` 一键命令
+- 文档中的 early stopping 语义已明确：
+  - `0` 表示禁用
+  - `> 0` 表示启用
+  - 监控指标复用 `--best-metric`
+- 同时修正了底部“旧内容替换”区块中的过期表述：
+  - 从“训练支持 early-stopping 参数”改为“训练完全不支持 early-stopping 参数”
+  - 以避免与当前代码实现冲突
+
+## Python 环境污染排查结论（2026-03-23）
+
+- conda 本身不是根因；真正污染来源是 shell 启动链路里把 Windows 侧 `.py-user` 的 Python 3.12 site-packages 全局注入到了所有 shell：
+  - `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:...`
+  - `PYTHONUSERBASE=/mnt/c/Users/11098/.py-user`
+- 初始状态下，即使使用 `/home/shuora/miniconda3/envs/FusionModel/bin/python`，`sys.path` 仍会把：
+  - `/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages`
+  放在前面，导致 Python 3.9 conda 环境错误加载到 Python 3.12 的 `numpy`
+- 直接原因有两层：
+  - `~/.zshrc` / `~/.zprofile` 里曾经显式 `export PYTHONPATH=...python3.12...`
+  - 当前桌面终端会话本身也会继承这条 `PYTHONPATH`
+- 本轮已完成修复：
+  - 从 `~/.zshrc` / `~/.zprofile` 中删除了直接导出的 `PYTHONPATH`
+  - 改为在 zsh 启动时主动过滤掉：
+    - `/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages`
+  - 保留了 `PYTHONUSERBASE` 与 `.py-user/bin` 的 PATH，不影响用户级工具命令
+- 验证结果：
+  - 在新的 login zsh 中，模拟污染输入：
+    - `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:/tmp/demo`
+  - 启动后实际变为：
+    - `PYTHONPATH=/tmp/demo`
+  - `sys.path` 中不再包含 `.py-user/lib/python3.12/site-packages`
+  - conda Python 3.9 的 site-packages 顺序恢复正常
+
+## Stage1 98+ 目标设计前提（2026-03-24）
+
+- 用户对这轮目标的要求已从“修复 cross-attention 退化”升级为：
+  - `stage1 binary` 指标冲击 `98%+`
+- 用户明确允许的改动边界为：
+  - 训练策略可改
+  - `stage1_binary` 数据协议可改
+  - 当前 fusion 结构可改
+- 因此这轮不再适合继续按“小修补”思路推进，而应按“高分方案重设计”处理。
+- 设计侧当前共识：
+  - 单靠当前 protocol 下的小幅调参与稳定化，无法有把握从 `95.2%` 直接拉到 `98%+`
+  - 更合理的路线是同时重做：
+    - protocol / sampling
+    - warmup + fusion 的训练阶段设计
+    - fusion 在整体判别中的角色分工

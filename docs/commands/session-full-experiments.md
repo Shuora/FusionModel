@@ -234,8 +234,11 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   - `--val-fraction`
   - `--train-max-samples`
   - `--best-metric {val_macro_f1,val_acc}`
+- `--early-stopping-patience` 现已恢复支持：
+  - `0` 表示禁用
+  - `> 0` 表示当验证指标连续若干个 epoch 未提升时提前停止
+  - 监控指标复用 `--best-metric`
 - 为兼容旧命令，`--num-heads` 仍可作为 `--fusion-heads` 的 alias 使用，但新文档统一写 `--fusion-heads`。
-- 当前已经没有 `early-stopping` 相关参数，旧文档里的 `--early-stopping-patience` / `--early-stopping-min-delta` 已过期。
 - 当 manifest 没有显式 `val` split 时，`src.train` 会从 `train` 中按 `--val-fraction`（默认 `0.1`）派生验证集。
 - 二分类下，训练会为验证集搜索 `decision_threshold`，`src.evaluate` 会自动复用 `best.ckpt` 或 `config.yaml` 中保存的该阈值。
 - 如果你把 `--best-metric` 设为 `val_acc`，`best.ckpt` 会按 `val_acc` 保存；但当前 `src.report` 的 `Best Validation` 段仍按 `val_macro_f1` 排序展示，这一点和 checkpoint 选择逻辑不是完全一致。
@@ -266,6 +269,7 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --beta 0.2 \
   --val-fraction 0.1 \
   --best-metric val_acc \
+  --early-stopping-patience 5 \
   --device auto \
   --num-workers 4
 ```
@@ -320,6 +324,7 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --beta 0.2 \
   --val-fraction 0.1 \
   --best-metric val_acc \
+  --early-stopping-patience 5 \
   --device auto \
   --num-workers 4
 ```
@@ -594,7 +599,7 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
 
 下面这些旧说法已经不再适用，因此本次已整体删除：
 
-- 训练支持 `early-stopping` 参数
+- 训练完全不支持 `early-stopping` 参数
 - `stage1_binary --execute` 能透传 attention-fusion 的所有训练参数
 - 文档里默认直接使用系统 `python` 一定可行
 - Stage2 只会跑 3 个基础任务，不会额外生成 USTC 限样 run

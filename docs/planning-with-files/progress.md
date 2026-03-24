@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-03-24
+
+- 启动“stage1 98+ high-score redesign”设计任务。
+- 已按 `brainstorming` 先确认目标边界：
+  - 用户不再限制于“小修模型”
+  - 允许同时修改：
+    - `stage1_binary` 数据协议
+    - 训练策略
+    - 当前 fusion 结构
+- 已完成设计讨论前两轮收敛：
+  - 仅靠当前协议下调参，直冲 `98%+` 把握不足
+  - 推荐路线为“协议 + 训练 + 模型”三层联动
+  - 目标从“修到不塌”升级为“重做一版高分方案”
+- 当前进入正式 spec 落盘阶段，尚未进入实现。
+- 用户已确认当前 spec 方向可行，进入 implementation planning 阶段。
+
 ## 2026-03-23
 
 - 启动“cross-attention stage1 acc 回退排查”只读任务，已按要求读取：
@@ -576,6 +592,25 @@
 - 已完成整组目标回归：
   - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_protocol_execution.py`
   - 结果：`48 passed`
+- 已补丁更新实验总文档：
+  - `docs/commands/session-full-experiments.md`
+  - 已将 stage1 手动训练命令与 `stage1_binary --execute` 一键命令补上 `--early-stopping-patience 5`
+  - 已删除文中“当前已经没有 early-stopping 相关参数”的过期表述
+- 启动“Python 环境污染”排查：
+  - 已读取 `~/.zshrc`、`~/.zprofile`、当前进程环境变量
+  - 已确认 conda 环境被污染的直接来源不是 conda，而是全局 `PYTHONPATH`
+  - 发现：
+    - `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:...`
+    - `PYTHONUSERBASE=/mnt/c/Users/11098/.py-user`
+- 已完成修复：
+  - 删除 `~/.zshrc` / `~/.zprofile` 中直接导出的 Python 3.12 `PYTHONPATH`
+  - 增加 zsh 启动时对 `.py-user/lib/python3.12/site-packages` 的定向过滤
+- 已完成验证：
+  - 在新的 login zsh 中注入测试值：
+    - `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:/tmp/demo`
+  - 启动后实际保留：
+    - `PYTHONPATH=/tmp/demo`
+  - `sys.path` 不再包含 Python 3.12 的 `.py-user` 目录
 - 启动“cross-attention stage1 acc regression”只读排查，已读取：
   - `docs/planning-with-files/{task_plan,findings,progress}.md`
   - `src/models/{fusion_model,mobilevit_backbone,etbert_backbone}.py`
