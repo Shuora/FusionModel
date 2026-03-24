@@ -184,3 +184,46 @@ def test_load_policy_multimodal_data_reads_etbert_triplet(tmp_path: Path):
     assert data["input_ids"].shape == (2, 128)
     assert data["attention_mask"].shape == (2, 128)
     assert data["token_type_ids"].shape == (2, 128)
+
+
+def test_load_policy_multimodal_data_session_filter_manifest_can_override_explicit_val_split(tmp_path: Path):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+
+    rows = [
+        {
+            "session_id": "iscx_train",
+            "dataset": "ISCX",
+            "family": "Chat",
+            "capture_id": "vpn_facebook_chat1a.pcap",
+            "split": "train",
+            "policy": policy,
+        },
+        {
+            "session_id": "iscx_holdout",
+            "dataset": "ISCX",
+            "family": "Chat",
+            "capture_id": "vpn_facebook_chat1b.pcap",
+            "split": "train",
+            "policy": policy,
+        },
+    ]
+    _write_dataset(processed_root, "ISCX", policy, rows, labels=np.array([0, 1], dtype=np.int32))
+
+    filter_manifest = tmp_path / "stage1_score_optimized_manifest.csv"
+    with filter_manifest.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["session_id", "split", "dataset"])
+        writer.writeheader()
+        writer.writerow({"session_id": "iscx_train", "split": "train", "dataset": "ISCX"})
+        writer.writerow({"session_id": "iscx_holdout", "split": "val", "dataset": "ISCX"})
+
+    data = load_policy_multimodal_data(
+        processed_root=processed_root,
+        policy=policy,
+        datasets=["ISCX"],
+        label_mode="binary",
+        session_filter_manifest=filter_manifest,
+    )
+    sid_to_split = {sid: split for sid, split in zip(data["session_id"].tolist(), data["split"].tolist())}
+    assert sid_to_split["iscx_train"] == "train"
+    assert sid_to_split["iscx_holdout"] == "val"

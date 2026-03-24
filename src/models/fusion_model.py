@@ -26,8 +26,9 @@ def _masked_mean(tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 class BidirectionalFusionBlock(nn.Module):
-    def __init__(self, hidden_dim: int, num_heads: int, dropout: float) -> None:
+    def __init__(self, hidden_dim: int, num_heads: int, dropout: float, image_primary: bool = False) -> None:
         super().__init__()
+        self.image_primary = bool(image_primary)
         self.text_to_image = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=num_heads,
@@ -75,23 +76,29 @@ class BidirectionalFusionBlock(nn.Module):
         text_tokens = self.text_norm1(text_tokens + self.dropout(text_update))
         text_tokens = self.text_norm2(text_tokens + self.text_ffn(text_tokens))
 
-        image_update, _ = self.image_to_text(
-            query=image_tokens,
-            key=text_tokens,
-            value=text_tokens,
-            key_padding_mask=text_mask <= 0,
-            need_weights=False,
-        )
-        image_tokens = self.image_norm1(image_tokens + self.dropout(image_update))
-        image_tokens = self.image_norm2(image_tokens + self.image_ffn(image_tokens))
+        if not self.image_primary:
+            image_update, _ = self.image_to_text(
+                query=image_tokens,
+                key=text_tokens,
+                value=text_tokens,
+                key_padding_mask=text_mask <= 0,
+                need_weights=False,
+            )
+            image_tokens = self.image_norm1(image_tokens + self.dropout(image_update))
+            image_tokens = self.image_norm2(image_tokens + self.image_ffn(image_tokens))
         return image_tokens, text_tokens
 
 
 class BidirectionalFusionEncoder(nn.Module):
-    def __init__(self, hidden_dim: int, num_layers: int, num_heads: int, dropout: float) -> None:
+    def __init__(self, hidden_dim: int, num_layers: int, num_heads: int, dropout: float, image_primary: bool = False) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
-            BidirectionalFusionBlock(hidden_dim=hidden_dim, num_heads=num_heads, dropout=dropout)
+            BidirectionalFusionBlock(
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                dropout=dropout,
+                image_primary=image_primary,
+            )
             for _ in range(num_layers)
         )
 
@@ -116,8 +123,13 @@ class MobileViTETBertFusionClassifier(nn.Module):
         fusion_layers: int = 2,
         fusion_heads: int = 4,
         dropout: float = 0.1,
+        fusion_mode: str = "legacy",
+        text_shortcut_scale: float = 0.0,
     ) -> None:
         super().__init__()
+        if fusion_mode not in {"legacy", "residual_enhancer"}:
+            raise ValueError(f"unsupported fusion_mode: {fusion_mode}")
+        self.fusion_mode = fusion_mode
         self.image_backbone = MobileViTBackbone(out_dim=hidden_dim)
         self.text_backbone = ETBertBackbone(vocab_size=vocab_size, hidden_dim=hidden_dim, max_tokens=max_tokens)
         normalized_heads = _normalize_heads_num(hidden_dim=hidden_dim, heads_num=fusion_heads)
@@ -126,6 +138,7 @@ class MobileViTETBertFusionClassifier(nn.Module):
             num_layers=max(1, fusion_layers),
             num_heads=normalized_heads,
             dropout=dropout,
+            image_primary=(fusion_mode == "residual_enhancer"),
         )
         self.fusion_proj = nn.Sequential(
             nn.Linear(hidden_dim * 4, hidden_dim * 2),
@@ -136,6 +149,7 @@ class MobileViTETBertFusionClassifier(nn.Module):
         self.head_fuse = nn.Linear(hidden_dim, num_classes)
         self.head_img = nn.Linear(hidden_dim, num_classes)
         self.head_tls = nn.Linear(hidden_dim, num_classes)
+        self.register_buffer("text_shortcut_scale", torch.tensor(float(text_shortcut_scale), dtype=torch.float32))
 
     def forward(
         self,
@@ -158,12 +172,20 @@ class MobileViTETBertFusionClassifier(nn.Module):
                 text_tokens=txt_tokens,
                 text_mask=txt_features["mask"],
             )
-            img_ctx = img_tokens.mean(dim=1)
+            img_ctx = img_pooled_pre if self.fusion_mode == "residual_enhancer" else img_tokens.mean(dim=1)
             txt_ctx = _masked_mean(txt_tokens, txt_features["mask"])
         else:
             img_ctx = img_pooled_pre
             txt_ctx = txt_pooled_pre
-        fused = self.fusion_proj(torch.cat([img_ctx, txt_ctx, img_pooled_pre, txt_pooled_pre], dim=-1))
+        if self.fusion_mode == "residual_enhancer":
+            if use_fusion:
+                shortcut = img_pooled_pre + self.text_shortcut_scale * txt_pooled_pre
+                residual = torch.tanh(self.fusion_proj(torch.cat([img_ctx, txt_ctx, img_pooled_pre, txt_pooled_pre], dim=-1)))
+                fused = shortcut + (0.5 * residual)
+            else:
+                fused = img_pooled_pre
+        else:
+            fused = self.fusion_proj(torch.cat([img_ctx, txt_ctx, img_pooled_pre, txt_pooled_pre], dim=-1))
         out = {
             "logits_fuse": self.head_fuse(fused),
             "logits_img": self.head_img(img_pooled_pre),

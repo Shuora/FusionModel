@@ -30,6 +30,7 @@
 ## Notes
 
 - 用户已确认进入 implementation planning 阶段。
+- 代码层基础设施已落地，当前剩余主任务是高分 baseline 与最终验收实验。
 
 ## Cross-Attention Stabilization + Early Stopping Plan (2026-03-23)
 

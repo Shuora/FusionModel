@@ -33,7 +33,7 @@ def load_policy_multimodal_data(
 ) -> Dict[str, np.ndarray]:
     processed_root = Path(processed_root)
     dataset_filter = {_normalize_dataset_name(x) for x in datasets} if datasets else None
-    allowed_session_ids = _load_allowed_session_ids(session_filter_manifest)
+    allowed_session_ids, session_filter_meta = _load_session_filter_manifest(session_filter_manifest)
 
     rgbs: List[np.ndarray] = []
     input_ids_list: List[np.ndarray] = []
@@ -81,7 +81,9 @@ def load_policy_multimodal_data(
                     continue
                 if allowed_session_ids is not None and sid not in allowed_session_ids:
                     continue
-                meta = manifest_map.get(sid, {})
+                meta = dict(manifest_map.get(sid, {}))
+                if sid in session_filter_meta:
+                    meta.update(session_filter_meta[sid])
                 dataset_name = str(meta.get("dataset", default_dataset))
                 if dataset_filter is not None and dataset_name not in dataset_filter:
                     continue
@@ -185,9 +187,11 @@ def _load_manifest_meta_map(manifest_dir: Path, default_dataset: str) -> Dict[st
     return meta
 
 
-def _load_allowed_session_ids(session_filter_manifest: str | Path | None) -> set[str] | None:
+def _load_session_filter_manifest(
+    session_filter_manifest: str | Path | None,
+) -> tuple[set[str] | None, Dict[str, Dict[str, str]]]:
     if not session_filter_manifest:
-        return None
+        return None, {}
     manifest_path = Path(session_filter_manifest)
     if not manifest_path.exists():
         raise FileNotFoundError(f"session filter manifest not found: {manifest_path}")
@@ -196,5 +200,22 @@ def _load_allowed_session_ids(session_filter_manifest: str | Path | None) -> set
     with manifest_path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames or "session_id" not in reader.fieldnames:
-            return None
-        return {str(row["session_id"]) for row in reader}
+            return None, {}
+        allowed = set()
+        meta_overrides: Dict[str, Dict[str, str]] = {}
+        for row in reader:
+            sid = str(row["session_id"])
+            allowed.add(sid)
+            override: Dict[str, str] = {}
+            split_value = str(row.get("split", "")).strip()
+            if split_value:
+                override["split"] = split_value
+            dataset_value = str(row.get("dataset", "")).strip()
+            if dataset_value:
+                override["dataset"] = _normalize_dataset_name(dataset_value)
+            family_value = str(row.get("family", "")).strip()
+            if family_value:
+                override["family"] = family_value
+            if override:
+                meta_overrides[sid] = override
+        return allowed, meta_overrides
