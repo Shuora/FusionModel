@@ -7,6 +7,7 @@ from typing import Iterable, List
 
 from src.evaluate import main as evaluate_main
 from src.report import main as report_main
+from src.run_dir import current_run_date_partition
 from src.train import main as train_main
 
 
@@ -33,7 +34,7 @@ def _run_stage_report(run_dir: Path, stage: str, device: str) -> int:
 def _run_stage2_task(
     processed_root: Path,
     policy: str,
-    run_root: Path,
+    dated_run_root: Path,
     dataset: str,
     num_classes: int,
     stage: str,
@@ -55,6 +56,7 @@ def _run_stage2_task(
     run_id_suffix: str = "",
 ) -> int:
     run_id = f"stage2-{dataset.lower()}{run_id_suffix}"
+    run_dir = dated_run_root / run_id
     train_args = [
         "--processed-root",
         str(processed_root),
@@ -63,7 +65,7 @@ def _run_stage2_task(
         "--stage",
         stage,
         "--run-root",
-        str(run_root),
+        str(dated_run_root),
         "--run-id",
         run_id,
         "--epochs",
@@ -107,7 +109,6 @@ def _run_stage2_task(
     if train_code != 0:
         return train_code
 
-    run_dir = run_root / run_id
     return _run_stage_report(run_dir=run_dir, stage=stage, device=device)
 
 
@@ -150,15 +151,24 @@ def main(argv: Iterable[str] | None = None) -> int:
     processed_root = Path(args.processed_root)
     run_root = Path(args.run_root)
     run_root.mkdir(parents=True, exist_ok=True)
+    run_date = current_run_date_partition()
+    dated_run_root = run_root / run_date
     summary: List[dict] = []
+    summary_path = dated_run_root / "stage2_execution_summary.json"
+
+    def write_summary() -> None:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     for task in tasks:
         dataset = str(task["dataset"])
         num_classes = int(task["num_classes"])
+        run_id = f"stage2-{dataset.lower()}"
+        run_dir = dated_run_root / run_id
         code = _run_stage2_task(
             processed_root=processed_root,
             policy=args.policy,
-            run_root=run_root,
+            dated_run_root=dated_run_root,
             dataset=dataset,
             num_classes=num_classes,
             stage=args.stage,
@@ -181,22 +191,24 @@ def main(argv: Iterable[str] | None = None) -> int:
             {
                 "dataset": dataset,
                 "num_classes": num_classes,
-                "run_id": f"stage2-{dataset.lower()}",
+                "run_id": run_id,
+                "run_date": run_date,
+                "run_dir": str(run_dir),
                 "train_max_samples": None,
                 "code": int(code),
             }
         )
         if code != 0:
-            (run_root / "stage2_execution_summary.json").write_text(
-                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            write_summary()
             return code
         if dataset == "USTC-TFC2016" and not args.skip_ustc_limited:
             for limit in args.ustc_train_limits:
+                limited_run_id = f"stage2-{dataset.lower()}-train{int(limit)}"
+                limited_run_dir = dated_run_root / limited_run_id
                 limit_code = _run_stage2_task(
                     processed_root=processed_root,
                     policy=args.policy,
-                    run_root=run_root,
+                    dated_run_root=dated_run_root,
                     dataset=dataset,
                     num_classes=num_classes,
                     stage=args.stage,
@@ -221,20 +233,18 @@ def main(argv: Iterable[str] | None = None) -> int:
                     {
                         "dataset": dataset,
                         "num_classes": num_classes,
-                        "run_id": f"stage2-{dataset.lower()}-train{int(limit)}",
+                        "run_id": limited_run_id,
+                        "run_date": run_date,
+                        "run_dir": str(limited_run_dir),
                         "train_max_samples": int(limit),
                         "code": int(limit_code),
                     }
                 )
                 if limit_code != 0:
-                    (run_root / "stage2_execution_summary.json").write_text(
-                        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-                    )
+                    write_summary()
                     return limit_code
 
-    (run_root / "stage2_execution_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_summary()
     return 0
 
 

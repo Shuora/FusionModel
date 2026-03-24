@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.evaluate import main as evaluate_main
 from src.report import main as report_main
+from src.run_dir import current_run_date_partition
 from src.train import main as train_main
 
 
@@ -513,10 +514,16 @@ def run_stage1_protocol(
     text_shortcut_scale: float,
 ) -> int:
     _log("协议执行模式已启用")
+    run_date = current_run_date_partition()
+    dated_run_root = run_root / run_date
+
     manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode=protocol_mode)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(output_manifest, index=False)
     _log(f"Manifest 已保存: {output_manifest} (rows={len(manifest)})")
+
+    def build_protocol_run_dir(stage_run_id: str) -> Path:
+        return dated_run_root / stage_run_id
 
     def build_train_args(*, stage_name: str, stage_run_id: str, epochs_value: int, warmup_checkpoint: str | None = None) -> list[str]:
         train_args = [
@@ -527,7 +534,7 @@ def run_stage1_protocol(
         "--stage",
         stage_name,
         "--run-root",
-        str(run_root),
+        str(dated_run_root),
         "--run-id",
         stage_run_id,
         "--epochs",
@@ -590,7 +597,7 @@ def run_stage1_protocol(
             _log(f"warmup 训练步骤失败: exit_code={train_code}")
             return train_code
         _log("warmup 训练步骤完成")
-        warmup_checkpoint = str(run_root / warmup_run_id / "checkpoints" / "best.ckpt")
+        warmup_checkpoint = str(build_protocol_run_dir(warmup_run_id) / "checkpoints" / "best.ckpt")
 
         _log("两阶段训练步骤开始：fusion")
         train_args = build_train_args(
@@ -609,7 +616,7 @@ def run_stage1_protocol(
         return train_code
     _log("训练步骤完成")
 
-    run_dir = run_root / run_id
+    run_dir = build_protocol_run_dir(run_id)
     try:
         return _run_stage_report(run_dir=run_dir, stage=stage, device=device, holdout_eval=holdout_eval)
     except TypeError as exc:
