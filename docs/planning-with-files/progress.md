@@ -657,3 +657,50 @@
   - `MobileViT` 预训练最稳的 pooled image feature 在 fusion 训练路径里被绕开
   - stage1 当前又直接以 `stage=fusion` 从头训练，没有 warmup 兜底
 - 本轮结论已同步写入 `findings.md`，本次任务保持只读，未改业务代码。
+
+- 启动“协议执行默认日期分区”任务：
+  - 已读取技能与仓库约束：
+    - `using-superpowers`
+    - `planning-with-files`
+    - `brainstorming`
+    - `test-driven-development`
+    - `using-git-worktrees`
+  - 已确认当前仓库基线干净：`git status --short` 为空
+  - 已创建隔离 worktree：
+    - `/home/shuora/Traffic/FusionModel/.worktrees/codex-dated-runs-defaults`
+    - branch=`codex/dated-runs-defaults`
+  - 已完成最小协议回归基线：
+    - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_protocol_execution.py -k 'stage1_binary_execute_runs_train_eval_report or stage2_multiclass_execute_runs_three_dataset_jobs'`
+    - 结果：`2 passed`
+  - 当前已确认的问题定义：
+    - `src.train.py` 默认支持 `runs/YYYY-MM-DD/<auto_run_id>`
+    - 但 `stage1_binary` / `stage2_multiclass` 自己固定了 `run_root / run_id`
+    - 导致用户即使不显式传日期路径，一键协议执行结果也不会按日期分区
+  - 已确定本轮实现边界：
+    - 只改协议执行层与共享 run-dir helper
+    - 不全局改 `src.train.py` 的通用 `--run-id` 语义
+- 已按 TDD 先补红灯测试并确认失败：
+  - `tests/pipeline/test_protocol_execution.py::test_stage1_binary_execute_runs_train_eval_report`
+  - `tests/pipeline/test_protocol_execution.py::test_stage2_multiclass_execute_runs_three_dataset_jobs`
+  - 失败原因：
+    - 实际产物仍落在 `runs/<run-id>`
+    - `stage2_execution_summary.json` 仍写在 `runs/`
+- 已完成实现：
+  - `src/run_dir.py`
+    - 新增日期分区 helper
+  - `src/train.py`
+    - 默认 auto-run-id 逻辑改为复用共享 helper
+  - `src/experiments/stage1_binary.py`
+    - execute 默认写入 `runs/YYYY-MM-DD/<run-id>`
+  - `src/experiments/stage2_multiclass.py`
+    - execute 默认写入 `runs/YYYY-MM-DD/<run-id>`
+    - summary 改写到当天日期分区，并补充 `run_date/run_dir`
+  - `tests/pipeline/test_protocol_execution.py`
+    - stage1/stage2 execute 相关断言已改为日期分区
+  - `docs/commands/session-full-experiments.md`
+    - 已同步更新默认输出路径与 stage2 summary 说明
+- 已完成关键回归：
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_protocol_execution.py`
+  - 结果：`19 passed`
+  - `PYTHONPATH= PYTHONNOUSERSITE=1 /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_protocol_execution.py tests/pipeline/test_run_dir_resolution.py tests/pipeline/test_train_run_layout.py tests/pipeline/test_train_eval_report.py -k 'resolve_run_dir or accepts_short_run_dir_and_resolves_dated_partition or default_run_dir_uses_date_partition_and_unique_leaf or stage1_binary_execute_runs_train_eval_report or stage1_binary_execute_stacking_reports_stacking_metrics or stage1_binary_execute_moe_reports_moe_metrics or stage2_multiclass_execute_runs_three_dataset_jobs or stage2_multiclass_execute_stacking_reports_stage_metrics or stage2_multiclass_execute_moe_reports_stage_metrics'`
+  - 结果：`12 passed`

@@ -697,3 +697,36 @@
   - protocol-only baseline
   - protocol + two-stage baseline
   - final 98% 验收 run
+
+## Protocol 默认日期分区现状（2026-03-24）
+
+- `src.train.py` 已支持默认日期分区：
+  - 当不传 `--run-id` 时，产物会写到 `runs/YYYY-MM-DD/<HHMMSS-ffffff>`
+- 但协议执行脚本绕开了这套默认行为：
+  - `src.experiments.stage1_binary.py` 会固定把训练产物写到 `run_root / run_id`
+  - `src.experiments.stage2_multiclass.py` 也同样固定使用 `run_root / run_id`
+- 因此用户即使只传 `--run-root runs`，一键协议执行的结果仍是扁平目录：
+  - `runs/stage1-binary`
+  - `runs/stage2-mta`
+  - `runs/stage2-mfcp`
+- `src.run_dir.resolve_run_dir()` 已经能把 `runs/<run-id>` 自动解析到最新 `runs/YYYY-MM-DD/<run-id>`，所以如果协议执行层改成日期分区，后续 `evaluate/report` 的短路径兼容性可以直接复用现有能力。
+- `stage2_execution_summary.json` 当前写在 `run_root` 根目录，且 summary item 只有 `run_id` / `code` / `dataset` 等信息，不包含实际 `run_dir` 或 `run_date`，不利于定位当天执行产物。
+
+## Protocol 默认日期分区实现结果（2026-03-24）
+
+- 已将协议执行层默认 run 目录改为：
+  - `runs/YYYY-MM-DD/stage1-binary`
+  - `runs/YYYY-MM-DD/stage2-mta`
+  - `runs/YYYY-MM-DD/stage2-mfcp`
+- 改动边界保持在协议执行层和共享 helper：
+  - `src.train.py` 的显式 `--run-id` 通用语义未被改成“强制日期分区”
+  - 仅 `src.experiments.stage1_binary.py` / `src.experiments.stage2_multiclass.py` 会在内部自动把 `--run-root` 展开到当天日期分区
+- `stage2_execution_summary.json` 现已随当天批次一起写到：
+  - `runs/YYYY-MM-DD/stage2_execution_summary.json`
+- summary item 现已补充：
+  - `run_date`
+  - `run_dir`
+  这样即使同一个 `run_id` 跨天重复，也能直接定位到真实产物目录。
+- 现有短路径兼容能力保持不变：
+  - `src.run_dir.resolve_run_dir()` 仍可把 `runs/<run-id>` 自动解析到最新日期分区下的同名 run
+  - 因而后续 `evaluate/report` 无需改接口

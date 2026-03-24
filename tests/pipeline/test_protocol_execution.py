@@ -12,6 +12,14 @@ from src.experiments.stage1_binary import main as stage1_main
 from src.experiments.stage2_multiclass import main as stage2_main
 
 
+def _single_date_partition(run_root: Path) -> Path:
+    date_dirs = [path for path in run_root.iterdir() if path.is_dir()]
+    assert len(date_dirs) == 1
+    date_dir = date_dirs[0]
+    assert len(date_dir.name.split("-")) == 3
+    return date_dir
+
+
 def _write_processed_dataset(
     root: Path,
     dataset: str,
@@ -121,7 +129,8 @@ def test_stage1_binary_execute_runs_train_eval_report(tmp_path: Path, monkeypatc
     )
     assert code == 0
 
-    run_dir = run_root / "stage1-run"
+    date_dir = _single_date_partition(run_root)
+    run_dir = date_dir / "stage1-run"
     assert out_manifest.exists()
     assert (run_dir / "metrics.csv").exists()
     assert (run_dir / "eval_test.json").exists()
@@ -169,7 +178,7 @@ def test_stage1_binary_execute_stacking_reports_stacking_metrics(tmp_path: Path,
     )
     assert code == 0
 
-    run_dir = run_root / "stage1-stacking-run"
+    run_dir = _single_date_partition(run_root) / "stage1-stacking-run"
     assert (run_dir / "stacking" / "meta_metrics.json").exists()
     assert not (run_dir / "eval_test.json").exists()
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -212,7 +221,7 @@ def test_stage1_binary_execute_moe_reports_moe_metrics(tmp_path: Path, monkeypat
     )
     assert code == 0
 
-    run_dir = run_root / "stage1-moe-run"
+    run_dir = _single_date_partition(run_root) / "stage1-moe-run"
     assert (run_dir / "moe" / "moe_metrics.json").exists()
     assert not (run_dir / "eval_test.json").exists()
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -255,17 +264,25 @@ def test_stage2_multiclass_execute_runs_three_dataset_jobs(tmp_path: Path):
     assert code == 0
     assert out_tasks.exists()
 
+    date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = run_root / f"stage2-{dataset.lower()}"
+        run_dir = date_dir / f"stage2-{dataset.lower()}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
 
     for limit in (4000, 3000, 2000):
-        run_dir = run_root / f"stage2-ustc-tfc2016-train{limit}"
+        run_dir = date_dir / f"stage2-ustc-tfc2016-train{limit}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
+
+    summary_path = date_dir / "stage2_execution_summary.json"
+    assert summary_path.exists()
+    summary = pd.read_json(summary_path)
+    assert set(summary.columns) >= {"dataset", "run_id", "run_dir", "run_date", "code"}
+    assert set(summary["run_date"].tolist()) == {date_dir.name}
+    assert str(date_dir / "stage2-mta") in set(summary["run_dir"].tolist())
 
 
 def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path):
@@ -300,8 +317,9 @@ def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path
     )
     assert code == 0
 
+    date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = run_root / f"stage2-{dataset.lower()}"
+        run_dir = date_dir / f"stage2-{dataset.lower()}"
         assert (run_dir / "stacking" / "meta_metrics.json").exists()
         assert not (run_dir / "eval_test.json").exists()
         report_text = (run_dir / "report.md").read_text(encoding="utf-8")
@@ -340,8 +358,9 @@ def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
     )
     assert code == 0
 
+    date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = run_root / f"stage2-{dataset.lower()}"
+        run_dir = date_dir / f"stage2-{dataset.lower()}"
         assert (run_dir / "moe" / "moe_metrics.json").exists()
         assert not (run_dir / "eval_test.json").exists()
         report_text = (run_dir / "report.md").read_text(encoding="utf-8")

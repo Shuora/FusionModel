@@ -1,6 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+
+
+def current_run_date_partition(now: datetime | None = None) -> str:
+    current = now or datetime.now()
+    return current.strftime("%Y-%m-%d")
+
+
+def build_dated_run_dir(run_root: str | Path, run_id: str, now: datetime | None = None) -> Path:
+    return Path(run_root) / current_run_date_partition(now) / str(run_id)
+
+
+def build_timestamped_run_identity(run_root: str | Path, now: datetime | None = None) -> tuple[str, Path]:
+    current = now or datetime.now()
+    run_id = current.strftime("%H%M%S-%f")
+    return run_id, build_dated_run_dir(run_root=run_root, run_id=run_id, now=current)
 
 
 def resolve_run_dir(run_dir: str | Path) -> Path:

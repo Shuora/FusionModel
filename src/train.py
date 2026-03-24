@@ -21,14 +21,12 @@ import yaml
 from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
+from src.run_dir import build_timestamped_run_identity
 from src.runtime_device import resolve_runtime_device
 
 
 def _build_run_identity(run_root: Path) -> tuple[str, Path]:
-    now = datetime.now()
-    date_dir = now.strftime("%Y-%m-%d")
-    run_id = now.strftime("%H%M%S-%f")
-    return run_id, run_root / date_dir / run_id
+    return build_timestamped_run_identity(run_root=run_root, now=datetime.now())
 
 
 def _sha8(path: Path) -> str:

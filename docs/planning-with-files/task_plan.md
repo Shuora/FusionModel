@@ -8,7 +8,7 @@
 
 ## Status
 
-- In progress on 2026-03-24
+- Completed on 2026-03-24
 
 ## Scope
 
@@ -581,3 +581,33 @@
 2. 在 `src/train.py` 中把派生 val 改为按 label 分层抽样，并支持按 `val_acc` 选择 best checkpoint。
 3. 在 `src.train` / `src.evaluate` 中增加二分类 decision threshold 的持久化与复用。
 4. 更新实验文档与 planning-with-files 记录，并运行针对性回归。
+
+---
+
+# Protocol Dated Runs Default Plan
+
+## Goal
+
+让 `src.experiments.stage1_binary` 与 `src.experiments.stage2_multiclass` 在默认 `--run-root runs` 下执行时，也自动把产物写到 `runs/YYYY-MM-DD/<run-id>`，无需用户手工显式传日期路径；同时让 stage2 汇总结果记录实际日期分区信息。
+
+## Status
+
+- In progress on 2026-03-24
+
+## Scope
+
+- `src/experiments/stage1_binary.py`
+- `src/experiments/stage2_multiclass.py`
+- `src/run_dir.py`
+- `tests/pipeline/test_protocol_execution.py`
+- `docs/commands/session-full-experiments.md`
+- `docs/planning-with-files/task_plan.md`
+- `docs/planning-with-files/findings.md`
+- `docs/planning-with-files/progress.md`
+
+## Plan
+
+1. 先补协议执行层的红灯测试，锁定 stage1/stage2 默认产物落到日期分区，以及 stage2 summary 带出实际 run 目录。
+2. 在共享 run-dir helper 中补“按日期构造协议 run 目录”的能力，并让 stage1/stage2 执行层统一复用。
+3. 调整 stage2 summary 的落盘位置和字段，保证既能追溯日期分区，也不影响后续按 `runs/<run-id>` 解析最新 run。
+4. 更新实验文档与 planning-with-files 记录，并跑协议执行相关回归。

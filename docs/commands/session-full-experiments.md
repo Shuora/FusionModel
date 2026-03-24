@@ -281,6 +281,13 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   - `evaluate --split test`
   - `report`
 - 若 `stage` 是 `stacking` 或 `moe`，会跳过 `evaluate`，然后直接生成报告。
+- 这里即使只传 `--run-root runs`，协议执行结果也会自动写到：
+  - `runs/YYYY-MM-DD/stage1-binary`
+  - 不需要再手工把日期拼进 `--run-root`
+- 后续如果手工执行评估/报告，仍可继续使用短路径：
+  - `python -m src.evaluate --run-dir runs/stage1-binary ...`
+  - `python -m src.report --run-dir runs/stage1-binary`
+  - 它们会自动解析到最新日期分区下的同名 run
 
 ## 3. Stage2 多分类
 
@@ -331,16 +338,20 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
 
 当前行为：
 
-- 会先跑：
-  - `stage2-mta`
-  - `stage2-mfcp`
-  - `stage2-ustc-tfc2016`
+- 会先在当天日期分区下跑：
+  - `runs/YYYY-MM-DD/stage2-mta`
+  - `runs/YYYY-MM-DD/stage2-mfcp`
+  - `runs/YYYY-MM-DD/stage2-ustc-tfc2016`
 - 默认还会继续跑额外的 USTC 限样任务：
-  - `stage2-ustc-tfc2016-train4000`
-  - `stage2-ustc-tfc2016-train3000`
-  - `stage2-ustc-tfc2016-train2000`
+  - `runs/YYYY-MM-DD/stage2-ustc-tfc2016-train4000`
+  - `runs/YYYY-MM-DD/stage2-ustc-tfc2016-train3000`
+  - `runs/YYYY-MM-DD/stage2-ustc-tfc2016-train2000`
 - 汇总结果会写到：
-  - `runs/stage2_execution_summary.json`
+  - `runs/YYYY-MM-DD/stage2_execution_summary.json`
+- 汇总文件中的每条记录还会额外写出：
+  - `run_date`
+  - `run_dir`
+  这样即使不同日期重复使用同一个 `run_id`，也能直接定位到真实产物目录。
 
 如果你只想跑 3 个基础任务，不跑额外 USTC 限样任务：
 
