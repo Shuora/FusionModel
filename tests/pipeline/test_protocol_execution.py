@@ -481,6 +481,126 @@ def test_stage1_binary_execute_forwards_early_stopping_patience_to_train(tmp_pat
     assert "3" in captured["argv"]
 
 
+def test_stage1_binary_execute_score_optimized_skips_test_holdout_until_explicit_request(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {"report": 0}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
+            [{"session_id": "s1", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "train"}]
+        ),
+    )
+    monkeypatch.setattr(stage1_mod, "train_main", lambda argv: 0)
+    monkeypatch.setattr(stage1_mod, "evaluate_main", lambda argv: (_ for _ in ()).throw(AssertionError("holdout test should be skipped")))
+    monkeypatch.setattr(stage1_mod, "report_main", lambda argv: captured.__setitem__("report", captured["report"] + 1) or 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--protocol-mode",
+            "score_optimized",
+            "--holdout-eval",
+            "final_only",
+        ]
+    )
+    assert code == 0
+    assert captured["report"] == 1
+
+
+def test_stage1_binary_execute_score_optimized_forwards_checkpoint_selection(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = {}
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
+            [
+                {"session_id": "s_train", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "train"},
+                {"session_id": "s_val", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "val"},
+                {"session_id": "s_test", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "test"},
+            ]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--protocol-mode",
+            "score_optimized",
+        ]
+    )
+    assert code == 0
+    assert "--checkpoint-selection" in captured["argv"]
+    idx = captured["argv"].index("--checkpoint-selection")
+    assert captured["argv"][idx + 1] == "score_optimized"
+
+
+def test_stage1_binary_execute_score_optimized_can_run_warmup_then_fusion(tmp_path: Path, monkeypatch):
+    from src.experiments import stage1_binary as stage1_mod
+
+    captured = []
+
+    monkeypatch.setattr(
+        stage1_mod,
+        "build_stage1_manifest",
+        lambda processed_root, policy, protocol_mode="paper_balanced": pd.DataFrame(
+            [
+                {"session_id": "s_train", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "train"},
+                {"session_id": "s_val", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "val"},
+                {"session_id": "s_test", "dataset": "ISCX", "dataset_raw": "ISCX", "label_binary": 0, "label_text": "normal", "split": "test"},
+            ]
+        ),
+    )
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage1_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage1_mod, "_run_stage_report", lambda *args, **kwargs: 0)
+
+    code = stage1_mod.main(
+        [
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--execute",
+            "--protocol-mode",
+            "score_optimized",
+            "--two-stage",
+            "--warmup-epochs",
+            "2",
+        ]
+    )
+    assert code == 0
+    assert len(captured) == 2
+
+    warmup_argv, fusion_argv = captured
+    assert "--stage" in warmup_argv and warmup_argv[warmup_argv.index("--stage") + 1] == "warmup"
+    assert "--epochs" in warmup_argv and warmup_argv[warmup_argv.index("--epochs") + 1] == "2"
+    assert "--holdout-eval" not in warmup_argv
+
+    assert "--stage" in fusion_argv and fusion_argv[fusion_argv.index("--stage") + 1] == "fusion"
+    assert "--warmup-checkpoint" in fusion_argv
+    assert "--fusion-mode" in fusion_argv and fusion_argv[fusion_argv.index("--fusion-mode") + 1] == "residual_enhancer"
+    assert "--text-shortcut-scale" in fusion_argv and fusion_argv[fusion_argv.index("--text-shortcut-scale") + 1] == "0.5"
+
+
 def test_stage1_binary_execute_forwards_latest_fusion_train_args(tmp_path: Path, monkeypatch):
     from src.experiments import stage1_binary as stage1_mod
 

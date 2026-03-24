@@ -591,6 +591,169 @@ def test_stage1_manifest_balanced_keeps_all_undersupplied_samples(tmp_path: Path
     assert set(iscx_rows["session_id"].tolist()) == {"iscx_train_1", "iscx_train_2", "iscx_test_1"}
 
 
+def test_stage1_manifest_score_optimized_outputs_explicit_train_val_test_balanced_binary_distribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+    _patch_minimal_paper_specs(monkeypatch)
+
+    iscx_rows: list[dict] = []
+    for i in range(12):
+        iscx_rows.append(
+            {
+                "session_id": f"iscx_train_{i}",
+                "dataset": "ISCX",
+                "family": "F1",
+                "capture_id": f"vpn_facebook_chat_train_{i}.pcap",
+                "split": "train",
+                "policy": policy,
+            }
+        )
+    for i in range(6):
+        iscx_rows.append(
+            {
+                "session_id": f"iscx_test_{i}",
+                "dataset": "ISCX",
+                "family": "F1",
+                "capture_id": f"vpn_facebook_chat_test_{i}.pcap",
+                "split": "test",
+                "policy": policy,
+            }
+        )
+    _write_manifest(processed_root, "ISCX", policy, iscx_rows)
+
+    mfcp_rows: list[dict] = []
+    for i in range(12):
+        mfcp_rows.append(
+            {
+                "session_id": f"mfcp_train_{i}",
+                "dataset": "MFCP",
+                "family": "PUA",
+                "capture_id": f"mfcp_train_{i}.pcap",
+                "split": "train",
+                "policy": policy,
+            }
+        )
+    for i in range(6):
+        mfcp_rows.append(
+            {
+                "session_id": f"mfcp_test_{i}",
+                "dataset": "MFCP",
+                "family": "PUA",
+                "capture_id": f"mfcp_test_{i}.pcap",
+                "split": "test",
+                "policy": policy,
+            }
+        )
+    _write_manifest(processed_root, "MFCP", policy, mfcp_rows)
+
+    mta_rows: list[dict] = []
+    for i in range(12):
+        mta_rows.append(
+            {
+                "session_id": f"mta_train_{i}",
+                "dataset": "MTA",
+                "family": "Dridex",
+                "capture_id": f"mta_train_{i}.pcap",
+                "split": "train",
+                "policy": policy,
+            }
+        )
+    for i in range(6):
+        mta_rows.append(
+            {
+                "session_id": f"mta_test_{i}",
+                "dataset": "MTA",
+                "family": "Dridex",
+                "capture_id": f"mta_test_{i}.pcap",
+                "split": "test",
+                "policy": policy,
+            }
+        )
+    _write_manifest(processed_root, "MTA", policy, mta_rows)
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="score_optimized")
+
+    assert set(manifest["split"].tolist()) == {"train", "val", "test"}
+    for split_name in ("train", "val", "test"):
+        split_rows = manifest[manifest["split"] == split_name]
+        class_counts = split_rows["label_binary"].value_counts().to_dict()
+        assert class_counts.get(0, 0) > 0
+        assert class_counts.get(1, 0) > 0
+        assert abs(class_counts[0] - class_counts[1]) <= 1
+
+
+def test_stage1_manifest_score_optimized_dataset_balance_caps_dataset_dominance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    processed_root = tmp_path / "processed"
+    policy = "session_full"
+    _patch_minimal_paper_specs(monkeypatch)
+
+    _write_manifest(
+        processed_root,
+        "ISCX",
+        policy,
+        [
+            {
+                "session_id": f"iscx_{i}",
+                "dataset": "ISCX",
+                "family": "F1",
+                "capture_id": f"vpn_facebook_chat_{i}.pcap",
+                "split": "train" if i < 30 else "test",
+                "policy": policy,
+            }
+            for i in range(45)
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MFCP",
+        policy,
+        [
+            {
+                "session_id": f"mfcp_{i}",
+                "dataset": "MFCP",
+                "family": "PUA",
+                "capture_id": f"mfcp_{i}.pcap",
+                "split": "train" if i < 60 else "test",
+                "policy": policy,
+            }
+            for i in range(90)
+        ],
+    )
+    _write_manifest(
+        processed_root,
+        "MTA",
+        policy,
+        [
+            {
+                "session_id": f"mta_{i}",
+                "dataset": "MTA",
+                "family": "Dridex",
+                "capture_id": f"mta_{i}.pcap",
+                "split": "train" if i < 6 else "test",
+                "policy": policy,
+            }
+            for i in range(9)
+        ],
+    )
+
+    manifest = build_stage1_manifest(processed_root=processed_root, policy=policy, protocol_mode="score_optimized")
+
+    for split_name in ("train", "val", "test"):
+        split_rows = manifest[manifest["split"] == split_name]
+        split_dist = split_rows["dataset"].value_counts(normalize=True)
+        assert float(split_dist.max()) <= 0.6
+
+        malicious = split_rows[split_rows["label_binary"] == 1]
+        malicious_by_dataset = malicious["dataset"].value_counts().to_dict()
+        assert malicious_by_dataset.get("MFCP", 0) > 0
+        assert malicious_by_dataset.get("MTA", 0) > 0
+        assert abs(malicious_by_dataset["MFCP"] - malicious_by_dataset["MTA"]) <= 1
+
+
 def test_stage1_main_emits_progress_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ):

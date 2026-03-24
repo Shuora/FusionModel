@@ -652,3 +652,48 @@
     - protocol / sampling
     - warmup + fusion 的训练阶段设计
     - fusion 在整体判别中的角色分工
+
+## Stage1 High-Score Redesign 当前实现结论（2026-03-24）
+
+- 已落地的协议层能力：
+  - `src.experiments.stage1_binary.py` 新增 `protocol_mode=score_optimized`
+  - `score_optimized` 会生成显式 `train/val/test`
+  - binary class 在各 split 内被重新平衡
+  - malicious 侧会约束 `MFCP/MTA` 的相对平衡，避免单源主导
+- 已落地的数据传播能力：
+  - `src.pipeline_data.py` 现在会让 `session_filter_manifest` 覆盖 `split/dataset/family`
+  - 因而显式 `val` split 不会在数据加载阶段被抹掉
+- 已落地的训练/执行能力：
+  - `src.train.py` 新增：
+    - `--checkpoint-selection`
+    - `--warmup-checkpoint`
+  - `src.experiments.stage1_binary.py` 新增：
+    - `--holdout-eval {always,final_only}`
+    - `--two-stage`
+    - `--warmup-epochs`
+  - `score_optimized` 默认会向训练透传：
+    - `--checkpoint-selection score_optimized`
+  - `--two-stage` 会先跑 warmup 子 run，再把其 `best.ckpt` 作为 fusion 阶段初始化
+- 已落地的 fusion 角色重构：
+  - `src.models.fusion_model.py` 现支持：
+    - `fusion_mode=legacy`
+    - `fusion_mode=residual_enhancer`
+  - `legacy` 保持旧 checkpoint 的主前向语义
+  - `residual_enhancer` 下：
+    - `use_fusion=False` 时，`logits_fuse` 回退为 image 主路径
+    - `use_fusion=True` 时，fusion 通过有界 residual 做增强
+    - `text_shortcut_scale` 已进入 `state_dict`，不再是纯代码硬编码
+- 已落地的 report 修正：
+  - `src/report.py` 的 `Best Validation` 优先读取 `best.ckpt` 记录的最佳 epoch
+  - 不再固定按 `metrics.csv` 中的 `val_macro_f1` 重新排序
+- 当前回归证据：
+  - `tests/models/test_fusion_model.py`
+  - `tests/pipeline/test_stage1_binary_protocol.py`
+  - `tests/pipeline/test_pipeline_data_protocol.py`
+  - `tests/pipeline/test_train_eval_report.py`
+  - `tests/pipeline/test_protocol_execution.py`
+  - 汇总结果：`77 passed`
+- 尚未完成的部分不是代码正确性，而是高分验收实验本身：
+  - protocol-only baseline
+  - protocol + two-stage baseline
+  - final 98% 验收 run

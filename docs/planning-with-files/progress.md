@@ -15,6 +15,26 @@
   - 目标从“修到不塌”升级为“重做一版高分方案”
 - 当前进入正式 spec 落盘阶段，尚未进入实现。
 - 用户已确认当前 spec 方向可行，进入 implementation planning 阶段。
+- 已按 `using-git-worktrees` 创建隔离工作区：
+  - `/home/shuora/Traffic/FusionModel/.worktrees/codex-stage1-highscore`
+  - 分支：`codex/stage1-highscore`
+- 已同步主工作区中的新 spec/plan/planning 文档改动到该 worktree。
+- 已完成实现前基线验证：
+  - `env -u PYTHONPATH /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/pipeline/test_stage1_binary_protocol.py tests/pipeline/test_pipeline_data_protocol.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_protocol_execution.py tests/models/test_fusion_model.py`
+  - 结果：`64 passed`
+- 已实现并验证：
+  - `score_optimized` protocol mode
+  - `session_filter_manifest` 对显式 `val` split 的传播
+  - `--checkpoint-selection`
+  - `--holdout-eval final_only`
+  - `--two-stage` + `--warmup-epochs`
+  - `--warmup-checkpoint`
+  - report 优先读取 `best.ckpt` 的最佳 epoch
+  - fusion role 的 `legacy / residual_enhancer` 双模式
+  - `text_shortcut_scale` 持久化到 `state_dict`
+- 已完成当前目标回归：
+  - `env -u PYTHONPATH /home/shuora/miniconda3/envs/FusionModel/bin/pytest -q tests/models/test_fusion_model.py tests/pipeline/test_stage1_binary_protocol.py tests/pipeline/test_pipeline_data_protocol.py tests/pipeline/test_train_eval_report.py tests/pipeline/test_protocol_execution.py`
+  - 结果：`77 passed`
 
 ## 2026-03-23
 

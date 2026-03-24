@@ -165,6 +165,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         fusion_layers=int(cfg.get("fusion_layers", 2)),
         fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
         dropout=float(cfg.get("fusion_dropout", 0.1)),
+        fusion_mode=str(cfg.get("fusion_mode", "legacy")),
+        text_shortcut_scale=float(cfg.get("text_shortcut_scale", 0.0)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()

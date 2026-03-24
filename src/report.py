@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+import torch
 import yaml
 
 from src.run_dir import resolve_run_dir
@@ -30,7 +31,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     _plot_learning_curve(metrics, curve_path)
 
     eval_payload, metric_source, metric_path = _discover_metric_payload(run_dir)
-    best_row = metrics.sort_values("val_macro_f1", ascending=False).iloc[0]
+    best_row = _select_report_best_row(run_dir=run_dir, metrics=metrics)
 
     lines = [
         f"# Run Report: {cfg['run_id']}",
@@ -147,6 +148,20 @@ def _discover_metric_payload(run_dir: Path) -> Tuple[dict, str, Path]:
         return json.loads(moe_file.read_text(encoding="utf-8")), "moe", moe_file
 
     return {}, "none", eval_test
+
+
+def _select_report_best_row(run_dir: Path, metrics: pd.DataFrame) -> pd.Series:
+    best_ckpt = run_dir / "checkpoints" / "best.ckpt"
+    if best_ckpt.exists():
+        try:
+            payload = torch.load(best_ckpt, map_location="cpu")
+            best_epoch = int(payload.get("epoch"))
+            matched = metrics.loc[metrics["epoch"] == best_epoch]
+            if not matched.empty:
+                return matched.iloc[0]
+        except Exception:
+            pass
+    return metrics.sort_values("val_macro_f1", ascending=False).iloc[0]
 
 
 def _plot_learning_curve(metrics: pd.DataFrame, output_path: Path) -> None:

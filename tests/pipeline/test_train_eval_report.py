@@ -319,6 +319,27 @@ def test_report_falls_back_to_moe_metrics_when_eval_missing(tmp_path: Path):
     assert "confusion_matrix_test.csv" not in report_text
 
 
+def test_report_best_validation_prefers_best_checkpoint_epoch_when_available(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-best-ckpt-run"
+    _write_minimal_run_dir(run_dir, stage="fusion")
+    metrics = pd.DataFrame(
+        [
+            {"epoch": 1, "train_loss": 0.9, "val_loss": 0.7, "train_acc": 0.7, "val_acc": 0.95, "val_macro_f1": 0.80},
+            {"epoch": 2, "train_loss": 0.8, "val_loss": 0.6, "train_acc": 0.8, "val_acc": 0.93, "val_macro_f1": 0.96},
+        ]
+    )
+    metrics.to_csv(run_dir / "metrics.csv", index=False)
+    ckpt_dir = run_dir / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    torch.save({"epoch": 1, "best_metric": "val_acc", "best_metric_value": 0.95}, ckpt_dir / "best.ckpt")
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Best Epoch: 1" in report_text
+    assert "Val Acc: 0.9500" in report_text
+
+
 def test_evaluate_writes_classification_report_artifacts(tmp_path: Path, monkeypatch):
     run_dir = tmp_path / "runs" / "eval-artifacts-run"
     (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
@@ -905,6 +926,10 @@ def test_train_writes_fusion_hyperparams_to_config(tmp_path: Path, monkeypatch):
                 "5",
                 "--fusion-dropout",
                 "0.2",
+                "--fusion-mode",
+                "residual_enhancer",
+                "--text-shortcut-scale",
+                "0.5",
                 "--alpha",
                 "0.25",
                 "--beta",
@@ -920,9 +945,69 @@ def test_train_writes_fusion_hyperparams_to_config(tmp_path: Path, monkeypatch):
     assert int(cfg["fusion_layers"]) == 3
     assert int(cfg["fusion_heads"]) == 5
     assert float(cfg["fusion_dropout"]) == pytest.approx(0.2)
+    assert cfg["fusion_mode"] == "residual_enhancer"
+    assert float(cfg["text_shortcut_scale"]) == pytest.approx(0.5)
     assert float(cfg["alpha"]) == pytest.approx(0.25)
     assert float(cfg["beta"]) == pytest.approx(0.15)
     assert float(cfg["val_fraction"]) == pytest.approx(0.2)
+
+
+def test_evaluate_uses_fusion_mode_and_shortcut_scale_from_config(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "eval-fusion-mode-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "eval-fusion-mode-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "num_classes": 2,
+                "hidden_dim": 8,
+                "vocab_size": 32,
+                "fusion_mode": "residual_enhancer",
+                "text_shortcut_scale": 0.5,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((2, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((2, 128), dtype=np.int32),
+            "attention_mask": np.ones((2, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((2, 128), dtype=np.uint8),
+            "y": np.array([0, 1], dtype=np.int32),
+            "split": np.array(["test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(evaluate_module.torch, "load", lambda *args, **kwargs: {"model_state": {}})
+    captured = {}
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            captured.update(kwargs)
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, use_fusion=True):
+            logits = torch.tensor([[3.0, 1.0], [1.0, 3.0]], dtype=torch.float32, device=rgb.device)
+            return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", DummyModel)
+
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
+    assert code == 0
+    assert captured["fusion_mode"] == "residual_enhancer"
+    assert captured["text_shortcut_scale"] == pytest.approx(0.5)
 
 
 def _early_stopping_dummy_payload() -> dict:
@@ -953,12 +1038,197 @@ class _DummyTrainModel(torch.nn.Module):
         return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
 
 
+class _StopAfterTrainBootstrap(Exception):
+    pass
+
+
 def _patch_early_stopping_train_dependencies(monkeypatch: pytest.MonkeyPatch, metric_rows: list[tuple[float, float, float, float, float | None]]) -> None:
     monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(train_module, "load_policy_multimodal_data", lambda *args, **kwargs: _early_stopping_dummy_payload())
     monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", _DummyTrainModel)
     metric_iter = iter(metric_rows)
     monkeypatch.setattr(train_module, "_evaluate_loader", lambda *args, **kwargs: next(metric_iter))
+
+
+def test_train_fusion_stage_can_resume_from_warmup_checkpoint(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(train_module, "load_policy_multimodal_data", lambda *args, **kwargs: _early_stopping_dummy_payload())
+    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", _DummyTrainModel)
+
+    warmup_dir = run_root / "warmup-source"
+    (warmup_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model_state": _DummyTrainModel().state_dict(),
+            "config": {"stage": "warmup"},
+            "epoch": 2,
+        },
+        warmup_dir / "checkpoints" / "best.ckpt",
+    )
+
+    def fake_evaluate_loader(*args, **kwargs):
+        raise _StopAfterTrainBootstrap()
+
+    monkeypatch.setattr(train_module, "_evaluate_loader", fake_evaluate_loader)
+
+    with pytest.raises(_StopAfterTrainBootstrap):
+        train_main(
+            [
+                "--processed-root",
+                str(tmp_path / "outputs" / "processed"),
+                "--policy",
+                "strict",
+                "--stage",
+                "fusion",
+                "--run-root",
+                str(run_root),
+                "--run-id",
+                "fusion-resume-run",
+                "--epochs",
+                "3",
+                "--batch-size",
+                "2",
+                "--device",
+                "cpu",
+                "--no-progress",
+                "--warmup-checkpoint",
+                str(warmup_dir / "checkpoints" / "best.ckpt"),
+            ]
+        )
+
+    cfg = yaml.safe_load((run_root / "fusion-resume-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["stage"] == "fusion"
+    assert cfg["warmup_checkpoint"] == str(warmup_dir / "checkpoints" / "best.ckpt")
+
+
+def test_train_checkpoint_selection_prefers_stable_threshold_when_metrics_tie(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.95, 0.94, 0.55, 0.50),
+            (0.8, 0.95, 0.94, 0.54, 0.95),
+            (0.8, 0.94, 0.93, 0.53, 0.96),
+        ],
+    )
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "stable-threshold-run",
+            "--epochs",
+            "3",
+            "--batch-size",
+            "2",
+            "--device",
+            "cpu",
+            "--best-metric",
+            "val_acc",
+            "--checkpoint-selection",
+            "score_optimized",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+
+    best_ckpt = torch.load(run_root / "stable-threshold-run" / "checkpoints" / "best.ckpt", map_location="cpu")
+    assert best_ckpt["epoch"] == 1
+    assert best_ckpt["decision_threshold"] == pytest.approx(0.50)
+
+
+def test_train_writes_class_weight_mode_and_scheduler_to_config(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+
+    class StopAfterLoaderInit(Exception):
+        pass
+
+    monkeypatch.setattr(train_module.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(train_module, "load_policy_multimodal_data", lambda *args, **kwargs: _early_stopping_dummy_payload())
+
+    def fake_dataloader(*args, **kwargs):
+        raise StopAfterLoaderInit()
+
+    monkeypatch.setattr(train_module, "DataLoader", fake_dataloader)
+
+    with pytest.raises(StopAfterLoaderInit):
+        train_main(
+            [
+                "--processed-root",
+                str(tmp_path / "outputs" / "processed"),
+                "--policy",
+                "strict",
+                "--stage",
+                "fusion",
+                "--run-root",
+                str(run_root),
+                "--run-id",
+                "class-weight-run",
+                "--class-weight-mode",
+                "balanced",
+                "--scheduler",
+                "cosine",
+                "--no-progress",
+            ]
+        )
+
+    cfg = yaml.safe_load((run_root / "class-weight-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["class_weight_mode"] == "balanced"
+    assert cfg["scheduler"] == "cosine"
+
+
+def test_train_can_freeze_image_backbone_for_initial_epochs(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.80, 0.78, 0.55, None),
+        ],
+    )
+
+    class FreezeAwareModel(_DummyTrainModel):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.image_backbone = torch.nn.Linear(1, 1)
+            self.text_backbone = torch.nn.Linear(1, 1)
+
+    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", FreezeAwareModel)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "freeze-image-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--device",
+            "cpu",
+            "--freeze-image-backbone-epochs",
+            "1",
+            "--no-progress",
+        ]
+    )
+    assert code == 0
+    cfg = yaml.safe_load((run_root / "freeze-image-run" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["freeze_image_backbone_epochs"] == 1
 
 
 def test_train_early_stopping_triggers_and_records_artifacts(tmp_path: Path, monkeypatch):

@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import f1_score
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import yaml
@@ -235,6 +236,23 @@ def _select_best_metric_value(best_metric: str, val_acc: float, val_macro_f1: fl
     raise ValueError(f"unsupported best metric: {best_metric}")
 
 
+def _select_checkpoint_tuple(
+    checkpoint_selection: str,
+    best_metric: str,
+    val_acc: float,
+    val_macro_f1: float,
+    decision_threshold: float | None,
+) -> tuple[float, float, float]:
+    if checkpoint_selection == "best_metric":
+        primary = _select_best_metric_value(best_metric=best_metric, val_acc=val_acc, val_macro_f1=val_macro_f1)
+        secondary = float(val_macro_f1) if best_metric == "val_acc" else float(val_acc)
+        return (primary, secondary, 0.0)
+    if checkpoint_selection == "score_optimized":
+        threshold_stability = -abs(float(decision_threshold) - 0.5) if decision_threshold is not None else -1.0
+        return (float(val_acc), float(val_macro_f1), threshold_stability)
+    raise ValueError(f"unsupported checkpoint selection: {checkpoint_selection}")
+
+
 def _limit_training_samples(
     train_mask: np.ndarray,
     y: np.ndarray,
@@ -362,6 +380,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--fusion-layers", type=int, default=2)
     parser.add_argument("--fusion-heads", "--num-heads", dest="fusion_heads", type=int, default=4)
     parser.add_argument("--fusion-dropout", type=float, default=0.1)
+    parser.add_argument("--fusion-mode", default="legacy", choices=["legacy", "residual_enhancer"])
+    parser.add_argument("--text-shortcut-scale", type=float, default=0.0)
     parser.add_argument("--alpha", type=float, default=0.3)
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
@@ -369,7 +389,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--checkpoint-selection", default="best_metric", choices=["best_metric", "score_optimized"])
     parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--warmup-checkpoint", default=None)
+    parser.add_argument("--class-weight-mode", default="none", choices=["none", "balanced"])
+    parser.add_argument("--scheduler", default="none", choices=["none", "cosine"])
+    parser.add_argument("--freeze-image-backbone-epochs", type=int, default=0)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--stacking-n-splits", type=int, default=3)
     parser.add_argument("--stacking-oof-epochs", type=int, default=2)
@@ -450,6 +475,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "fusion_layers": args.fusion_layers,
         "fusion_heads": args.fusion_heads,
         "fusion_dropout": args.fusion_dropout,
+        "fusion_mode": args.fusion_mode,
+        "text_shortcut_scale": args.text_shortcut_scale,
         "num_heads": args.fusion_heads,
         "vocab_size": vocab_size,
         "num_classes": num_classes,
@@ -460,7 +487,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         "device_fallback": device_fallback,
         "num_workers": args.num_workers,
         "best_metric": args.best_metric,
+        "checkpoint_selection": args.checkpoint_selection,
         "early_stopping_patience": args.early_stopping_patience,
+        "warmup_checkpoint": args.warmup_checkpoint,
+        "class_weight_mode": args.class_weight_mode,
+        "scheduler": args.scheduler,
+        "freeze_image_backbone_epochs": args.freeze_image_backbone_epochs,
         "max_grad_norm": args.max_grad_norm,
         "grad_explode_threshold": args.grad_explode_threshold,
         "val_fraction": args.val_fraction,
@@ -483,6 +515,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "fusion_layers": args.fusion_layers,
             "fusion_heads": args.fusion_heads,
             "fusion_dropout": args.fusion_dropout,
+            "fusion_mode": args.fusion_mode,
+            "text_shortcut_scale": args.text_shortcut_scale,
             "alpha": args.alpha,
             "beta": args.beta,
             "device_requested": requested_device,
@@ -490,7 +524,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             "device_fallback": device_fallback,
             "num_workers": args.num_workers,
             "best_metric": args.best_metric,
+            "checkpoint_selection": args.checkpoint_selection,
             "early_stopping_patience": args.early_stopping_patience,
+            "class_weight_mode": args.class_weight_mode,
+            "scheduler": args.scheduler,
+            "freeze_image_backbone_epochs": args.freeze_image_backbone_epochs,
             "max_grad_norm": args.max_grad_norm,
         },
     )
@@ -595,9 +633,26 @@ def main(argv: Iterable[str] | None = None) -> int:
         fusion_layers=args.fusion_layers,
         fusion_heads=args.fusion_heads,
         dropout=args.fusion_dropout,
+        fusion_mode=args.fusion_mode,
+        text_shortcut_scale=args.text_shortcut_scale,
     ).to(device)
+    if args.warmup_checkpoint:
+        warmup_ckpt = torch.load(args.warmup_checkpoint, map_location="cpu")
+        model.load_state_dict(warmup_ckpt["model_state"], strict=False)
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
-    ce = nn.CrossEntropyLoss()
+    scheduler = None
+    if args.scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=max(1, args.epochs))
+
+    ce_weight = None
+    if args.class_weight_mode == "balanced" and y_train.numel() > 0:
+        classes = np.unique(y_train.numpy())
+        weights = compute_class_weight(class_weight="balanced", classes=classes, y=y_train.numpy())
+        full_weights = np.ones((num_classes,), dtype=np.float32)
+        for cls, weight in zip(classes.tolist(), weights.tolist()):
+            full_weights[int(cls)] = float(weight)
+        ce_weight = torch.tensor(full_weights, dtype=torch.float32, device=device)
+    ce = nn.CrossEntropyLoss(weight=ce_weight)
 
     log(
         "info",
@@ -616,6 +671,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     rows: List[dict] = []
     best_value = -1.0
+    best_tuple: tuple[float, float, float] | None = None
     show_progress = not args.no_progress
     loss_stage = "warmup" if args.stage == "warmup" else "fusion"
     best_decision_threshold: float | None = None
@@ -623,6 +679,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     for epoch in range(1, args.epochs + 1):
         start = time.time()
+        freeze_image = epoch <= args.freeze_image_backbone_epochs
+        image_backbone = getattr(model, "image_backbone", None)
+        if image_backbone is not None:
+            for p in image_backbone.parameters():
+                p.requires_grad = not freeze_image
         model.train()
 
         train_losses: List[float] = []
@@ -696,6 +757,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "max_grad_norm": args.max_grad_norm,
                 },
             )
+        if scheduler is not None:
+            scheduler.step()
 
         y_true = np.concatenate(train_targets, axis=0) if train_targets else np.zeros((0,), dtype=np.int64)
         y_pred = np.concatenate(train_preds, axis=0) if train_preds else np.zeros((0,), dtype=np.int64)
@@ -772,8 +835,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             val_acc=val_acc,
             val_macro_f1=val_macro_f1,
         )
-        if current_best_value > best_value:
+        current_best_tuple = _select_checkpoint_tuple(
+            checkpoint_selection=args.checkpoint_selection,
+            best_metric=args.best_metric,
+            val_acc=val_acc,
+            val_macro_f1=val_macro_f1,
+            decision_threshold=val_decision_threshold,
+        )
+        if best_tuple is None or current_best_tuple > best_tuple:
             best_value = current_best_value
+            best_tuple = current_best_tuple
             best_decision_threshold = val_decision_threshold
             cfg["decision_threshold"] = best_decision_threshold
             cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
