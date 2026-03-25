@@ -301,11 +301,14 @@ def _dispatch_stage(
     if stage == "stacking":
         from src.stacking import main as stacking_main
 
+        meta_artifacts_dir = Path(getattr(args, "meta_artifacts_dir", "") or (run_dir / "meta_features"))
         log("info", "model", "stage_dispatch_start", {"target": "stacking", "run_dir": str(run_dir)})
         code = stacking_main(
             [
                 "--run-dir",
                 str(run_dir),
+                "--meta-artifacts-dir",
+                str(meta_artifacts_dir),
                 "--n-splits",
                 str(args.stacking_n_splits),
                 "--oof-epochs",
@@ -396,6 +399,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--stacking-n-splits", type=int, default=3)
     parser.add_argument("--stacking-oof-epochs", type=int, default=2)
+    parser.add_argument("--meta-artifacts-dir", default=None)
     parser.add_argument("--moe-epochs", type=int, default=5)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
