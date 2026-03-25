@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import yaml
 
 import src.stacking as stacking_module
@@ -174,10 +173,24 @@ def test_stacking_reuses_run_hyperparams_for_base_model(tmp_path: Path, monkeypa
         return object()
 
     monkeypatch.setattr(stacking_module, "_train_base_model", fake_train_base_model)
+
+    def fake_predict_meta(*args, **kwargs):
+        n_rows = int(args[1].shape[0])
+        feature_names = [f"f{i}" for i in range(16)]
+        return (
+            np.zeros((n_rows, len(feature_names)), dtype=np.float32),
+            feature_names,
+            {
+                "version": "stage2_meta_v1",
+                "dim": len(feature_names),
+                "feature_names": feature_names,
+            },
+        )
+
     monkeypatch.setattr(
         stacking_module,
         "_predict_meta",
-        lambda *args, **kwargs: np.zeros((2, 3 * 2 + 7), dtype=np.float32),
+        fake_predict_meta,
     )
 
     class DummyMetaModel:

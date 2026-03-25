@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Union
 
 import torch
 import torch.nn as nn
 
 from src.models.etbert_backbone import ETBertBackbone
 from src.models.mobilevit_backbone import MobileViTBackbone
+
+FusionSummary = Dict[str, torch.Tensor]
+FusionForwardOutput = Dict[str, Union[torch.Tensor, FusionSummary]]
 
 
 def _normalize_heads_num(hidden_dim: int, heads_num: int) -> int:
@@ -164,7 +167,7 @@ class MobileViTETBertFusionClassifier(nn.Module):
         return_features: bool = False,
         return_summary: bool = False,
         use_fusion: bool = True,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> FusionForwardOutput:
         img_features = self.image_backbone.forward_features(rgb)
         txt_features = self.text_backbone.forward_features(input_ids, attention_mask, token_type_ids)
         img_pooled_pre = img_features["pooled"]
