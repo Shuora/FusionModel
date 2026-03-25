@@ -43,6 +43,30 @@ def _decode_text_scalar(value: Any, *, key: str, path: Path) -> str:
     raise ValueError(f"{path}: key '{key}' must be a scalar string field")
 
 
+def _coerce_int32_vector(value: Any, *, key: str, path: Path, entity_name: str) -> np.ndarray:
+    raw = np.asarray(value)
+    if raw.ndim != 1:
+        raise ValueError(f"{path}: {key} must be 1D, got ndim={raw.ndim}")
+    if raw.dtype.kind in {"i", "u"}:
+        int64_values = raw.astype(np.int64, copy=False)
+    elif raw.dtype.kind == "f":
+        if np.any(~np.isfinite(raw)):
+            raise ValueError(f"{path}: {entity_name} must be finite integer values")
+        rounded = np.rint(raw)
+        if not np.array_equal(raw, rounded):
+            raise ValueError(f"{path}: {entity_name} must be integer values without fractional part")
+        int64_values = rounded.astype(np.int64, copy=False)
+    else:
+        raise ValueError(f"{path}: {entity_name} must be integer values, got dtype={raw.dtype}")
+
+    if int64_values.size:
+        int32_min = np.iinfo(np.int32).min
+        int32_max = np.iinfo(np.int32).max
+        if int(int64_values.min()) < int32_min or int(int64_values.max()) > int32_max:
+            raise ValueError(f"{path}: {entity_name} out of int32 range")
+    return int64_values.astype(np.int32, copy=False)
+
+
 def _fit_meta_learner(x_train: np.ndarray, y_train: np.ndarray, num_classes: int):
     if XGBClassifier is None:
         raise RuntimeError("xgboost is required for stacking but not available")
@@ -81,21 +105,17 @@ def _load_meta_artifact(path: Path) -> MetaArtifact:
         raise ValueError(f"{path}: missing required keys {missing}")
 
     x = np.asarray(artifact["X"], dtype=np.float32)
-    y = np.asarray(artifact["y"], dtype=np.int32)
+    y = _coerce_int32_vector(artifact["y"], key="y", path=path, entity_name="labels")
     feature_names = [str(name) for name in np.asarray(artifact["feature_names"]).tolist()]
     feature_schema = json.loads(_decode_text_scalar(artifact["feature_schema"], key="feature_schema", path=path))
     feature_schema_version = _decode_text_scalar(
         artifact["feature_schema_version"], key="feature_schema_version", path=path
     )
-    fold_ids = np.asarray(artifact["fold_ids"], dtype=np.int32)
+    fold_ids = _coerce_int32_vector(artifact["fold_ids"], key="fold_ids", path=path, entity_name="fold_ids")
     split_provenance = json.loads(_decode_text_scalar(artifact["split_provenance"], key="split_provenance", path=path))
 
     if x.ndim != 2:
         raise ValueError(f"{path}: X must be 2D, got ndim={x.ndim}")
-    if y.ndim != 1:
-        raise ValueError(f"{path}: y must be 1D, got ndim={y.ndim}")
-    if fold_ids.ndim != 1:
-        raise ValueError(f"{path}: fold_ids must be 1D, got ndim={fold_ids.ndim}")
     if x.shape[0] != y.shape[0] or x.shape[0] != fold_ids.shape[0]:
         raise ValueError(
             f"{path}: sample count mismatch among X/y/fold_ids -> {x.shape[0]}/{y.shape[0]}/{fold_ids.shape[0]}"
@@ -129,10 +149,13 @@ def _load_meta_artifact(path: Path) -> MetaArtifact:
 
 def _validate_oof_boundary(oof_artifact: MetaArtifact) -> None:
     generator = str(oof_artifact.split_provenance.get("generator", ""))
+    split = str(oof_artifact.split_provenance.get("split", ""))
     if generator != "runner_kfold_oof":
         raise ValueError(
             f"{oof_artifact.path}: split_provenance.generator must be 'runner_kfold_oof' for training artifacts"
         )
+    if split != "train_val":
+        raise ValueError(f"{oof_artifact.path}: split_provenance.split must be 'train_val' for OOF training artifacts")
     if np.any(oof_artifact.fold_ids < 0):
         raise ValueError(f"{oof_artifact.path}: fold_ids must be non-negative for OOF train/val artifacts")
 
@@ -188,6 +211,17 @@ def _validate_eval_labels(y: np.ndarray, *, path: Path, num_classes: int) -> Non
 
 
 def _derive_n_splits_from_artifact(oof_artifact: MetaArtifact) -> int:
+    unique_fold_ids = np.unique(oof_artifact.fold_ids)
+    inferred_n_splits = int(unique_fold_ids.size)
+    if inferred_n_splits < 2:
+        raise ValueError(f"{oof_artifact.path}: inferred n_splits from fold_ids must be >= 2")
+    expected_fold_ids = np.arange(inferred_n_splits, dtype=np.int32)
+    if not np.array_equal(unique_fold_ids, expected_fold_ids):
+        raise ValueError(
+            f"{oof_artifact.path}: fold_ids must be contiguous [0..{inferred_n_splits - 1}], "
+            f"got {unique_fold_ids.tolist()}"
+        )
+
     raw_n_splits = oof_artifact.split_provenance.get("n_splits")
     if raw_n_splits is not None:
         try:
@@ -196,13 +230,14 @@ def _derive_n_splits_from_artifact(oof_artifact: MetaArtifact) -> int:
             raise ValueError(f"{oof_artifact.path}: split_provenance.n_splits must be an integer") from None
         if n_splits < 2:
             raise ValueError(f"{oof_artifact.path}: split_provenance.n_splits must be >= 2")
+        if n_splits != inferred_n_splits:
+            raise ValueError(
+                f"{oof_artifact.path}: split_provenance.n_splits={n_splits} conflicts with fold_ids-inferred "
+                f"n_splits={inferred_n_splits}"
+            )
         return n_splits
 
-    unique_fold_ids = np.unique(oof_artifact.fold_ids)
-    n_splits = int(unique_fold_ids.size)
-    if n_splits < 2:
-        raise ValueError(f"{oof_artifact.path}: inferred n_splits from fold_ids must be >= 2")
-    return n_splits
+    return inferred_n_splits
 
 
 def _write_meta_dump(
@@ -294,13 +329,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
-    warnings.warn(
-        "stacking runs in artifact-consumer mode; artifact provenance is the source of truth. "
-        "Legacy CLI knobs (--n-splits/--oof-epochs/--batch-size/--device/--num-workers/--seed) "
-        "do not control OOF generation.",
-        RuntimeWarning,
-        stacklevel=2,
-    )
+    if args.n_splits != 3 or args.oof_epochs != 2:
+        warnings.warn(
+            "stacking runs in artifact-consumer mode; artifact provenance is the source of truth. "
+            "Legacy CLI knobs (--n-splits/--oof-epochs/--batch-size/--device/--num-workers/--seed) "
+            "do not control OOF generation.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     run_dir = Path(args.run_dir)
     meta_artifacts_dir = Path(args.meta_artifacts_dir) if args.meta_artifacts_dir else run_dir / "meta_features"

@@ -264,6 +264,62 @@ def test_stacking_rejects_invalid_label_contract(tmp_path: Path, monkeypatch):
         stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
 
 
+def test_stacking_rejects_fractional_labels_on_load(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-fractional-labels"
+    _prepare_meta_inputs(run_dir)
+    oof_path = run_dir / "meta_features" / "oof_meta_train.npz"
+    _rewrite_npz(oof_path, y=np.asarray([0.0, 1.5, 0.0, 1.0], dtype=np.float64))
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="integer values without fractional part"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_rejects_oof_split_value_mismatch(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-oof-split-mismatch"
+    _prepare_meta_inputs(run_dir)
+    oof_path = run_dir / "meta_features" / "oof_meta_train.npz"
+    _rewrite_npz(
+        oof_path,
+        split_provenance=np.array(
+            json.dumps({"generator": "runner_kfold_oof", "split": "train", "n_splits": 2}, ensure_ascii=False),
+            dtype=np.str_,
+        ),
+    )
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="split_provenance.split must be 'train_val'"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_rejects_oof_n_splits_provenance_conflict(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-oof-n-splits-conflict"
+    _prepare_meta_inputs(run_dir)
+    oof_path = run_dir / "meta_features" / "oof_meta_train.npz"
+    _rewrite_npz(
+        oof_path,
+        split_provenance=np.array(
+            json.dumps({"generator": "runner_kfold_oof", "split": "train_val", "n_splits": 9}, ensure_ascii=False),
+            dtype=np.str_,
+        ),
+    )
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="conflicts with fold_ids-inferred n_splits"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_rejects_non_contiguous_oof_fold_ids(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-oof-foldids-non-contiguous"
+    _prepare_meta_inputs(run_dir)
+    oof_path = run_dir / "meta_features" / "oof_meta_train.npz"
+    _rewrite_npz(oof_path, fold_ids=np.asarray([0, 2, 0, 2], dtype=np.int32))
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="fold_ids must be contiguous"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
 def test_stacking_rejects_schema_version_mismatch(tmp_path: Path, monkeypatch):
     run_dir = tmp_path / "runs" / "stack-schema-version-mismatch"
     _, _, eval_x, eval_y, feature_names = _prepare_meta_inputs(run_dir)
