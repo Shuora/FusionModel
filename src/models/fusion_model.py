@@ -25,6 +25,10 @@ def _masked_mean(tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (tokens * valid).sum(dim=1) / denom
 
 
+def _pooled_norm(x: torch.Tensor) -> torch.Tensor:
+    return torch.linalg.vector_norm(x, ord=2, dim=1, keepdim=True)
+
+
 class BidirectionalFusionBlock(nn.Module):
     def __init__(self, hidden_dim: int, num_heads: int, dropout: float, image_primary: bool = False) -> None:
         super().__init__()
@@ -158,6 +162,7 @@ class MobileViTETBertFusionClassifier(nn.Module):
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor,
         return_features: bool = False,
+        return_summary: bool = False,
         use_fusion: bool = True,
     ) -> Dict[str, torch.Tensor]:
         img_features = self.image_backbone.forward_features(rgb)
@@ -191,6 +196,12 @@ class MobileViTETBertFusionClassifier(nn.Module):
             "logits_img": self.head_img(img_pooled_pre),
             "logits_tls": self.head_tls(txt_pooled_pre),
         }
+        if return_summary:
+            out["summary"] = {
+                "img_pooled_norm": _pooled_norm(img_pooled_pre),
+                "txt_pooled_norm": _pooled_norm(txt_pooled_pre),
+                "fused_norm": _pooled_norm(fused),
+            }
         if return_features:
             out["img_tokens"] = img_tokens
             out["txt_tokens"] = txt_tokens

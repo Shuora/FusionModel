@@ -12,6 +12,7 @@ from sklearn.metrics import accuracy_score, f1_score, recall_score
 from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
+from src.meta_features import build_meta_feature_blocks
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
@@ -38,27 +39,15 @@ def _expert_probs(out: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
 
 def _router_features(out: dict) -> torch.Tensor:
-    p_img, p_tls, p_fuse = _expert_probs(out)
-
-    def entropy(p: torch.Tensor) -> torch.Tensor:
-        return -(p * torch.log(p.clamp_min(1e-8))).sum(dim=1, keepdim=True)
-
-    def agreement(p_a: torch.Tensor, p_b: torch.Tensor) -> torch.Tensor:
-        return (p_a * p_b).sum(dim=1, keepdim=True)
-
-    f = torch.cat(
+    blocks = build_meta_feature_blocks(out)
+    return torch.cat(
         [
-            entropy(p_img),
-            entropy(p_tls),
-            entropy(p_fuse),
-            agreement(p_img, p_tls),
-            p_img.max(dim=1, keepdim=True).values,
-            p_tls.max(dim=1, keepdim=True).values,
-            p_fuse.max(dim=1, keepdim=True).values,
+            blocks["confidence"]["entropy"],
+            blocks["agreement"],
+            blocks["confidence"]["max_prob"],
         ],
         dim=1,
     )
-    return f
 
 
 def _mixture_probs(out: dict, router_logits: torch.Tensor) -> torch.Tensor:
@@ -163,12 +152,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             type_b = type_b.to(device)
             y_b = y_b.to(device)
             with torch.no_grad():
-                out = model(rgb_b, input_b, att_b, type_b)
+                out = model(rgb_b, input_b, att_b, type_b, return_summary=True)
                 f = _router_features(out)
             opt.zero_grad()
             logits = router(f)
-            with torch.no_grad():
-                out = model(rgb_b, input_b, att_b, type_b)
             mix_p = _mixture_probs(out, logits)
             loss = nn.NLLLoss()(torch.log(mix_p.clamp_min(1e-8)), y_b)
             loss.backward()
@@ -181,6 +168,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             input_test.to(device),
             att_test.to(device),
             type_test.to(device),
+            return_summary=True,
         )
         f_test = _router_features(out_test)
         logits_test = router(f_test)

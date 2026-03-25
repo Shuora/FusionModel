@@ -13,6 +13,7 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
+from src.meta_features import STAGE2_META_SCHEMA_VERSION, flatten_meta_feature_blocks
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
@@ -23,43 +24,12 @@ except Exception:  # pragma: no cover
     XGBClassifier = None
 
 
-def _compute_meta_features(out: dict) -> np.ndarray:
-    logits_img = out["logits_img"]
-    logits_tls = out["logits_tls"]
-    logits_fuse = out["logits_fuse"]
-
-    p_img = torch.softmax(logits_img, dim=1)
-    p_tls = torch.softmax(logits_tls, dim=1)
-    p_fuse = torch.softmax(logits_fuse, dim=1)
-
-    def entropy(p: torch.Tensor) -> torch.Tensor:
-        return -(p * torch.log(p.clamp_min(1e-8))).sum(dim=1, keepdim=True)
-
-    def margin(logits: torch.Tensor) -> torch.Tensor:
-        top2 = torch.topk(logits, k=min(2, logits.shape[1]), dim=1).values
-        if top2.shape[1] < 2:
-            return torch.zeros((logits.shape[0], 1), dtype=logits.dtype, device=logits.device)
-        return (top2[:, 0] - top2[:, 1]).unsqueeze(1)
-
-    def agreement(p_a: torch.Tensor, p_b: torch.Tensor) -> torch.Tensor:
-        return (p_a * p_b).sum(dim=1, keepdim=True)
-
-    feats = torch.cat(
-        [
-            logits_img,
-            logits_tls,
-            logits_fuse,
-            entropy(p_img),
-            entropy(p_tls),
-            entropy(p_fuse),
-            margin(logits_img),
-            margin(logits_tls),
-            margin(logits_fuse),
-            agreement(p_img, p_tls),
-        ],
-        dim=1,
-    )
-    return feats.detach().cpu().numpy().astype(np.float32, copy=False)
+def _empty_meta_schema() -> dict:
+    return {
+        "version": STAGE2_META_SCHEMA_VERSION,
+        "dim": 0,
+        "feature_names": [],
+    }
 
 
 def _train_base_model(
@@ -134,9 +104,10 @@ def _predict_meta(
     batch_size: int,
     device: torch.device,
     num_workers: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[str], dict]:
     if rgb.shape[0] == 0:
-        return np.zeros((0, 1), dtype=np.float32)
+        schema = _empty_meta_schema()
+        return np.zeros((0, 0), dtype=np.float32), [], schema
     model.eval()
     ds = TensorDataset(
         torch.from_numpy(rgb).float(),
@@ -151,16 +122,27 @@ def _predict_meta(
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
     )
-    feats = []
+    feats: list[np.ndarray] = []
+    feature_names: list[str] | None = None
+    feature_schema: dict | None = None
     with torch.no_grad():
         for rgb_b, input_b, att_b, type_b in loader:
             rgb_b = rgb_b.to(device)
             input_b = input_b.to(device)
             att_b = att_b.to(device)
             type_b = type_b.to(device)
-            out = model(rgb_b, input_b, att_b, type_b)
-            feats.append(_compute_meta_features(out))
-    return np.concatenate(feats, axis=0) if feats else np.zeros((0, 1), dtype=np.float32)
+            out = model(rgb_b, input_b, att_b, type_b, return_summary=True)
+            x_b, names_b, schema_b = flatten_meta_feature_blocks(out)
+            if feature_names is None:
+                feature_names = names_b
+                feature_schema = schema_b
+            elif names_b != feature_names:
+                raise ValueError("inconsistent meta feature schema across batches")
+            feats.append(x_b)
+    if not feats:
+        schema = _empty_meta_schema()
+        return np.zeros((0, 0), dtype=np.float32), [], schema
+    return np.concatenate(feats, axis=0), feature_names or [], feature_schema or _empty_meta_schema()
 
 
 def _fit_meta_learner(x_train: np.ndarray, y_train: np.ndarray, num_classes: int):
@@ -249,7 +231,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     n_splits = min(args.n_splits, int(np.bincount(y_tv).min()) if len(y_tv) > 0 else 2)
     n_splits = max(2, n_splits)
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=args.seed)
-    oof_x = np.zeros((len(y_tv), 3 * num_classes + 7), dtype=np.float32)
+    oof_x: np.ndarray | None = None
+    meta_feature_names: list[str] | None = None
+    meta_feature_schema: dict | None = None
     for fold_id, (tr_idx, va_idx) in enumerate(skf.split(rgb_tv, y_tv)):
         model = _train_base_model(
             rgb_tv[tr_idx],
@@ -272,7 +256,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             alpha=alpha,
             beta=beta,
         )
-        oof_x[va_idx] = _predict_meta(
+        fold_x, fold_names, fold_schema = _predict_meta(
             model,
             rgb_tv[va_idx],
             input_tv[va_idx],
@@ -282,6 +266,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             device=device,
             num_workers=args.num_workers,
         )
+        if oof_x is None:
+            oof_x = np.zeros((len(y_tv), fold_x.shape[1]), dtype=np.float32)
+            meta_feature_names = list(fold_names)
+            meta_feature_schema = dict(fold_schema)
+        elif fold_names != meta_feature_names:
+            raise ValueError("inconsistent meta feature schema across folds")
+        oof_x[va_idx] = fold_x
 
     # Final model for test meta features
     final_model = _train_base_model(
@@ -305,7 +296,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         alpha=alpha,
         beta=beta,
     )
-    test_x = _predict_meta(
+    test_x, test_feature_names, test_feature_schema = _predict_meta(
         final_model,
         rgb_test,
         input_test,
@@ -315,6 +306,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         device=device,
         num_workers=args.num_workers,
     )
+    if oof_x is None:
+        oof_x = np.zeros((len(y_tv), test_x.shape[1]), dtype=np.float32)
+        meta_feature_names = list(test_feature_names)
+        meta_feature_schema = dict(test_feature_schema)
+    if test_feature_names != (meta_feature_names or []):
+        raise ValueError("meta feature schema mismatch between OOF and test")
 
     meta_model = _fit_meta_learner(oof_x, y_tv, num_classes=num_classes)
     pred = meta_model.predict(test_x)
@@ -324,8 +321,24 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     stack_dir = run_dir / "stacking"
     stack_dir.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(stack_dir / "oof_meta_train.npz", X=oof_x, y=y_tv)
-    np.savez_compressed(stack_dir / "meta_test.npz", X=test_x, y=y_test)
+    schema_version = (meta_feature_schema or {}).get("version", STAGE2_META_SCHEMA_VERSION)
+    schema_json = json.dumps(meta_feature_schema or _empty_meta_schema(), ensure_ascii=False, sort_keys=True)
+    np.savez_compressed(
+        stack_dir / "oof_meta_train.npz",
+        X=oof_x,
+        y=y_tv,
+        feature_names=np.asarray(meta_feature_names or [], dtype=np.str_),
+        feature_schema=np.array(schema_json, dtype=np.str_),
+        feature_schema_version=np.array(schema_version, dtype=np.str_),
+    )
+    np.savez_compressed(
+        stack_dir / "meta_test.npz",
+        X=test_x,
+        y=y_test,
+        feature_names=np.asarray(test_feature_names, dtype=np.str_),
+        feature_schema=np.array(json.dumps(test_feature_schema, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+        feature_schema_version=np.array(test_feature_schema.get("version", STAGE2_META_SCHEMA_VERSION), dtype=np.str_),
+    )
     metrics = {
         "top1": top1,
         "macro_f1": macro_f1,
@@ -333,6 +346,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         "n_train_samples": int(len(y_tv)),
         "n_test_samples": int(len(y_test)),
         "n_splits": int(n_splits),
+        "meta_schema_version": schema_version,
+        "meta_feature_dim": int(oof_x.shape[1]),
+        "meta_feature_names": list(meta_feature_names or []),
     }
     (stack_dir / "meta_metrics.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
