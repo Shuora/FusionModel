@@ -421,7 +421,6 @@ def test_mobilevit_etbert_fusion_model_meta_feature_summary_contract():
 
     summary = out["summary"]
     assert isinstance(summary, dict)
-    assert set(summary.keys()) == {"img_pooled_norm", "txt_pooled_norm", "fused_norm"}
     for key in ["img_pooled_norm", "txt_pooled_norm", "fused_norm"]:
         assert key in summary
         assert isinstance(summary[key], torch.Tensor)

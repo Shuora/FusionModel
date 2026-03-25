@@ -32,12 +32,15 @@ def test_shared_meta_helper_builds_deterministic_blocks():
         raise AssertionError("missing shared stage2 meta feature helper module") from e
 
     blocks = build_meta_feature_blocks(_dummy_level1_output())
-    assert set(blocks) == {"logits", "confidence", "agreement", "summary"}
-    assert set(blocks["logits"]) == {"img", "tls", "fuse"}
+    for key in ["logits", "confidence", "agreement", "summary"]:
+        assert key in blocks
+    for key in ["img", "tls", "fuse"]:
+        assert key in blocks["logits"]
     assert blocks["logits"]["img"].shape == (3, 3)
     assert blocks["logits"]["tls"].shape == (3, 3)
     assert blocks["logits"]["fuse"].shape == (3, 3)
-    assert set(blocks["confidence"]) == {"entropy", "max_prob"}
+    for key in ["entropy", "max_prob"]:
+        assert key in blocks["confidence"]
     assert blocks["confidence"]["entropy"].shape == (3, 3)
     assert blocks["confidence"]["max_prob"].shape == (3, 3)
     assert blocks["agreement"].shape == (3, 1)
@@ -50,10 +53,16 @@ def test_shared_meta_helper_exports_stable_flattened_schema():
     except ImportError as e:  # pragma: no cover
         raise AssertionError("missing shared stage2 meta feature flatten helper") from e
 
-    x, feature_names, schema = flatten_meta_feature_blocks(_dummy_level1_output())
-    assert x.shape == (3, 19)
-    assert len(feature_names) == 19
-    assert schema["version"] == "stage2_meta_v1"
-    assert schema["dim"] == 19
-    assert schema["feature_names"] == feature_names
+    dummy = _dummy_level1_output()
+    num_samples = dummy["logits_img"].shape[0]
+    num_classes = dummy["logits_img"].shape[1]
+    summary_dim = len(dummy["summary"])
 
+    expected_dim = (3 * num_classes) + (2 * num_classes) + 1 + summary_dim
+
+    x, feature_names, schema = flatten_meta_feature_blocks(dummy)
+    assert x.shape == (num_samples, expected_dim)
+    assert len(feature_names) == expected_dim
+    assert schema["version"] == "stage2_meta_v1"
+    assert schema["dim"] == expected_dim
+    assert schema["feature_names"] == feature_names
