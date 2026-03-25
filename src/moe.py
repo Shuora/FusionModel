@@ -12,14 +12,14 @@ from sklearn.metrics import accuracy_score, f1_score, recall_score
 from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
-from src.meta_features import build_meta_feature_blocks
+from src.meta_features import build_router_meta_features
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
 
 
 class RouterMLP(nn.Module):
-    def __init__(self, in_dim: int = 7, hidden_dim: int = 16, num_experts: int = 3) -> None:
+    def __init__(self, in_dim: int, hidden_dim: int = 16, num_experts: int = 3) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
@@ -39,15 +39,8 @@ def _expert_probs(out: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
 
 def _router_features(out: dict) -> torch.Tensor:
-    blocks = build_meta_feature_blocks(out)
-    return torch.cat(
-        [
-            blocks["confidence"]["entropy"],
-            blocks["agreement"],
-            blocks["confidence"]["max_prob"],
-        ],
-        dim=1,
-    )
+    router_x, _, _ = build_router_meta_features(out)
+    return router_x
 
 
 def _mixture_probs(out: dict, router_logits: torch.Tensor) -> torch.Tensor:
@@ -131,7 +124,20 @@ def main(argv: Iterable[str] | None = None) -> int:
     for p in model.parameters():
         p.requires_grad = False
 
-    router = RouterMLP(in_dim=7, hidden_dim=16, num_experts=3)
+    if rgb_train.shape[0] == 0:
+        return 2
+
+    with torch.no_grad():
+        probe_out = model(
+            rgb_train[:1].to(device),
+            input_train[:1].to(device),
+            att_train[:1].to(device),
+            type_train[:1].to(device),
+            return_summary=True,
+        )
+        router_in_dim = int(_router_features(probe_out).shape[1])
+
+    router = RouterMLP(in_dim=router_in_dim, hidden_dim=16, num_experts=3)
     router.to(device)
     opt = torch.optim.Adam(router.parameters(), lr=args.lr)
     ds = TensorDataset(rgb_train, input_train, att_train, type_train, y_train)

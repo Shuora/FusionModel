@@ -8,6 +8,15 @@ import torch
 STAGE2_META_SCHEMA_VERSION = "stage2_meta_v1"
 _LOGIT_BRANCHES: Tuple[str, ...] = ("img", "tls", "fuse")
 _DEFAULT_SUMMARY_KEYS: Tuple[str, ...] = ("img_pooled_norm", "txt_pooled_norm", "fused_norm")
+ROUTER_META_FEATURE_NAMES: Tuple[str, ...] = (
+    "entropy_img",
+    "entropy_tls",
+    "entropy_fuse",
+    "agreement_img_tls",
+    "max_prob_img",
+    "max_prob_tls",
+    "max_prob_fuse",
+)
 
 
 def _require_2d_tensor(name: str, value: Any) -> torch.Tensor:
@@ -91,7 +100,7 @@ def build_meta_feature_blocks(level1_output: Mapping[str, Any]) -> Dict[str, Any
     }
 
 
-def flatten_meta_feature_blocks(level1_output: Mapping[str, Any]) -> tuple[np.ndarray, list[str], dict]:
+def flatten_meta_feature_blocks_tensor(level1_output: Mapping[str, Any]) -> tuple[torch.Tensor, list[str], dict]:
     blocks = build_meta_feature_blocks(level1_output)
     summary = level1_output.get("summary")
     summary_keys = _summary_keys(summary) if isinstance(summary, Mapping) else []
@@ -117,7 +126,7 @@ def flatten_meta_feature_blocks(level1_output: Mapping[str, Any]) -> tuple[np.nd
         feature_tensors.append(blocks["summary"])
         feature_names.extend(f"summary_{name}" for name in summary_keys)
 
-    flat = torch.cat(feature_tensors, dim=1).detach().cpu().numpy().astype(np.float32, copy=False)
+    flat = torch.cat(feature_tensors, dim=1)
     schema = {
         "version": STAGE2_META_SCHEMA_VERSION,
         "dim": int(flat.shape[1]),
@@ -126,8 +135,52 @@ def flatten_meta_feature_blocks(level1_output: Mapping[str, Any]) -> tuple[np.nd
     return flat, feature_names, schema
 
 
+def _resolve_feature_indices(feature_names: Sequence[str], selected_names: Sequence[str]) -> list[int]:
+    index = {name: i for i, name in enumerate(feature_names)}
+    missing = [name for name in selected_names if name not in index]
+    if missing:
+        raise ValueError(f"missing selected meta features: {missing}")
+    return [index[name] for name in selected_names]
+
+
+def select_meta_feature_columns_tensor(
+    flat_features: torch.Tensor,
+    feature_names: Sequence[str],
+    selected_names: Sequence[str],
+) -> tuple[torch.Tensor, list[str]]:
+    indices = _resolve_feature_indices(feature_names, selected_names)
+    selected = flat_features[:, indices]
+    return selected, [feature_names[i] for i in indices]
+
+
+def build_router_meta_features(level1_output: Mapping[str, Any]) -> tuple[torch.Tensor, list[str], dict]:
+    flat, feature_names, schema = flatten_meta_feature_blocks_tensor(level1_output)
+    router_x, router_feature_names = select_meta_feature_columns_tensor(
+        flat,
+        feature_names,
+        ROUTER_META_FEATURE_NAMES,
+    )
+    router_schema = {
+        "version": schema["version"],
+        "source_dim": schema["dim"],
+        "dim": int(router_x.shape[1]),
+        "feature_names": router_feature_names,
+    }
+    return router_x, router_feature_names, router_schema
+
+
+def flatten_meta_feature_blocks(level1_output: Mapping[str, Any]) -> tuple[np.ndarray, list[str], dict]:
+    flat, feature_names, schema = flatten_meta_feature_blocks_tensor(level1_output)
+    flat_np = flat.detach().cpu().numpy().astype(np.float32, copy=False)
+    return flat_np, feature_names, schema
+
+
 __all__ = [
+    "ROUTER_META_FEATURE_NAMES",
     "STAGE2_META_SCHEMA_VERSION",
     "build_meta_feature_blocks",
+    "build_router_meta_features",
     "flatten_meta_feature_blocks",
+    "flatten_meta_feature_blocks_tensor",
+    "select_meta_feature_columns_tensor",
 ]

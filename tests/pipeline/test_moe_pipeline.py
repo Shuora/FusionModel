@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import torch
 
 import src.moe as moe_module
@@ -114,7 +113,7 @@ def test_moe_pipeline_outputs_router_and_metrics(tmp_path: Path):
 
 def test_moe_router_features_follow_shared_meta_schema_contract():
     try:
-        from src.pipeline.meta_features import build_meta_feature_blocks
+        from src.pipeline.meta_features import ROUTER_META_FEATURE_NAMES, build_router_meta_features
     except ImportError as e:  # pragma: no cover
         raise AssertionError("MoE should consume shared stage2 meta feature helper") from e
 
@@ -128,16 +127,10 @@ def test_moe_router_features_follow_shared_meta_schema_contract():
             "fused_norm": torch.tensor([[0.7], [0.6]], dtype=torch.float32),
         },
     }
-    blocks = build_meta_feature_blocks(out)
     router_x = moe_module._router_features(out)
-
-    expected_router = torch.cat(
-        [
-            blocks["confidence"]["entropy"],
-            blocks["agreement"],
-            blocks["confidence"]["max_prob"],
-        ],
-        dim=1,
-    )
-    assert router_x.shape == (2, 7)
+    expected_router, router_feature_names, router_schema = build_router_meta_features(out)
+    assert router_x.shape == (2, len(ROUTER_META_FEATURE_NAMES))
+    assert router_feature_names == list(ROUTER_META_FEATURE_NAMES)
+    assert router_schema["dim"] == len(ROUTER_META_FEATURE_NAMES)
+    assert router_schema["feature_names"] == list(ROUTER_META_FEATURE_NAMES)
     assert torch.allclose(router_x, expected_router, atol=1e-6)

@@ -57,8 +57,9 @@ def test_shared_meta_helper_exports_stable_flattened_schema():
     num_samples = dummy["logits_img"].shape[0]
     num_classes = dummy["logits_img"].shape[1]
     summary_dim = len(dummy["summary"])
+    branch_count = 3
 
-    expected_dim = (3 * num_classes) + (2 * num_classes) + 1 + summary_dim
+    expected_dim = (branch_count * num_classes) + (2 * branch_count) + 1 + summary_dim
 
     x, feature_names, schema = flatten_meta_feature_blocks(dummy)
     assert x.shape == (num_samples, expected_dim)
