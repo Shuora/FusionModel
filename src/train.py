@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import subprocess
 import time
 from datetime import datetime
@@ -13,12 +14,15 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import f1_score
+from sklearn.model_selection import KFold
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import yaml
 
 from src.common.structured_logging import format_log_line
+from src.meta_features import STAGE2_META_SCHEMA_VERSION
+from src.meta_features import flatten_meta_feature_blocks
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.run_dir import build_timestamped_run_identity
@@ -27,6 +31,221 @@ from src.runtime_device import resolve_runtime_device
 
 def _build_run_identity(run_root: Path) -> tuple[str, Path]:
     return build_timestamped_run_identity(run_root=run_root, now=datetime.now())
+
+
+def _load_level1_model_for_meta(run_dir: Path, device: torch.device) -> tuple[MobileViTETBertFusionClassifier, dict, bool]:
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    ckpt_path = run_dir / "checkpoints" / "best.ckpt"
+    if not ckpt_path.exists():
+        ckpt_path = run_dir / "checkpoints" / "last.ckpt"
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"missing checkpoint under {run_dir / 'checkpoints'}")
+
+    model = MobileViTETBertFusionClassifier(
+        num_classes=int(cfg["num_classes"]),
+        hidden_dim=int(cfg.get("hidden_dim", 128)),
+        vocab_size=int(cfg.get("vocab_size", 30522)),
+        fusion_layers=int(cfg.get("fusion_layers", 2)),
+        fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
+        dropout=float(cfg.get("fusion_dropout", 0.1)),
+        fusion_mode=str(cfg.get("fusion_mode", "legacy")),
+        text_shortcut_scale=float(cfg.get("text_shortcut_scale", 0.0)),
+    ).to(device)
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(ckpt["model_state"])
+    model.eval()
+    use_fusion = str(cfg.get("stage", "fusion")) != "warmup"
+    return model, cfg, use_fusion
+
+
+def _infer_meta_features_for_rows(
+    *,
+    model: MobileViTETBertFusionClassifier,
+    use_fusion: bool,
+    rgb: np.ndarray,
+    input_ids: np.ndarray,
+    attention_mask: np.ndarray,
+    token_type_ids: np.ndarray,
+    rows: np.ndarray,
+    batch_size: int,
+    device: torch.device,
+) -> tuple[np.ndarray, list[str], dict]:
+    indices = np.asarray(rows, dtype=np.int64)
+    if indices.size == 0:
+        schema = {"version": STAGE2_META_SCHEMA_VERSION, "dim": 0, "feature_names": []}
+        return np.zeros((0, 0), dtype=np.float32), [], schema
+
+    features: list[np.ndarray] = []
+    feature_names: list[str] | None = None
+    feature_schema: dict | None = None
+    batch_size = max(1, int(batch_size))
+
+    with torch.no_grad():
+        for start in range(0, indices.size, batch_size):
+            batch_rows = indices[start : start + batch_size]
+            out = model(
+                torch.from_numpy(rgb[batch_rows]).float().to(device),
+                torch.from_numpy(input_ids[batch_rows]).long().to(device),
+                torch.from_numpy(attention_mask[batch_rows]).long().to(device),
+                torch.from_numpy(token_type_ids[batch_rows]).long().to(device),
+                use_fusion=use_fusion,
+                return_summary=True,
+            )
+            x_b, names_b, schema_b = flatten_meta_feature_blocks(out)
+            if feature_names is None:
+                feature_names = list(names_b)
+                feature_schema = dict(schema_b)
+            else:
+                if list(names_b) != feature_names:
+                    raise ValueError("meta feature names mismatch across batches")
+                if int(schema_b.get("dim", -1)) != int(feature_schema.get("dim", -1)):
+                    raise ValueError("meta feature dim mismatch across batches")
+            features.append(x_b.astype(np.float32, copy=False))
+
+    assert feature_names is not None
+    assert feature_schema is not None
+    x = np.concatenate(features, axis=0) if features else np.zeros((0, int(feature_schema["dim"])), dtype=np.float32)
+    return x, feature_names, feature_schema
+
+
+def _write_legacy_meta_artifact(
+    path: Path,
+    *,
+    x: np.ndarray,
+    y: np.ndarray,
+    feature_names: list[str],
+    feature_schema: dict,
+    fold_ids: np.ndarray,
+    split_provenance: dict,
+) -> None:
+    schema = dict(feature_schema)
+    schema["version"] = STAGE2_META_SCHEMA_VERSION
+    schema["dim"] = int(x.shape[1] if x.ndim == 2 else 0)
+    schema["feature_names"] = [str(name) for name in feature_names]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        X=np.asarray(x, dtype=np.float32),
+        y=np.asarray(y, dtype=np.int32),
+        feature_names=np.asarray(schema["feature_names"], dtype=np.str_),
+        feature_schema=np.array(json.dumps(schema, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+        feature_schema_version=np.array(STAGE2_META_SCHEMA_VERSION, dtype=np.str_),
+        fold_ids=np.asarray(fold_ids, dtype=np.int32),
+        split_provenance=np.array(json.dumps(split_provenance, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+    )
+
+
+def _ensure_legacy_meta_artifacts(
+    *,
+    run_dir: Path,
+    args: argparse.Namespace,
+    log: Callable[[str, str, str, dict], None],
+) -> int:
+    meta_dir = Path(getattr(args, "meta_artifacts_dir", "") or (run_dir / "meta_features"))
+    oof_path = meta_dir / "oof_meta_train.npz"
+    eval_path = meta_dir / "meta_test.npz"
+    if oof_path.exists() and eval_path.exists():
+        return 0
+
+    _, resolved_device, _ = resolve_runtime_device(str(args.device))
+    device = torch.device(resolved_device)
+    model, cfg, use_fusion = _load_level1_model_for_meta(run_dir=run_dir, device=device)
+    data = load_policy_multimodal_data(
+        cfg["processed_root"],
+        cfg["policy"],
+        datasets=cfg.get("datasets") or None,
+        label_mode=str(cfg.get("label_mode", "multiclass")),
+        session_filter_manifest=cfg.get("session_filter_manifest"),
+    )
+    split = np.asarray(data["split"]).astype(str)
+    train_val_rows = np.where(np.isin(split, np.asarray(["train", "val"])))[0]
+    if train_val_rows.size < 2:
+        raise ValueError("legacy stacking compatibility requires at least 2 train/val samples")
+
+    requested_splits = max(2, int(args.stacking_n_splits))
+    effective_splits = min(requested_splits, int(train_val_rows.size))
+    if effective_splits < 2:
+        raise ValueError("legacy stacking compatibility requires effective n_splits >= 2")
+
+    fold_ids = np.full((train_val_rows.size,), -1, dtype=np.int32)
+    for fold_id, (_, val_pos) in enumerate(KFold(n_splits=effective_splits, shuffle=True, random_state=int(args.seed)).split(train_val_rows)):
+        fold_ids[np.asarray(val_pos, dtype=np.int64)] = int(fold_id)
+    if np.any(fold_ids < 0):
+        raise ValueError("legacy stacking compatibility failed to assign fold ids")
+
+    oof_x, feature_names, feature_schema = _infer_meta_features_for_rows(
+        model=model,
+        use_fusion=use_fusion,
+        rgb=np.asarray(data["rgb"]),
+        input_ids=np.asarray(data["input_ids"]),
+        attention_mask=np.asarray(data["attention_mask"]),
+        token_type_ids=np.asarray(data["token_type_ids"]),
+        rows=train_val_rows,
+        batch_size=int(args.batch_size),
+        device=device,
+    )
+    y_all = np.asarray(data["y"], dtype=np.int32)
+    _write_legacy_meta_artifact(
+        oof_path,
+        x=oof_x,
+        y=y_all[train_val_rows],
+        feature_names=feature_names,
+        feature_schema=feature_schema,
+        fold_ids=fold_ids,
+        split_provenance={
+            "generator": "runner_kfold_oof",
+            "split": "train_val",
+            "n_splits": int(effective_splits),
+            "owner": "src.train",
+            "level1_run_dir": str(run_dir),
+            "compatibility_bridge": True,
+        },
+    )
+
+    eval_rows = np.where(split == "test")[0]
+    eval_split = "test"
+    eval_source = "manifest:test"
+    if eval_rows.size == 0:
+        eval_rows = np.where(~np.isin(split, np.asarray(["train", "val"])))[0]
+        eval_split = "holdout"
+        eval_source = "manifest:holdout"
+    if eval_rows.size == 0:
+        raise ValueError("legacy stacking compatibility requires evaluation split")
+
+    eval_x, eval_feature_names, eval_schema = _infer_meta_features_for_rows(
+        model=model,
+        use_fusion=use_fusion,
+        rgb=np.asarray(data["rgb"]),
+        input_ids=np.asarray(data["input_ids"]),
+        attention_mask=np.asarray(data["attention_mask"]),
+        token_type_ids=np.asarray(data["token_type_ids"]),
+        rows=eval_rows,
+        batch_size=int(args.batch_size),
+        device=device,
+    )
+    if eval_feature_names != feature_names:
+        raise ValueError("legacy stacking compatibility meta feature names mismatch")
+    if int(eval_schema.get("dim", -1)) != int(feature_schema.get("dim", -1)):
+        raise ValueError("legacy stacking compatibility meta feature dim mismatch")
+
+    _write_legacy_meta_artifact(
+        eval_path,
+        x=eval_x,
+        y=y_all[eval_rows],
+        feature_names=feature_names,
+        feature_schema=feature_schema,
+        fold_ids=np.full((eval_rows.size,), -1, dtype=np.int32),
+        split_provenance={
+            "generator": "runner_holdout_export",
+            "split": eval_split,
+            "source": eval_source,
+            "owner": "src.train",
+            "level1_run_dir": str(run_dir),
+            "compatibility_bridge": True,
+        },
+    )
+    log("info", "model", "legacy_meta_artifacts_ready", {"run_dir": str(run_dir), "meta_artifacts_dir": str(meta_dir)})
+    return 0
 
 
 def _sha8(path: Path) -> str:
@@ -302,6 +521,10 @@ def _dispatch_stage(
         from src.stacking import main as stacking_main
 
         meta_artifacts_dir = Path(getattr(args, "meta_artifacts_dir", "") or (run_dir / "meta_features"))
+        prep_code = _ensure_legacy_meta_artifacts(run_dir=run_dir, args=args, log=log)
+        if prep_code != 0:
+            log("error", "model", "stage_dispatch_failed", {"target": "stacking", "code": prep_code})
+            return prep_code
         log("info", "model", "stage_dispatch_start", {"target": "stacking", "run_dir": str(run_dir)})
         code = stacking_main(
             [
