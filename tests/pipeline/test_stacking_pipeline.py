@@ -311,8 +311,17 @@ def test_metric_source_prefers_moe_artifact_over_stacking_final(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    (moe_dir / "moe_metrics.json").write_text(
-        json.dumps({"top1": 0.93, "macro_f1": 0.92, "macro_recall": 0.91, "n_test_samples": 2}),
+    (moe_dir / "final_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.93,
+                "macro_f1": 0.92,
+                "macro_recall": 0.91,
+                "n_test_samples": 2,
+                "metric_source": "moe_final",
+                "is_final_stage2_result": True,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -321,7 +330,7 @@ def test_metric_source_prefers_moe_artifact_over_stacking_final(tmp_path: Path):
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
     assert "Metric Source: moe" in report_text
     assert "Top-1: 0.9300" in report_text
-    assert "moe/moe_metrics.json" in report_text
+    assert "moe/final_metrics.json" in report_text
 
 
 def test_stacking_rejects_eval_artifact_with_oof_semantics(tmp_path: Path, monkeypatch):

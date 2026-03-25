@@ -13,6 +13,8 @@ from torch.utils.data import DataLoader, TensorDataset
 import yaml
 
 from src.meta_features import build_router_meta_features
+from src.meta_features import ROUTER_META_FEATURE_NAMES
+from src.meta_features import STAGE2_META_SCHEMA_VERSION
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.runtime_device import resolve_runtime_device
@@ -60,6 +62,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--level3", action="store_true", default=False)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
@@ -194,6 +197,25 @@ def main(argv: Iterable[str] | None = None) -> int:
     (moe_dir / "moe_metrics.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    (moe_dir / "router_meta_schema.json").write_text(
+        json.dumps(
+            {
+                "version": STAGE2_META_SCHEMA_VERSION,
+                "feature_names": list(ROUTER_META_FEATURE_NAMES),
+                "dim": int(router_in_dim),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    if args.level3:
+        final_payload = dict(metrics)
+        final_payload["metric_source"] = "moe_final"
+        final_payload["is_final_stage2_result"] = True
+        (moe_dir / "final_metrics.json").write_text(
+            json.dumps(final_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     return 0
 
 
