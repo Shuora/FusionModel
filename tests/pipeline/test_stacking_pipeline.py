@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 import src.stacking as stacking_module
@@ -104,6 +105,13 @@ def _prepare_meta_inputs(run_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndar
     return oof_x, oof_y, eval_x, eval_y, feature_names
 
 
+def _rewrite_npz(path: Path, **updates) -> None:
+    loaded = np.load(path, allow_pickle=True)
+    payload = {key: loaded[key] for key in loaded.files}
+    payload.update(updates)
+    np.savez_compressed(path, **payload)
+
+
 class DummyMetaModel:
     def __init__(self, pred: np.ndarray | None = None):
         self._pred = pred
@@ -160,6 +168,7 @@ def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path, monkeypatch)
     assert metrics["meta_schema_version"] == "stage2_meta_v1"
     assert metrics["meta_feature_dim"] == int(oof["X"].shape[1])
     assert metrics["meta_feature_names"] == list(oof["feature_names"])
+    assert metrics["n_splits"] == 2
 
 
 def test_stacking_oof_only_consumes_exported_meta_artifacts(tmp_path: Path, monkeypatch):
@@ -224,3 +233,83 @@ def test_stacking_final_metric_source_is_explicit(tmp_path: Path, monkeypatch):
     final_metrics = json.loads(final_metrics_path.read_text(encoding="utf-8"))
     assert final_metrics["metric_source"] == "stacking_final"
     assert final_metrics["is_final_stage2_result"] is True
+
+
+def test_stacking_rejects_eval_artifact_with_oof_semantics(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-eval-semantic-mismatch"
+    _prepare_meta_inputs(run_dir)
+    eval_path = run_dir / "meta_features" / "meta_test.npz"
+    _rewrite_npz(
+        eval_path,
+        split_provenance=np.array(
+            json.dumps({"generator": "runner_kfold_oof", "split": "train_val", "n_splits": 2}, ensure_ascii=False),
+            dtype=np.str_,
+        ),
+        fold_ids=np.asarray([0, 1], dtype=np.int32),
+    )
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="evaluation artifacts"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_rejects_invalid_label_contract(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-invalid-labels"
+    _prepare_meta_inputs(run_dir)
+    oof_path = run_dir / "meta_features" / "oof_meta_train.npz"
+    _rewrite_npz(oof_path, y=np.asarray([0, 2, 0, 2], dtype=np.int32))
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="labels"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_rejects_schema_version_mismatch(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-schema-version-mismatch"
+    _, _, eval_x, eval_y, feature_names = _prepare_meta_inputs(run_dir)
+    eval_path = run_dir / "meta_features" / "meta_test.npz"
+    schema = {"version": "stage2_meta_v2", "dim": int(eval_x.shape[1]), "feature_names": feature_names}
+    _write_meta_artifact(
+        eval_path,
+        x=eval_x,
+        y=eval_y,
+        feature_names=feature_names,
+        fold_ids=np.asarray([-1, -1], dtype=np.int32),
+        split_provenance={"generator": "runner_holdout_export", "split": "test", "source": "manifest:test"},
+        schema_version="stage2_meta_v2",
+    )
+    _rewrite_npz(
+        eval_path,
+        feature_schema=np.array(json.dumps(schema, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+    )
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.raises(ValueError, match="unsupported feature_schema_version"):
+        stacking_main(["--run-dir", str(run_dir), "--device", "cpu", "--num-workers", "0"])
+
+
+def test_stacking_warns_legacy_cli_knobs_not_authoritative(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-legacy-cli-warning"
+    _prepare_meta_inputs(run_dir)
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    with pytest.warns(RuntimeWarning, match="artifact provenance"):
+        code = stacking_main(
+            [
+                "--run-dir",
+                str(run_dir),
+                "--n-splits",
+                "9",
+                "--oof-epochs",
+                "5",
+                "--batch-size",
+                "64",
+                "--device",
+                "cpu",
+                "--num-workers",
+                "0",
+                "--seed",
+                "100",
+            ]
+        )
+    assert code == 0
