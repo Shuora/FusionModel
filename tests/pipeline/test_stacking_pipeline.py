@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 from pathlib import Path
 
@@ -9,96 +8,127 @@ import yaml
 
 import src.stacking as stacking_module
 from src.stacking import main as stacking_main
-from src.train import main as train_main
 
 
-def _prepare_dummy_processed(root: Path) -> None:
-    dataset = "DemoSet"
-    policy = "strict"
-    rgb_dir = root / dataset / policy / "rgb"
-    etbert_dir = root / dataset / policy / "etbert"
-    manifest_dir = root / dataset / policy / "manifest"
-    rgb_dir.mkdir(parents=True, exist_ok=True)
-    etbert_dir.mkdir(parents=True, exist_ok=True)
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-
-    n = 12
-    session_ids = np.array([f"s{i}" for i in range(1, n + 1)], dtype="U64")
-    labels = np.array([0, 1] * (n // 2), dtype=np.int32)
-    rgbs = np.random.default_rng(7).integers(0, 256, size=(n, 3, 28, 28), dtype=np.uint8)
-    input_ids = np.random.default_rng(8).integers(0, 1024, size=(n, 128), dtype=np.int32)
-    attention = np.ones((n, 128), dtype=np.uint8)
-    token_types = np.zeros((n, 128), dtype=np.uint8)
-
-    np.savez_compressed(
-        rgb_dir / "rgb_shard_00000.npz",
-        session_id=session_ids,
-        label=labels,
-        rgb=rgbs,
-    )
-    np.savez_compressed(
-        etbert_dir / "etbert_shard_00000.npz",
-        session_id=session_ids,
-        input_ids=input_ids,
-        attention_mask=attention,
-        token_type_ids=token_types,
+def _write_run_config(run_dir: Path) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": run_dir.name,
+                "processed_root": str(run_dir / "unused_processed_root"),
+                "policy": "strict",
+                "label_mode": "multiclass",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
     )
 
-    splits = ["train"] * 6 + ["val"] * 4 + ["test"] * 2
-    families = ["Fam0" if x == 0 else "Fam1" for x in labels]
-    rows = [
-        {
-            "session_id": sid,
-            "dataset": dataset,
-            "family": fam,
-            "capture_id": f"{fam}.pcap",
-            "split": sp,
-            "policy": policy,
-        }
-        for sid, fam, sp in zip(session_ids, families, splits)
-    ]
-    with (manifest_dir / "session_manifest.csv").open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+
+def _write_meta_artifact(
+    path: Path,
+    *,
+    x: np.ndarray,
+    y: np.ndarray,
+    feature_names: list[str],
+    fold_ids: np.ndarray,
+    split_provenance: dict,
+    schema_version: str = "stage2_meta_v1",
+) -> None:
+    schema = {
+        "version": schema_version,
+        "dim": int(x.shape[1]),
+        "feature_names": list(feature_names),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        X=np.asarray(x, dtype=np.float32),
+        y=np.asarray(y, dtype=np.int32),
+        feature_names=np.asarray(feature_names, dtype=np.str_),
+        feature_schema=np.array(json.dumps(schema, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+        feature_schema_version=np.array(schema_version, dtype=np.str_),
+        fold_ids=np.asarray(fold_ids, dtype=np.int32),
+        split_provenance=np.array(json.dumps(split_provenance, ensure_ascii=False, sort_keys=True), dtype=np.str_),
+    )
 
 
-def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path):
-    processed_root = tmp_path / "outputs" / "processed"
-    run_root = tmp_path / "runs"
-    _prepare_dummy_processed(processed_root)
-
-    code = train_main(
+def _prepare_meta_inputs(run_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    _write_run_config(run_dir)
+    feature_names = ["f0", "f1", "f2", "f3"]
+    oof_x = np.asarray(
         [
-            "--processed-root",
-            str(processed_root),
-            "--policy",
-            "strict",
-            "--stage",
-            "fusion",
-            "--run-root",
-            str(run_root),
-            "--run-id",
-            "stack-run",
-            "--epochs",
-            "1",
-            "--batch-size",
-            "4",
-        ]
+            [0.2, 0.1, 0.9, 0.3],
+            [0.8, 0.2, 0.1, 0.7],
+            [0.3, 0.9, 0.2, 0.4],
+            [0.7, 0.8, 0.3, 0.6],
+        ],
+        dtype=np.float32,
     )
-    assert code == 0
+    oof_y = np.asarray([0, 1, 0, 1], dtype=np.int32)
+    eval_x = np.asarray(
+        [
+            [0.25, 0.15, 0.85, 0.35],
+            [0.75, 0.85, 0.25, 0.65],
+        ],
+        dtype=np.float32,
+    )
+    eval_y = np.asarray([0, 1], dtype=np.int32)
 
-    run_dir = run_root / "stack-run"
+    meta_dir = run_dir / "meta_features"
+    _write_meta_artifact(
+        meta_dir / "oof_meta_train.npz",
+        x=oof_x,
+        y=oof_y,
+        feature_names=feature_names,
+        fold_ids=np.asarray([0, 0, 1, 1], dtype=np.int32),
+        split_provenance={
+            "generator": "runner_kfold_oof",
+            "split": "train_val",
+            "n_splits": 2,
+        },
+    )
+    _write_meta_artifact(
+        meta_dir / "meta_test.npz",
+        x=eval_x,
+        y=eval_y,
+        feature_names=feature_names,
+        fold_ids=np.asarray([-1, -1], dtype=np.int32),
+        split_provenance={
+            "generator": "runner_holdout_export",
+            "split": "test",
+            "source": "manifest:test",
+        },
+    )
+    return oof_x, oof_y, eval_x, eval_y, feature_names
+
+
+class DummyMetaModel:
+    def __init__(self, pred: np.ndarray | None = None):
+        self._pred = pred
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        if self._pred is not None:
+            return np.asarray(self._pred, dtype=np.int64)
+        return np.zeros((x.shape[0],), dtype=np.int64)
+
+    def save_model(self, path: str) -> None:
+        Path(path).write_text("{}", encoding="utf-8")
+
+
+def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-run"
+    _prepare_meta_inputs(run_dir)
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
     code = stacking_main(
         [
             "--run-dir",
             str(run_dir),
-            "--n-splits",
-            "2",
-            "--oof-epochs",
-            "1",
-            "--batch-size",
-            "4",
+            "--device",
+            "cpu",
+            "--num-workers",
+            "0",
         ]
     )
     assert code == 0
@@ -117,6 +147,8 @@ def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path):
         assert "feature_names" in arr.files
         assert "feature_schema" in arr.files
         assert "feature_schema_version" in arr.files
+        assert "fold_ids" in arr.files
+        assert "split_provenance" in arr.files
         assert arr["X"].ndim == 2
         assert arr["X"].shape[1] == len(arr["feature_names"])
         assert arr["feature_schema_version"].item() == "stage2_meta_v1"
@@ -130,88 +162,34 @@ def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path):
     assert metrics["meta_feature_names"] == list(oof["feature_names"])
 
 
-def test_stacking_reuses_run_hyperparams_for_base_model(tmp_path: Path, monkeypatch):
-    run_dir = tmp_path / "runs" / "stack-hparams-run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "run_id": "stack-hparams-run",
-                "processed_root": str(tmp_path / "outputs" / "processed"),
-                "policy": "strict",
-                "label_mode": "multiclass",
-                "hidden_dim": 160,
-                "fusion_layers": 3,
-                "fusion_heads": 5,
-                "fusion_dropout": 0.2,
-                "lr": 0.0007,
-                "alpha": 0.25,
-                "beta": 0.15,
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
+def test_stacking_oof_only_consumes_exported_meta_artifacts(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-oof-only-run"
+    oof_x, oof_y, _, _, _ = _prepare_meta_inputs(run_dir)
 
+    def fail_data_loading(*args, **kwargs):
+        raise AssertionError("stacking must not reload multimodal raw tensors")
+
+    monkeypatch.setattr(stacking_module, "load_policy_multimodal_data", fail_data_loading, raising=False)
     monkeypatch.setattr(
         stacking_module,
-        "load_policy_multimodal_data",
-        lambda *args, **kwargs: {
-            "rgb": np.random.default_rng(1).integers(0, 256, size=(6, 3, 28, 28), dtype=np.uint8),
-            "input_ids": np.random.default_rng(2).integers(0, 256, size=(6, 16), dtype=np.int32),
-            "attention_mask": np.ones((6, 16), dtype=np.uint8),
-            "token_type_ids": np.zeros((6, 16), dtype=np.uint8),
-            "y": np.array([0, 1, 0, 1, 0, 1], dtype=np.int32),
-            "split": np.array(["train", "train", "val", "val", "test", "test"], dtype="U8"),
-        },
+        "_train_base_model",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("OOF generator must be external")),
+        raising=False,
     )
 
-    captured = []
+    captured = {}
 
-    def fake_train_base_model(*args, **kwargs):
-        captured.append(kwargs)
-        return object()
+    def fake_fit_meta_learner(x_train, y_train, num_classes):
+        captured["x_train"] = np.asarray(x_train)
+        captured["y_train"] = np.asarray(y_train)
+        captured["num_classes"] = int(num_classes)
+        return DummyMetaModel(pred=np.asarray([0, 1]))
 
-    monkeypatch.setattr(stacking_module, "_train_base_model", fake_train_base_model)
-
-    def fake_predict_meta(*args, **kwargs):
-        n_rows = int(args[1].shape[0])
-        feature_names = [f"f{i}" for i in range(16)]
-        return (
-            np.zeros((n_rows, len(feature_names)), dtype=np.float32),
-            feature_names,
-            {
-                "version": "stage2_meta_v1",
-                "dim": len(feature_names),
-                "feature_names": feature_names,
-            },
-        )
-
-    monkeypatch.setattr(
-        stacking_module,
-        "_predict_meta",
-        fake_predict_meta,
-    )
-
-    class DummyMetaModel:
-        def predict(self, x):
-            return np.zeros((x.shape[0],), dtype=np.int64)
-
-        def save_model(self, path):
-            Path(path).write_text("{}", encoding="utf-8")
-
-    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel())
-
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", fake_fit_meta_learner)
     code = stacking_main(
         [
             "--run-dir",
             str(run_dir),
-            "--n-splits",
-            "2",
-            "--oof-epochs",
-            "1",
-            "--batch-size",
-            "2",
             "--device",
             "cpu",
             "--num-workers",
@@ -219,12 +197,30 @@ def test_stacking_reuses_run_hyperparams_for_base_model(tmp_path: Path, monkeypa
         ]
     )
     assert code == 0
-    assert captured
-    for item in captured:
-        assert item["hidden_dim"] == 160
-        assert item["fusion_layers"] == 3
-        assert item["fusion_heads"] == 5
-        assert item["fusion_dropout"] == 0.2
-        assert item["lr"] == 0.0007
-        assert item["alpha"] == 0.25
-        assert item["beta"] == 0.15
+    assert np.array_equal(captured["x_train"], oof_x)
+    assert np.array_equal(captured["y_train"], oof_y)
+    assert captured["num_classes"] == 2
+
+
+def test_stacking_final_metric_source_is_explicit(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "stack-final-metric-source-run"
+    _prepare_meta_inputs(run_dir)
+    monkeypatch.setattr(stacking_module, "_fit_meta_learner", lambda x, y, num_classes: DummyMetaModel(pred=np.asarray([0, 1])))
+
+    code = stacking_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--device",
+            "cpu",
+            "--num-workers",
+            "0",
+        ]
+    )
+    assert code == 0
+
+    final_metrics_path = run_dir / "stacking" / "final_metrics.json"
+    assert final_metrics_path.exists()
+    final_metrics = json.loads(final_metrics_path.read_text(encoding="utf-8"))
+    assert final_metrics["metric_source"] == "stacking_final"
+    assert final_metrics["is_final_stage2_result"] is True
