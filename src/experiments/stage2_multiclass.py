@@ -16,6 +16,7 @@ from src.meta_features import STAGE2_META_SCHEMA_VERSION, flatten_meta_feature_b
 from src.models.fusion_model import MobileViTETBertFusionClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.report import main as report_main
+from src.report import resolve_canonical_final_metric_source_and_path
 from src.run_dir import current_run_date_partition
 from src.runtime_device import resolve_runtime_device
 from src.stacking import main as stacking_main
@@ -531,19 +532,8 @@ def _run_level2_stacking(
 
 
 def _resolve_final_metric_source(run_dir: Path) -> Path:
-    stacking = run_dir / "stacking" / "meta_metrics.json"
-    if stacking.exists():
-        return stacking
-    moe = run_dir / "moe" / "moe_metrics.json"
-    if moe.exists():
-        return moe
-    eval_test = run_dir / "eval_test.json"
-    if eval_test.exists():
-        return eval_test
-    other_eval = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
-    if other_eval:
-        return other_eval[0]
-    return run_dir / "eval_test.json"
+    _, metric_path = resolve_canonical_final_metric_source_and_path(run_dir)
+    return metric_path
 
 
 def main(argv: Iterable[str] | None = None) -> int:
