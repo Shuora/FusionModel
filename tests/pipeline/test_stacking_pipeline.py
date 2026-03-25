@@ -110,10 +110,25 @@ def test_stacking_pipeline_generates_meta_artifacts(tmp_path: Path):
     assert (stack_dir / "meta_metrics.json").exists()
     assert (stack_dir / "meta_model.json").exists()
 
+    oof = np.load(stack_dir / "oof_meta_train.npz", allow_pickle=True)
+    test_meta = np.load(stack_dir / "meta_test.npz", allow_pickle=True)
+    for arr in (oof, test_meta):
+        assert "X" in arr.files
+        assert "y" in arr.files
+        assert "feature_names" in arr.files
+        assert "feature_schema" in arr.files
+        assert "feature_schema_version" in arr.files
+        assert arr["X"].ndim == 2
+        assert arr["X"].shape[1] == len(arr["feature_names"])
+        assert arr["feature_schema_version"].item() == "stage2_meta_v1"
+
     metrics = json.loads((stack_dir / "meta_metrics.json").read_text(encoding="utf-8"))
     assert "top1" in metrics
     assert "macro_f1" in metrics
     assert metrics["n_train_samples"] > 0
+    assert metrics["meta_schema_version"] == "stage2_meta_v1"
+    assert metrics["meta_feature_dim"] == int(oof["X"].shape[1])
+    assert metrics["meta_feature_names"] == list(oof["feature_names"])
 
 
 def test_stacking_reuses_run_hyperparams_for_base_model(tmp_path: Path, monkeypatch):
