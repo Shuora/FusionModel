@@ -367,6 +367,195 @@ def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
         assert "Metric Source: moe" in report_text
 
 
+def test_stage2_fusion_then_stacking_requires_level2_meta_artifacts_and_shared_run_family(tmp_path: Path):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    policy = "session_full"
+
+    _write_processed_dataset(processed_root, "MTA", policy, np.array([0, 1, 2, 0, 1, 2]), ["D", "E", "F"])
+    _write_processed_dataset(processed_root, "MFCP", policy, np.array([0, 1, 2, 0, 1, 2]), ["A", "B", "C"])
+    _write_processed_dataset(processed_root, "USTC-TFC2016", policy, np.array([0, 1, 2, 0, 1, 2]), ["U1", "U2", "U3"])
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    try:
+        code = stage2_main(
+            [
+                "--output",
+                str(out_tasks),
+                "--execute",
+                "--processed-root",
+                str(processed_root),
+                "--policy",
+                policy,
+                "--run-root",
+                str(run_root),
+                "--stage",
+                "fusion",
+                "--meta-classifier",
+                "stacking",
+                "--skip-ustc-limited",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--num-workers",
+                "0",
+            ]
+        )
+    except SystemExit as exc:
+        # argparse uses SystemExit for unknown flags; surface that as a test failure (RED) until CLI exists.
+        code = int(getattr(exc, "code", 1) or 1)
+
+    assert code == 0
+
+    date_dir = _single_date_partition(run_root)
+    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
+        run_dir = date_dir / f"stage2-{dataset.lower()}"
+        # Level 1 fusion must run first under the dataset run family.
+        assert (run_dir / "metrics.csv").exists()
+        assert (run_dir / "eval_test.json").exists()
+        assert (run_dir / "report.md").exists()
+
+        # Level 2 meta artifacts must be generated under the same run family.
+        meta_dir = run_dir / "meta_features"
+        assert meta_dir.exists()
+        assert (meta_dir / "oof_meta_train.npz").exists()
+        assert (meta_dir / "meta_test.npz").exists()
+
+        # Level 2 stacking must run second and persist its outputs under the same run family.
+        assert (run_dir / "stacking" / "meta_metrics.json").exists()
+        assert (run_dir / "stacking" / "meta_model.json").exists()
+
+
+def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source(tmp_path: Path):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    policy = "session_full"
+
+    _write_processed_dataset(processed_root, "MTA", policy, np.array([0, 1, 2, 0, 1, 2]), ["D", "E", "F"])
+    _write_processed_dataset(processed_root, "MFCP", policy, np.array([0, 1, 2, 0, 1, 2]), ["A", "B", "C"])
+    _write_processed_dataset(processed_root, "USTC-TFC2016", policy, np.array([0, 1, 2, 0, 1, 2]), ["U1", "U2", "U3"])
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    try:
+        code = stage2_main(
+            [
+                "--output",
+                str(out_tasks),
+                "--execute",
+                "--processed-root",
+                str(processed_root),
+                "--policy",
+                policy,
+                "--run-root",
+                str(run_root),
+                "--stage",
+                "fusion",
+                "--meta-classifier",
+                "stacking",
+                "--skip-ustc-limited",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--num-workers",
+                "0",
+            ]
+        )
+    except SystemExit as exc:
+        code = int(getattr(exc, "code", 1) or 1)
+
+    assert code == 0
+
+    date_dir = _single_date_partition(run_root)
+    summary_path = date_dir / "stage2_execution_summary.json"
+    assert summary_path.exists()
+    summary = pd.read_json(summary_path)
+    assert "level1_run_dir" in summary.columns
+    assert "final_metric_source" in summary.columns
+    assert set(summary["run_date"].tolist()) == {date_dir.name}
+
+    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
+        run_dir = date_dir / f"stage2-{dataset.lower()}"
+        rows = summary.loc[summary["dataset"] == dataset]
+        assert len(rows) == 1
+        row = rows.iloc[0]
+        assert row["level1_run_dir"] == str(run_dir)
+        # Contract: final_metric_source is semantic (e.g., "stacking"), not a concrete file path.
+        assert row["final_metric_source"] == "stacking"
+
+
+def test_stage2_runner_meta_classifier_stacking_wires_to_stacking_main(tmp_path: Path, monkeypatch):
+    """RED (Task 4): stage2 runner must support --meta-classifier stacking after a fusion run.
+
+    This test is intentionally unit-ish: it avoids training by stubbing stage2 task execution, but
+    still locks the runner-level wiring contract for the meta-classifier stage.
+    """
+
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    policy = "session_full"
+
+    _write_processed_dataset(processed_root, "MTA", policy, np.array([0, 1, 2, 0, 1, 2]), ["D", "E", "F"])
+
+    monkeypatch.setattr(stage2_mod, "build_stage2_tasks", lambda: [{"dataset": "MTA", "num_classes": 7}])
+
+    def fake_run_stage2_task(*, dated_run_root: Path, dataset: str, **kwargs) -> int:
+        run_dir = dated_run_root / f"stage2-{dataset.lower()}"
+        (run_dir / "meta_features").mkdir(parents=True, exist_ok=True)
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "_run_stage2_task", fake_run_stage2_task)
+
+    captured = {"stacking_calls": []}
+
+    import src.stacking as stacking_module
+
+    def fake_stacking_main(argv):
+        captured["stacking_calls"].append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    try:
+        code = stage2_mod.main(
+            [
+                "--output",
+                str(out_tasks),
+                "--execute",
+                "--processed-root",
+                str(processed_root),
+                "--policy",
+                policy,
+                "--run-root",
+                str(run_root),
+                "--stage",
+                "fusion",
+                "--meta-classifier",
+                "stacking",
+                "--skip-ustc-limited",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--num-workers",
+                "0",
+            ]
+        )
+    except SystemExit as exc:
+        # argparse uses SystemExit for unknown flags; surface that as a test failure (RED) until CLI exists.
+        code = int(getattr(exc, "code", 1) or 1)
+
+    assert code == 0
+    assert len(captured["stacking_calls"]) == 1
+    argv = captured["stacking_calls"][0]
+    assert "--run-dir" in argv
+    assert "--meta-artifacts-dir" in argv
+
+
 
 def test_stage1_binary_default_output_path_matches_docs(tmp_path: Path, monkeypatch):
     from src.experiments import stage1_binary as stage1_mod

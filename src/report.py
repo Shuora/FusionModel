@@ -16,6 +16,56 @@ import yaml
 from src.run_dir import resolve_run_dir
 
 
+def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, Path]:
+    """
+    Canonical final-metric rule (single source of truth):
+    1) Prefer later-stage MoE metrics when present.
+    2) Otherwise prefer stacking final artifact when present.
+    3) Otherwise prefer stacking meta artifact only when it explicitly declares itself final.
+    4) Otherwise fall back to eval artifacts (eval_test.json, then other eval_*.json).
+    5) Otherwise return stacking meta if present, else a non-existent eval_test.json placeholder.
+    """
+
+    def _read_json(path: Path) -> dict:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _is_stage2_final(payload: dict) -> bool:
+        return bool(payload.get("is_final_stage2_result")) or str(payload.get("metric_source", "")) == "stacking_final"
+
+    moe_final = run_dir / "moe" / "final_metrics.json"
+    if moe_final.exists():
+        return "moe", moe_final
+    moe_file = run_dir / "moe" / "moe_metrics.json"
+    if moe_file.exists():
+        return "moe", moe_file
+
+    stacking_final = run_dir / "stacking" / "final_metrics.json"
+    if stacking_final.exists():
+        return "stacking", stacking_final
+
+    stacking_meta = run_dir / "stacking" / "meta_metrics.json"
+    if stacking_meta.exists():
+        try:
+            payload = _read_json(stacking_meta)
+        except Exception:
+            payload = {}
+        if _is_stage2_final(payload):
+            return "stacking", stacking_meta
+
+    eval_test = run_dir / "eval_test.json"
+    if eval_test.exists():
+        return "eval", eval_test
+
+    other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
+    if other_eval_files:
+        return "eval", other_eval_files[0]
+
+    if stacking_meta.exists():
+        return "stacking", stacking_meta
+
+    return "none", eval_test
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate run report")
     parser.add_argument("--run-dir", required=True)
