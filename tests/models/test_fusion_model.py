@@ -395,3 +395,39 @@ def test_mobilevit_etbert_fusion_model_residual_mode_persists_shortcut_scale_in_
     clone.load_state_dict(model.state_dict())
 
     assert float(clone.text_shortcut_scale.item()) == pytest.approx(0.5)
+
+
+def test_mobilevit_etbert_fusion_model_meta_feature_summary_contract():
+    """Lock the Level1->Level2 contract: logits + lightweight summary, tokens remain opt-in."""
+
+    model = MobileViTETBertFusionClassifier(num_classes=3, hidden_dim=32, vocab_size=256, max_tokens=16)
+    rgb = torch.rand(2, 3, 28, 28)
+    input_ids = torch.randint(0, 256, (2, 16))
+    attention_mask = torch.ones(2, 16, dtype=torch.long)
+    token_type_ids = torch.zeros(2, 16, dtype=torch.long)
+
+    # Summary stats must be available for meta-classification without always returning token features.
+    try:
+        out = model(rgb, input_ids, attention_mask, token_type_ids, return_summary=True)
+    except TypeError as e:  # pragma: no cover
+        raise AssertionError("fusion model should accept return_summary=True for Level2 meta features") from e
+
+    assert out["logits_fuse"].shape == (2, 3)
+    assert out["logits_img"].shape == (2, 3)
+    assert out["logits_tls"].shape == (2, 3)
+    assert "summary" in out
+    assert "img_tokens" not in out
+    assert "txt_tokens" not in out
+
+    summary = out["summary"]
+    assert isinstance(summary, dict)
+    assert set(summary.keys()) == {"img_pooled_norm", "txt_pooled_norm", "fused_norm"}
+    for key in ["img_pooled_norm", "txt_pooled_norm", "fused_norm"]:
+        assert key in summary
+        assert isinstance(summary[key], torch.Tensor)
+        assert summary[key].shape == (2, 1)
+
+    # Token-level debug features must remain opt-in.
+    out_with_tokens = model(rgb, input_ids, attention_mask, token_type_ids, return_features=True, return_summary=True)
+    assert "img_tokens" in out_with_tokens
+    assert "txt_tokens" in out_with_tokens

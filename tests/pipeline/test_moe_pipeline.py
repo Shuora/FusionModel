@@ -6,7 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+import torch
 
+import src.moe as moe_module
 from src.moe import main as moe_main
 from src.train import main as train_main
 
@@ -108,3 +111,34 @@ def test_moe_pipeline_outputs_router_and_metrics(tmp_path: Path):
     assert "top1" in metrics
     assert "macro_f1" in metrics
     assert metrics["n_test_samples"] > 0
+
+
+def test_moe_router_features_follow_shared_meta_schema_contract():
+    try:
+        from src.pipeline.meta_features import build_meta_feature_blocks
+    except ImportError as e:  # pragma: no cover
+        raise AssertionError("MoE should consume shared stage2 meta feature helper") from e
+
+    out = {
+        "logits_img": torch.tensor([[2.0, 0.0, -1.0], [0.2, 1.4, -0.5]], dtype=torch.float32),
+        "logits_tls": torch.tensor([[0.5, 1.0, -0.5], [1.1, -0.1, 0.4]], dtype=torch.float32),
+        "logits_fuse": torch.tensor([[1.2, 0.3, -0.2], [0.9, 0.8, -0.3]], dtype=torch.float32),
+        "summary": {
+            "img_pooled_norm": torch.tensor([[0.8], [0.9]], dtype=torch.float32),
+            "txt_pooled_norm": torch.tensor([[0.5], [0.4]], dtype=torch.float32),
+            "fused_norm": torch.tensor([[0.7], [0.6]], dtype=torch.float32),
+        },
+    }
+    blocks = build_meta_feature_blocks(out)
+    router_x = moe_module._router_features(out)
+
+    expected_router = torch.cat(
+        [
+            blocks["confidence"]["entropy"],
+            blocks["agreement"],
+            blocks["confidence"]["max_prob"],
+        ],
+        dim=1,
+    )
+    assert router_x.shape == (2, 7)
+    assert torch.allclose(router_x, expected_router, atol=1e-6)
