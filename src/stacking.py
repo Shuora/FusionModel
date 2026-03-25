@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any, Iterable
+import warnings
 
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, recall_score
@@ -65,7 +66,7 @@ def _load_meta_artifact(path: Path) -> MetaArtifact:
     if not path.exists():
         raise FileNotFoundError(f"meta artifact not found: {path}")
 
-    artifact = np.load(path, allow_pickle=True)
+    artifact = np.load(path, allow_pickle=False)
     required = {
         "X",
         "y",
@@ -136,6 +137,23 @@ def _validate_oof_boundary(oof_artifact: MetaArtifact) -> None:
         raise ValueError(f"{oof_artifact.path}: fold_ids must be non-negative for OOF train/val artifacts")
 
 
+def _validate_eval_boundary(eval_artifact: MetaArtifact) -> None:
+    generator = str(eval_artifact.split_provenance.get("generator", ""))
+    split = str(eval_artifact.split_provenance.get("split", ""))
+    if generator == "runner_kfold_oof":
+        raise ValueError(f"{eval_artifact.path}: evaluation artifacts must not use OOF generator semantics")
+    if not generator.startswith("runner_holdout"):
+        raise ValueError(
+            f"{eval_artifact.path}: evaluation artifacts must come from holdout export generator, got '{generator}'"
+        )
+    if split not in {"test", "holdout"}:
+        raise ValueError(
+            f"{eval_artifact.path}: evaluation artifacts must have split_provenance.split in ['test', 'holdout']"
+        )
+    if np.any(eval_artifact.fold_ids != -1):
+        raise ValueError(f"{eval_artifact.path}: evaluation artifacts must use fold_ids=-1 for all samples")
+
+
 def _validate_schema_alignment(train_meta: MetaArtifact, eval_meta: MetaArtifact) -> None:
     if train_meta.feature_schema_version != eval_meta.feature_schema_version:
         raise ValueError("train/eval schema version mismatch")
@@ -143,6 +161,48 @@ def _validate_schema_alignment(train_meta: MetaArtifact, eval_meta: MetaArtifact
         raise ValueError("train/eval feature_names mismatch")
     if train_meta.x.shape[1] != eval_meta.x.shape[1]:
         raise ValueError("train/eval feature dimension mismatch")
+
+
+def _validate_train_label_contract(y: np.ndarray, *, path: Path) -> None:
+    if y.size == 0:
+        return
+    if np.any(y < 0):
+        raise ValueError(f"{path}: labels must be non-negative")
+    uniq = np.unique(y)
+    if uniq.size == 0:
+        return
+    expected = np.arange(int(uniq[-1]) + 1, dtype=uniq.dtype)
+    if not np.array_equal(uniq, expected):
+        raise ValueError(
+            f"{path}: labels must be 0-based contiguous for num_classes=max(y)+1 derivation, got {uniq.tolist()}"
+        )
+
+
+def _validate_eval_labels(y: np.ndarray, *, path: Path, num_classes: int) -> None:
+    if y.size == 0:
+        return
+    if np.any(y < 0):
+        raise ValueError(f"{path}: evaluation labels must be non-negative")
+    if np.any(y >= num_classes):
+        raise ValueError(f"{path}: evaluation labels must be within [0, {num_classes - 1}]")
+
+
+def _derive_n_splits_from_artifact(oof_artifact: MetaArtifact) -> int:
+    raw_n_splits = oof_artifact.split_provenance.get("n_splits")
+    if raw_n_splits is not None:
+        try:
+            n_splits = int(raw_n_splits)
+        except (TypeError, ValueError):
+            raise ValueError(f"{oof_artifact.path}: split_provenance.n_splits must be an integer") from None
+        if n_splits < 2:
+            raise ValueError(f"{oof_artifact.path}: split_provenance.n_splits must be >= 2")
+        return n_splits
+
+    unique_fold_ids = np.unique(oof_artifact.fold_ids)
+    n_splits = int(unique_fold_ids.size)
+    if n_splits < 2:
+        raise ValueError(f"{oof_artifact.path}: inferred n_splits from fold_ids must be >= 2")
+    return n_splits
 
 
 def _write_meta_dump(
@@ -162,11 +222,10 @@ def _write_meta_dump(
             "holdout_meta_path": str(holdout_meta_path) if holdout_meta_path is not None else None,
         }
     )
-    schema = {
-        "version": artifact.feature_schema_version,
-        "dim": int(artifact.x.shape[1]),
-        "feature_names": list(artifact.feature_names),
-    }
+    schema = dict(artifact.feature_schema)
+    schema["version"] = artifact.feature_schema_version
+    schema["dim"] = int(artifact.x.shape[1])
+    schema["feature_names"] = list(artifact.feature_names)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         out_path,
@@ -196,15 +255,52 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--oof-meta-file", default="oof_meta_train.npz")
     parser.add_argument("--eval-meta-file", default="meta_test.npz")
     parser.add_argument("--holdout-meta-path", default=None)
-    parser.add_argument("--n-splits", type=int, default=3)
-    parser.add_argument("--oof-epochs", type=int, default=2)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--n-splits",
+        type=int,
+        default=3,
+        help="Legacy compatibility only. Artifact provenance (split_provenance/fold_ids) is authoritative.",
+    )
+    parser.add_argument(
+        "--oof-epochs",
+        type=int,
+        default=2,
+        help="Legacy compatibility only. Stacking in artifact-consumer mode does not run OOF generation.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Legacy compatibility only in artifact-consumer mode.",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Legacy compatibility only in artifact-consumer mode.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Legacy compatibility only in artifact-consumer mode.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Legacy compatibility only in artifact-consumer mode.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.num_workers < 0:
         raise ValueError("--num-workers must be >= 0")
+    warnings.warn(
+        "stacking runs in artifact-consumer mode; artifact provenance is the source of truth. "
+        "Legacy CLI knobs (--n-splits/--oof-epochs/--batch-size/--device/--num-workers/--seed) "
+        "do not control OOF generation.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
     run_dir = Path(args.run_dir)
     meta_artifacts_dir = Path(args.meta_artifacts_dir) if args.meta_artifacts_dir else run_dir / "meta_features"
@@ -215,12 +311,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     oof_meta = _load_meta_artifact(oof_source_path)
     eval_meta = _load_meta_artifact(eval_source_path)
     _validate_oof_boundary(oof_meta)
+    _validate_eval_boundary(eval_meta)
     _validate_schema_alignment(oof_meta, eval_meta)
 
     if oof_meta.y.size == 0:
         return 2
 
+    _validate_train_label_contract(oof_meta.y, path=oof_meta.path)
     num_classes = int(np.max(oof_meta.y)) + 1
+    _validate_eval_labels(eval_meta.y, path=eval_meta.path, num_classes=num_classes)
+    artifact_n_splits = _derive_n_splits_from_artifact(oof_meta)
     meta_model = _fit_meta_learner(oof_meta.x, oof_meta.y, num_classes=num_classes)
     pred = np.asarray(meta_model.predict(eval_meta.x), dtype=np.int32)
     if pred.shape[0] != eval_meta.y.shape[0]:
@@ -253,7 +353,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "macro_recall": macro_recall,
         "n_train_samples": int(oof_meta.y.shape[0]),
         "n_test_samples": int(eval_meta.y.shape[0]),
-        "n_splits": int(args.n_splits),
+        "n_splits": int(artifact_n_splits),
         "meta_schema_version": schema_version,
         "meta_feature_dim": int(oof_meta.x.shape[1]),
         "meta_feature_names": list(oof_meta.feature_names),
