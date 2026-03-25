@@ -9,6 +9,7 @@ import torch
 
 import src.moe as moe_module
 from src.moe import main as moe_main
+from src.report import resolve_canonical_final_metric_source_and_path
 from src.train import main as train_main
 
 
@@ -134,3 +135,102 @@ def test_moe_router_features_follow_shared_meta_schema_contract():
     assert router_schema["dim"] == len(ROUTER_META_FEATURE_NAMES)
     assert router_schema["feature_names"] == list(ROUTER_META_FEATURE_NAMES)
     assert torch.allclose(router_x, expected_router, atol=1e-6)
+
+
+def test_level3_moe_hook_uses_shared_meta_and_keeps_level2_default(tmp_path: Path):
+    from src.pipeline.meta_features import ROUTER_META_FEATURE_NAMES, STAGE2_META_SCHEMA_VERSION
+
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    _prepare_dummy_processed(processed_root)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "moe-level3-hook-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "4",
+        ]
+    )
+    assert code == 0
+
+    run_dir = run_root / "moe-level3-hook-run"
+    stack_dir = run_dir / "stacking"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    stacking_final_path = stack_dir / "final_metrics.json"
+    stacking_final_payload = {
+        "top1": 0.88,
+        "macro_f1": 0.87,
+        "macro_recall": 0.86,
+        "n_test_samples": 2,
+        "metric_source": "stacking_final",
+        "is_final_stage2_result": True,
+    }
+    stacking_final_path.write_text(
+        json.dumps(
+            stacking_final_payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    stacking_final_text_before = stacking_final_path.read_text(encoding="utf-8")
+
+    code = moe_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--epochs",
+            "2",
+            "--batch-size",
+            "4",
+        ]
+    )
+    assert code == 0
+
+    moe_dir = run_dir / "moe"
+    assert (moe_dir / "router.ckpt").exists()
+    assert (moe_dir / "moe_metrics.json").exists()
+    assert (moe_dir / "router_meta_schema.json").exists()
+    assert not (moe_dir / "final_metrics.json").exists()
+
+    schema_payload = json.loads((moe_dir / "router_meta_schema.json").read_text(encoding="utf-8"))
+    assert schema_payload["version"] == STAGE2_META_SCHEMA_VERSION
+    assert schema_payload["feature_names"] == list(ROUTER_META_FEATURE_NAMES)
+    assert schema_payload["dim"] == len(ROUTER_META_FEATURE_NAMES)
+
+    metric_source, metric_path = resolve_canonical_final_metric_source_and_path(run_dir)
+    assert metric_source == "stacking"
+    assert metric_path == stacking_final_path
+
+    # Optional level3 enhancer: explicitly invoked, consumes shared meta features, and writes a
+    # stage2-final artifact without mutating level2 outputs.
+    code = moe_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--epochs",
+            "2",
+            "--batch-size",
+            "4",
+            "--level3",
+        ]
+    )
+    assert code == 0
+
+    assert (moe_dir / "final_metrics.json").exists()
+    metric_source, metric_path = resolve_canonical_final_metric_source_and_path(run_dir)
+    assert metric_source == "moe"
+    assert metric_path == (moe_dir / "final_metrics.json")
+
+    assert stacking_final_path.read_text(encoding="utf-8") == stacking_final_text_before
