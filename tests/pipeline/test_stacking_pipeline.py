@@ -239,7 +239,7 @@ def test_stacking_final_metric_source_is_explicit(tmp_path: Path, monkeypatch):
     assert final_metrics["is_final_stage2_result"] is True
 
 
-def test_metric_source_prefers_level2_final_artifact_over_eval_json(tmp_path: Path):
+def test_metric_source_prefers_level2_final_artifact_over_meta_and_eval_json(tmp_path: Path):
     run_dir = tmp_path / "runs" / "stage2-final-report-source"
     _write_run_config(run_dir)
     (run_dir / "metrics.csv").write_text(
@@ -253,6 +253,19 @@ def test_metric_source_prefers_level2_final_artifact_over_eval_json(tmp_path: Pa
     stack_dir = run_dir / "stacking"
     stack_dir.mkdir(parents=True, exist_ok=True)
     (stack_dir / "meta_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.61,
+                "macro_f1": 0.6,
+                "macro_recall": 0.59,
+                "n_test_samples": 2,
+                "metric_source": "stacking_final",
+                "is_final_stage2_result": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stack_dir / "final_metrics.json").write_text(
         json.dumps(
             {
                 "top1": 0.91,
@@ -270,7 +283,45 @@ def test_metric_source_prefers_level2_final_artifact_over_eval_json(tmp_path: Pa
     assert code == 0
     report_text = (run_dir / "report.md").read_text(encoding="utf-8")
     assert "Metric Source: stacking" in report_text
-    assert "stacking/meta_metrics.json" in report_text
+    assert "Top-1: 0.9100" in report_text
+    assert "stacking/final_metrics.json" in report_text
+
+
+def test_metric_source_prefers_moe_artifact_over_stacking_final(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "stage2-moe-final-report-source"
+    _write_run_config(run_dir)
+    (run_dir / "metrics.csv").write_text(
+        "epoch,train_loss,val_loss,train_acc,val_acc,val_macro_f1\n1,0.8,0.7,0.6,0.5,0.4\n",
+        encoding="utf-8",
+    )
+    stack_dir = run_dir / "stacking"
+    moe_dir = run_dir / "moe"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    moe_dir.mkdir(parents=True, exist_ok=True)
+    (stack_dir / "final_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.81,
+                "macro_f1": 0.8,
+                "macro_recall": 0.79,
+                "n_test_samples": 2,
+                "metric_source": "stacking_final",
+                "is_final_stage2_result": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (moe_dir / "moe_metrics.json").write_text(
+        json.dumps({"top1": 0.93, "macro_f1": 0.92, "macro_recall": 0.91, "n_test_samples": 2}),
+        encoding="utf-8",
+    )
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Metric Source: moe" in report_text
+    assert "Top-1: 0.9300" in report_text
+    assert "moe/moe_metrics.json" in report_text
 
 
 def test_stacking_rejects_eval_artifact_with_oof_semantics(tmp_path: Path, monkeypatch):

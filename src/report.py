@@ -18,12 +18,11 @@ from src.run_dir import resolve_run_dir
 
 def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, Path]:
     """
-    Canonical final-metric rule (single source of truth):
-    1) Prefer later-stage MoE metrics when present.
-    2) Otherwise prefer stacking final artifact when present.
-    3) Otherwise prefer stacking meta artifact only when it explicitly declares itself final.
-    4) Otherwise fall back to eval artifacts (eval_test.json, then other eval_*.json).
-    5) Otherwise return stacking meta if present, else a non-existent eval_test.json placeholder.
+    Canonical final-metric rule:
+    - explicit level3 final (moe/final_metrics.json) beats level2 final
+    - level2 final (stacking/final_metrics.json) beats level2 meta fallback
+    - plain moe/moe_metrics.json is not treated as a level3 final unless no stronger final artifact exists
+    - eval artifacts are only used when no stage2 final artifacts exist
     """
 
     def _read_json(path: Path) -> dict:
@@ -32,17 +31,17 @@ def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, 
     def _is_stage2_final(payload: dict) -> bool:
         return bool(payload.get("is_final_stage2_result")) or str(payload.get("metric_source", "")) == "stacking_final"
 
+    # Later-stage final (if present) should supersede stacking-final.
     moe_final = run_dir / "moe" / "final_metrics.json"
     if moe_final.exists():
         return "moe", moe_final
-    moe_file = run_dir / "moe" / "moe_metrics.json"
-    if moe_file.exists():
-        return "moe", moe_file
 
+    # Canonical level2 final artifact.
     stacking_final = run_dir / "stacking" / "final_metrics.json"
     if stacking_final.exists():
         return "stacking", stacking_final
 
+    # Legacy / fallback: only treat meta_metrics as canonical when it explicitly declares final semantics.
     stacking_meta = run_dir / "stacking" / "meta_metrics.json"
     if stacking_meta.exists():
         try:
@@ -52,6 +51,13 @@ def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, 
         if _is_stage2_final(payload):
             return "stacking", stacking_meta
 
+    # Plain moe_metrics is a fallback metric artifact, but not a stronger "final"
+    # than an explicit stacking final.
+    moe_file = run_dir / "moe" / "moe_metrics.json"
+    if moe_file.exists():
+        return "moe", moe_file
+
+    # Non-stage2 runs fall back to eval artifacts.
     eval_test = run_dir / "eval_test.json"
     if eval_test.exists():
         return "eval", eval_test
@@ -60,6 +66,7 @@ def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, 
     if other_eval_files:
         return "eval", other_eval_files[0]
 
+    # As a final fallback, return whatever exists (even if non-final) to keep report generation usable.
     if stacking_meta.exists():
         return "stacking", stacking_meta
 
@@ -183,37 +190,10 @@ def _discover_metric_payload(run_dir: Path) -> Tuple[dict, str, Path]:
     def _read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _is_stage2_final(payload: dict) -> bool:
-        return bool(payload.get("is_final_stage2_result")) or str(payload.get("metric_source", "")) == "stacking_final"
-
-    stacking_final = run_dir / "stacking" / "final_metrics.json"
-    if stacking_final.exists():
-        payload = _read_json(stacking_final)
-        if _is_stage2_final(payload):
-            return payload, "stacking", stacking_final
-
-    stacking_file = run_dir / "stacking" / "meta_metrics.json"
-    stacking_payload = _read_json(stacking_file) if stacking_file.exists() else None
-    if stacking_payload is not None and _is_stage2_final(stacking_payload):
-        return stacking_payload, "stacking", stacking_file
-
-    eval_test = run_dir / "eval_test.json"
-    if eval_test.exists():
-        return _read_json(eval_test), "eval", eval_test
-
-    other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
-    if other_eval_files:
-        path = other_eval_files[0]
-        return _read_json(path), "eval", path
-
-    if stacking_payload is not None:
-        return stacking_payload, "stacking", stacking_file
-
-    moe_file = run_dir / "moe" / "moe_metrics.json"
-    if moe_file.exists():
-        return _read_json(moe_file), "moe", moe_file
-
-    return {}, "none", eval_test
+    metric_source, metric_path = resolve_canonical_final_metric_source_and_path(run_dir)
+    if not metric_path.exists():
+        return {}, metric_source, metric_path
+    return _read_json(metric_path), metric_source, metric_path
 
 
 def _select_report_best_row(run_dir: Path, metrics: pd.DataFrame) -> pd.Series:
