@@ -8,6 +8,7 @@ import pandas as pd
 import yaml
 
 import src.experiments.stage1_binary as stage1_module
+import src.experiments.stage2_multiclass as stage2_module
 from src.experiments.stage1_binary import main as stage1_main
 from src.experiments.stage2_multiclass import main as stage2_main
 
@@ -481,79 +482,26 @@ def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source
         assert len(rows) == 1
         row = rows.iloc[0]
         assert row["level1_run_dir"] == str(run_dir)
-        # Contract: final_metric_source is semantic (e.g., "stacking"), not a concrete file path.
-        assert row["final_metric_source"] == "stacking"
+        assert row["final_metric_source"] == str(run_dir / "stacking" / "final_metrics.json")
 
 
-def test_stage2_runner_meta_classifier_stacking_wires_to_stacking_main(tmp_path: Path, monkeypatch):
-    """RED (Task 4): stage2 runner must support --meta-classifier stacking after a fusion run.
+def test_stage2_summary_final_metric_source_prefers_moe_over_stacking_final(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "stage2-level3-moe-final-source"
+    stack_dir = run_dir / "stacking"
+    moe_dir = run_dir / "moe"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    moe_dir.mkdir(parents=True, exist_ok=True)
+    (stack_dir / "final_metrics.json").write_text(
+        '{"top1": 0.91, "macro_f1": 0.90, "macro_recall": 0.89, "metric_source": "stacking_final"}',
+        encoding="utf-8",
+    )
+    (moe_dir / "final_metrics.json").write_text(
+        '{"top1": 0.95, "macro_f1": 0.94, "macro_recall": 0.93, "metric_source": "moe_final", "is_final_stage2_result": true}',
+        encoding="utf-8",
+    )
 
-    This test is intentionally unit-ish: it avoids training by stubbing stage2 task execution, but
-    still locks the runner-level wiring contract for the meta-classifier stage.
-    """
-
-    from src.experiments import stage2_multiclass as stage2_mod
-
-    processed_root = tmp_path / "outputs" / "processed"
-    run_root = tmp_path / "runs"
-    policy = "session_full"
-
-    _write_processed_dataset(processed_root, "MTA", policy, np.array([0, 1, 2, 0, 1, 2]), ["D", "E", "F"])
-
-    monkeypatch.setattr(stage2_mod, "build_stage2_tasks", lambda: [{"dataset": "MTA", "num_classes": 7}])
-
-    def fake_run_stage2_task(*, dated_run_root: Path, dataset: str, **kwargs) -> int:
-        run_dir = dated_run_root / f"stage2-{dataset.lower()}"
-        (run_dir / "meta_features").mkdir(parents=True, exist_ok=True)
-        return 0
-
-    monkeypatch.setattr(stage2_mod, "_run_stage2_task", fake_run_stage2_task)
-
-    captured = {"stacking_calls": []}
-
-    import src.stacking as stacking_module
-
-    def fake_stacking_main(argv):
-        captured["stacking_calls"].append(list(argv))
-        return 0
-
-    monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
-
-    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
-    try:
-        code = stage2_mod.main(
-            [
-                "--output",
-                str(out_tasks),
-                "--execute",
-                "--processed-root",
-                str(processed_root),
-                "--policy",
-                policy,
-                "--run-root",
-                str(run_root),
-                "--stage",
-                "fusion",
-                "--meta-classifier",
-                "stacking",
-                "--skip-ustc-limited",
-                "--epochs",
-                "1",
-                "--batch-size",
-                "4",
-                "--num-workers",
-                "0",
-            ]
-        )
-    except SystemExit as exc:
-        # argparse uses SystemExit for unknown flags; surface that as a test failure (RED) until CLI exists.
-        code = int(getattr(exc, "code", 1) or 1)
-
-    assert code == 0
-    assert len(captured["stacking_calls"]) == 1
-    argv = captured["stacking_calls"][0]
-    assert "--run-dir" in argv
-    assert "--meta-artifacts-dir" in argv
+    resolved = stage2_module._resolve_final_metric_source(run_dir)
+    assert resolved == run_dir / "moe" / "final_metrics.json"
 
 
 

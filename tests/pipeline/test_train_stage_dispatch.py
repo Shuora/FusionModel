@@ -172,6 +172,7 @@ def test_dispatch_stage_stacking_forwards_device_and_num_workers(monkeypatch, tm
     import src.stacking as stacking_module
 
     monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
+    monkeypatch.setattr(train_module, "_ensure_legacy_meta_artifacts", lambda **kwargs: 0)
 
     args = argparse.Namespace(
         stacking_n_splits=4,
@@ -192,23 +193,24 @@ def test_dispatch_stage_stacking_forwards_device_and_num_workers(monkeypatch, tm
 
     code = train_module._dispatch_stage(stage="stacking", run_dir=run_dir, args=args, log=log)
     assert code == 0
-    argv = captured["argv"]
-    assert "--run-dir" in argv
-    idx = argv.index("--run-dir")
-    assert argv[idx + 1] == str(run_dir)
-
-    # Contract: runner must wire stacking in artifact-consumer mode via --meta-artifacts-dir.
-    assert "--meta-artifacts-dir" in argv
-    idx = argv.index("--meta-artifacts-dir")
-    assert argv[idx + 1] == str(run_dir / "meta_features")
-
-    # Keep the contract sharp without locking the entire argv ordering.
-    assert "--n-splits" in argv
-    assert "--oof-epochs" in argv
-    assert "--batch-size" in argv
-    assert "--device" in argv
-    assert "--num-workers" in argv
-    assert "--seed" in argv
+    assert captured["argv"] == [
+        "--run-dir",
+        str(run_dir),
+        "--meta-artifacts-dir",
+        str(run_dir / "meta_features"),
+        "--n-splits",
+        "4",
+        "--oof-epochs",
+        "3",
+        "--batch-size",
+        "12",
+        "--device",
+        "auto",
+        "--num-workers",
+        "1",
+        "--seed",
+        "77",
+    ]
 
 
 def test_dispatch_stage_meta_classifier_passes_meta_artifacts_dir(monkeypatch, tmp_path: Path):
@@ -221,6 +223,7 @@ def test_dispatch_stage_meta_classifier_passes_meta_artifacts_dir(monkeypatch, t
     import src.stacking as stacking_module
 
     monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
+    monkeypatch.setattr(train_module, "_ensure_legacy_meta_artifacts", lambda **kwargs: 0)
 
     args = argparse.Namespace(
         stacking_n_splits=3,
@@ -246,3 +249,41 @@ def test_dispatch_stage_meta_classifier_passes_meta_artifacts_dir(monkeypatch, t
     assert "--meta-artifacts-dir" in argv
     idx = argv.index("--meta-artifacts-dir")
     assert argv[idx + 1] == str(run_dir / "meta_features")
+
+
+def test_dispatch_stage_stacking_respects_meta_artifacts_dir_override(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    def fake_stacking_main(argv):
+        captured["argv"] = list(argv)
+        return 0
+
+    import src.stacking as stacking_module
+
+    monkeypatch.setattr(stacking_module, "main", fake_stacking_main)
+    monkeypatch.setattr(train_module, "_ensure_legacy_meta_artifacts", lambda **kwargs: 0)
+
+    override_dir = tmp_path / "shared-meta" / "level2"
+    args = argparse.Namespace(
+        stacking_n_splits=3,
+        stacking_oof_epochs=2,
+        batch_size=8,
+        seed=321,
+        lr=0.001,
+        device="cpu",
+        num_workers=0,
+        meta_artifacts_dir=str(override_dir),
+    )
+    run_dir = tmp_path / "override-meta-dispatch-run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    logs = []
+
+    def log(level: str, module: str, event: str, kv: dict) -> None:
+        logs.append((level, module, event, kv))
+
+    code = train_module._dispatch_stage(stage="stacking", run_dir=run_dir, args=args, log=log)
+    assert code == 0
+    argv = captured["argv"]
+    idx = argv.index("--meta-artifacts-dir")
+    assert argv[idx + 1] == str(override_dir)
