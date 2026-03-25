@@ -180,22 +180,38 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 
 def _discover_metric_payload(run_dir: Path) -> Tuple[dict, str, Path]:
+    def _read_json(path: Path) -> dict:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _is_stage2_final(payload: dict) -> bool:
+        return bool(payload.get("is_final_stage2_result")) or str(payload.get("metric_source", "")) == "stacking_final"
+
+    stacking_final = run_dir / "stacking" / "final_metrics.json"
+    if stacking_final.exists():
+        payload = _read_json(stacking_final)
+        if _is_stage2_final(payload):
+            return payload, "stacking", stacking_final
+
+    stacking_file = run_dir / "stacking" / "meta_metrics.json"
+    stacking_payload = _read_json(stacking_file) if stacking_file.exists() else None
+    if stacking_payload is not None and _is_stage2_final(stacking_payload):
+        return stacking_payload, "stacking", stacking_file
+
     eval_test = run_dir / "eval_test.json"
     if eval_test.exists():
-        return json.loads(eval_test.read_text(encoding="utf-8")), "eval", eval_test
+        return _read_json(eval_test), "eval", eval_test
 
     other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
     if other_eval_files:
         path = other_eval_files[0]
-        return json.loads(path.read_text(encoding="utf-8")), "eval", path
+        return _read_json(path), "eval", path
 
-    stacking_file = run_dir / "stacking" / "meta_metrics.json"
-    if stacking_file.exists():
-        return json.loads(stacking_file.read_text(encoding="utf-8")), "stacking", stacking_file
+    if stacking_payload is not None:
+        return stacking_payload, "stacking", stacking_file
 
     moe_file = run_dir / "moe" / "moe_metrics.json"
     if moe_file.exists():
-        return json.loads(moe_file.read_text(encoding="utf-8")), "moe", moe_file
+        return _read_json(moe_file), "moe", moe_file
 
     return {}, "none", eval_test
 

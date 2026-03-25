@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 import src.stacking as stacking_module
+from src.report import main as report_main
 from src.stacking import main as stacking_main
 
 
@@ -20,6 +21,9 @@ def _write_run_config(run_dir: Path) -> None:
                 "processed_root": str(run_dir / "unused_processed_root"),
                 "policy": "strict",
                 "label_mode": "multiclass",
+                "stage": "fusion",
+                "epochs": 1,
+                "batch_size": 4,
             },
             sort_keys=False,
         ),
@@ -233,6 +237,40 @@ def test_stacking_final_metric_source_is_explicit(tmp_path: Path, monkeypatch):
     final_metrics = json.loads(final_metrics_path.read_text(encoding="utf-8"))
     assert final_metrics["metric_source"] == "stacking_final"
     assert final_metrics["is_final_stage2_result"] is True
+
+
+def test_metric_source_prefers_level2_final_artifact_over_eval_json(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "stage2-final-report-source"
+    _write_run_config(run_dir)
+    (run_dir / "metrics.csv").write_text(
+        "epoch,train_loss,val_loss,train_acc,val_acc,val_macro_f1\n1,0.8,0.7,0.6,0.5,0.4\n",
+        encoding="utf-8",
+    )
+    (run_dir / "eval_test.json").write_text(
+        json.dumps({"top1": 0.11, "macro_f1": 0.12, "macro_recall": 0.13, "num_samples": 2}),
+        encoding="utf-8",
+    )
+    stack_dir = run_dir / "stacking"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    (stack_dir / "meta_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.91,
+                "macro_f1": 0.9,
+                "macro_recall": 0.89,
+                "n_test_samples": 2,
+                "metric_source": "stacking_final",
+                "is_final_stage2_result": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Metric Source: stacking" in report_text
+    assert "stacking/meta_metrics.json" in report_text
 
 
 def test_stacking_rejects_eval_artifact_with_oof_semantics(tmp_path: Path, monkeypatch):
