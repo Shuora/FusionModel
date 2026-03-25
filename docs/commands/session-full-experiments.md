@@ -353,6 +353,88 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   - `run_dir`
   这样即使不同日期重复使用同一个 `run_id`，也能直接定位到真实产物目录。
 
+### 3.2.1 推荐：`fusion + stacking meta-classifier`
+
+当前仓库已经支持把 `stage2` 跑成两级路径：
+
+1. 先训练 Level 1 `dual-branch attention fusion`
+2. 再由 runner 生成 `meta_features/`
+3. 再训练 Level 2 `stacking meta-classifier`
+4. 最终报告优先读取 canonical final metric source
+
+推荐命令：
+
+```bash
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --meta-classifier stacking \
+  --level2-impl runner_kfold_oof \
+  --level2-n-splits 3 \
+  --level2-oof-epochs 2 \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4 \
+  --skip-ustc-limited
+```
+
+关键产物目录：
+
+- Level 1 run：`runs/YYYY-MM-DD/stage2-<dataset>/`
+- Level 2 artifacts：`runs/YYYY-MM-DD/stage2-<dataset>/meta_features/`
+- Level 2 outputs：`runs/YYYY-MM-DD/stage2-<dataset>/stacking/`
+
+关键产物文件：
+
+- `meta_features/oof_meta_train.npz`
+- `meta_features/meta_test.npz`
+- `stacking/meta_metrics.json`
+- `stacking/final_metrics.json`
+
+说明：
+
+- `stacking/final_metrics.json` 是当前 Level 2 canonical final metric file。
+- `stage2_execution_summary.json` 里的 `final_metric_source` 已对齐到 canonical 结果路径，而不是旧的 `meta_metrics.json` 回退路径。
+- `level1_run_dir` 会记录对应 dataset 的 Level 1 run 目录。
+
+### 3.2.2 可选：`Level 3 MoE`
+
+如果你想在 `stacking` 之后继续叠加一个可选 `Level 3` 增强器：
+
+```bash
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --meta-classifier stacking \
+  --level3-router moe \
+  --skip-ustc-limited
+```
+
+说明：
+
+- `moe/` 是 optional Level 3 hook，不是默认主路径。
+- 若生成了 `moe/final_metrics.json`，它会在 report/summary 中覆盖 `stacking/final_metrics.json`，成为 canonical final metric source。
+- 如果只跑了 `moe/moe_metrics.json` 而没有显式 Level 3 final artifact，它不会自动盖过 Level 2 final。
+
 如果你只想跑 3 个基础任务，不跑额外 USTC 限样任务：
 
 ```bash
