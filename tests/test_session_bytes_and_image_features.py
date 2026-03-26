@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from scapy.all import Ether, IP, TCP, Raw, wrpcap
 
 from fusion_malicious.data.image_features import bytes_to_rgb_image
@@ -27,3 +28,14 @@ def test_bytes_to_rgb_image_returns_28x28x3_uint8() -> None:
     assert image[..., 0].max() > 0
     assert image[..., 1].max() > 0
     assert image[..., 2].max() > 0
+
+
+def test_bytes_to_rgb_image_diff_handles_negative_changes() -> None:
+    raw = bytes([0x0A, 0x05]) + b"\x00" * (784 - 2)
+    diff_channel = bytes_to_rgb_image(raw)[..., 1].flatten()
+    assert diff_channel[1] == 5
+
+
+def test_bytes_to_rgb_image_requires_784_bytes() -> None:
+    with pytest.raises(ValueError, match="size=784"):
+        bytes_to_rgb_image(bytes(100), size=100)
