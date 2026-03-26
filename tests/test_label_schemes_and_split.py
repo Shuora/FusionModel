@@ -26,6 +26,19 @@ def test_assign_binary_label_marks_iscx_as_benign() -> None:
     assert assign_binary_label(malicious) == 1
 
 
+def test_assign_binary_label_handles_additional_known_datasets() -> None:
+    vpn_record = make_record("c", "ISCX-VPN-NonVPN-2016", "VPN")
+    mfcp_record = make_record("d", "MFCP", "Trickbot")
+    assert assign_binary_label(vpn_record) == 0
+    assert assign_binary_label(mfcp_record) == 1
+
+
+def test_assign_binary_label_rejects_unknown_dataset() -> None:
+    unknown = make_record("e", "USTC", "SomeFamily")
+    with pytest.raises(ValueError):
+        assign_binary_label(unknown)
+
+
 def test_build_multiclass_label_map_uses_sorted_family_names() -> None:
     records = [
         make_record("a", "MTA", "Trickbot"),
