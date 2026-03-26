@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Union
 
 import importlib.util
+import os
+import subprocess
 import sys
 
 import pytest
@@ -95,3 +97,17 @@ def test_evaluate_rejects_non_checkpoint_file(tmp_path):
     bad_checkpoint.write_text("not a checkpoint")
     with pytest.raises(RuntimeError):
         module.validate_checkpoint(bad_checkpoint)
+
+
+def test_training_scripts_help_runs():
+    env = os.environ.copy()
+    env["PYTHONPATH"] = ""
+    env["PYTHONUSERBASE"] = ""
+    for script in ("scripts/train_binary.py", "scripts/train_multiclass.py"):
+        subprocess.run(
+            [sys.executable, str(repo_root / script), "--help"],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )

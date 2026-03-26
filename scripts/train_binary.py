@@ -6,15 +6,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import torch
-import yaml
-
-from fusion_malicious.config import build_run_layout
-
 repo_root = Path(__file__).resolve().parents[1]
 src_path = repo_root / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
+
+import torch
+import yaml
+
+from fusion_malicious.config import build_run_layout
 
 def build_parser() -> argparse.ArgumentParser:
     default_config = repo_root / "configs" / "binary.yaml"
