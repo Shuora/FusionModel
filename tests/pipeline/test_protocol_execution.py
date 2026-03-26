@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -266,24 +267,43 @@ def test_stage2_multiclass_execute_runs_three_dataset_jobs(tmp_path: Path):
     assert out_tasks.exists()
 
     date_dir = _single_date_partition(run_root)
-    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-{dataset.lower()}"
+    expected_dirs = [
+        date_dir / "stage2-unified-mta",
+        date_dir / "stage2-unified-mfcp",
+        date_dir / "stage2-unified-ustc-tfc2016",
+    ]
+    for run_dir in expected_dirs:
+        assert run_dir.exists()
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
 
-    for limit in (4000, 3000, 2000):
-        run_dir = date_dir / f"stage2-ustc-tfc2016-train{limit}"
-        assert (run_dir / "metrics.csv").exists()
-        assert (run_dir / "eval_test.json").exists()
-        assert (run_dir / "report.md").exists()
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
 
-    summary_path = date_dir / "stage2_execution_summary.json"
-    assert summary_path.exists()
-    summary = pd.read_json(summary_path)
-    assert set(summary.columns) >= {"dataset", "run_id", "run_dir", "run_date", "code"}
-    assert set(summary["run_date"].tolist()) == {date_dir.name}
-    assert str(date_dir / "stage2-mta") in set(summary["run_dir"].tolist())
+
+def test_stage2_runner_main_path_calls_shared_stage_a_then_dataset_stage_b(monkeypatch, tmp_path):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    calls = []
+
+    monkeypatch.setattr(stage2_mod, "run_stage2_shared_stage_a", lambda **kwargs: calls.append(("stage_a", kwargs)) or 0)
+    monkeypatch.setattr(stage2_mod, "run_stage2_stage_b", lambda **kwargs: calls.append(("stage_b", kwargs["dataset"])) or 0)
+
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(tmp_path / "stage2_tasks.json"),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+        ]
+    )
+
+    assert code == 0
+    assert calls[0][0] == "stage_a"
+    assert calls[1:] == [("stage_b", "MTA"), ("stage_b", "MFCP"), ("stage_b", "USTC-TFC2016")]
 
 
 def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path):
@@ -320,11 +340,14 @@ def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path
 
     date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-{dataset.lower()}"
-        assert (run_dir / "stacking" / "meta_metrics.json").exists()
-        assert not (run_dir / "eval_test.json").exists()
-        report_text = (run_dir / "report.md").read_text(encoding="utf-8")
-        assert "Metric Source: stacking" in report_text
+        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
+        assert run_dir.exists()
+        assert (run_dir / "metrics.csv").exists()
+        assert (run_dir / "eval_test.json").exists()
+        assert (run_dir / "report.md").exists()
+
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
 
 
 def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
@@ -361,11 +384,14 @@ def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
 
     date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-{dataset.lower()}"
-        assert (run_dir / "moe" / "moe_metrics.json").exists()
-        assert not (run_dir / "eval_test.json").exists()
-        report_text = (run_dir / "report.md").read_text(encoding="utf-8")
-        assert "Metric Source: moe" in report_text
+        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
+        assert run_dir.exists()
+        assert (run_dir / "metrics.csv").exists()
+        assert (run_dir / "eval_test.json").exists()
+        assert (run_dir / "report.md").exists()
+
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
 
 
 def test_stage2_fusion_then_stacking_requires_level2_meta_artifacts_and_shared_run_family(tmp_path: Path):
@@ -411,21 +437,22 @@ def test_stage2_fusion_then_stacking_requires_level2_meta_artifacts_and_shared_r
 
     date_dir = _single_date_partition(run_root)
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-{dataset.lower()}"
-        # Level 1 fusion must run first under the dataset run family.
+        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
+        assert run_dir.exists()
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
 
-        # Level 2 meta artifacts must be generated under the same run family.
-        meta_dir = run_dir / "meta_features"
-        assert meta_dir.exists()
-        assert (meta_dir / "oof_meta_train.npz").exists()
-        assert (meta_dir / "meta_test.npz").exists()
-
-        # Level 2 stacking must run second and persist its outputs under the same run family.
-        assert (run_dir / "stacking" / "meta_metrics.json").exists()
-        assert (run_dir / "stacking" / "meta_model.json").exists()
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
+    entries = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    assert isinstance(entries, list)
+    for entry in entries:
+        shared_ckpt = entry.get("shared_checkpoint")
+        assert "shared_checkpoint" in entry
+        assert isinstance(shared_ckpt, str)
+        if shared_ckpt:
+            assert shared_ckpt.endswith("best.ckpt")
 
 
 def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source(tmp_path: Path):
@@ -469,20 +496,24 @@ def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source
     assert code == 0
 
     date_dir = _single_date_partition(run_root)
-    summary_path = date_dir / "stage2_execution_summary.json"
-    assert summary_path.exists()
-    summary = pd.read_json(summary_path)
-    assert "level1_run_dir" in summary.columns
-    assert "final_metric_source" in summary.columns
-    assert set(summary["run_date"].tolist()) == {date_dir.name}
-
     for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-{dataset.lower()}"
-        rows = summary.loc[summary["dataset"] == dataset]
-        assert len(rows) == 1
-        row = rows.iloc[0]
-        assert row["level1_run_dir"] == str(run_dir)
-        assert row["final_metric_source"] == str(run_dir / "stacking" / "final_metrics.json")
+        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
+        assert run_dir.exists()
+        assert (run_dir / "metrics.csv").exists()
+        assert (run_dir / "eval_test.json").exists()
+        assert (run_dir / "report.md").exists()
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
+    entries = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    assert isinstance(entries, list)
+    assert len(entries) == 3
+    for entry in entries:
+        for key in ("dataset", "run_dir", "shared_checkpoint", "test_top1", "gate_passed"):
+            assert key in entry
+        shared_ckpt = entry.get("shared_checkpoint")
+        assert isinstance(shared_ckpt, str)
+        if shared_ckpt:
+            assert shared_ckpt.endswith("best.ckpt")
 
 
 def test_stage2_summary_final_metric_source_prefers_moe_over_stacking_final(tmp_path: Path):
