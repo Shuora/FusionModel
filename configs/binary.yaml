@@ -1,0 +1,22 @@
+task_name: binary_iscx_mta_mfcp
+num_classes: 2
+train_split: 0.7
+val_split: 0.1
+test_split: 0.2
+image_size: 112
+fixed_bytes: 784
+train:
+  subset: train
+  dataset: iscx_mta_mfcp
+  batch_size: 64
+  source_root: SourceData/iscx_mta_mfcp
+val:
+  subset: val
+  dataset: iscx_mta_mfcp
+  batch_size: 64
+  source_root: SourceData/iscx_mta_mfcp
+test:
+  subset: test
+  dataset: iscx_mta_mfcp
+  batch_size: 64
+  source_root: SourceData/iscx_mta_mfcp
