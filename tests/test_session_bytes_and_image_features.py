@@ -26,3 +26,4 @@ def test_bytes_to_rgb_image_returns_28x28x3_uint8() -> None:
     assert image.dtype == np.uint8
     assert image[..., 0].max() > 0
     assert image[..., 1].max() > 0
+    assert image[..., 2].max() > 0
