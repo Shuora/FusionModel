@@ -19,8 +19,11 @@ def _rolling_entropy(values: np.ndarray, window: int = 8) -> np.ndarray:
 
 
 def bytes_to_rgb_image(raw_bytes: bytes, size: int = 784) -> np.ndarray:
+    if size != 784:
+        raise ValueError("bytes_to_rgb_image only supports size=784 for 28x28 reshaping")
     base = normalize_session_bytes(raw_bytes, size=size)
-    diff = np.abs(np.diff(base, prepend=base[:1])).astype(np.uint8)
+    base_int = base.astype(np.int16)
+    diff = np.abs(np.diff(base_int, prepend=base_int[:1])).astype(np.uint8)
     entropy = _rolling_entropy(base)
     stacked = np.stack([base, diff, entropy], axis=-1)
     return stacked.reshape(28, 28, 3)
