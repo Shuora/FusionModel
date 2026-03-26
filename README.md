@@ -2,6 +2,8 @@
 
 This repository hosts a lightweight CLI surface covering the binary/multiclass experiments described in Task 9. The scripts rely on the `FusionModel` conda environment and the YAML slices located in `configs/`.
 
+**Note:** These Task 9 scripts are configuration routings and CLI scaffolding only. They parse YAML, request CUDA, and prepare the dated run directories, but they do not yet execute the complete training pipeline or emit checkpoints.
+
 ## Setup
 
 ```bash
@@ -33,7 +35,9 @@ python scripts/train_multiclass.py --config configs/mta.yaml
 ## Evaluation
 
 ```bash
-python scripts/evaluate.py --config configs/mta.yaml --checkpoint runs/mta_7cls/<latest>/checkpoints/model.pt
+python scripts/evaluate.py --config configs/mta.yaml --checkpoint <path-to-preexisting-checkpoint>.pt
 ```
+
+The evaluation script assumes you already have a checkpoint (e.g., produced by the integrated training pipeline that will run once Task 9 evolves); it validates the provided file rather than creating one.
 
 Adjust the dataset splits under `configs/` and the training/evaluation scripts as the project matures.

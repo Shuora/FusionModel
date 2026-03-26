@@ -5,7 +5,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pickle
+import torch
 import yaml
+
+ALLOWED_CHECKPOINT_SUFFIXES = {".pt", ".pth"}
 
 repo_root = Path(__file__).resolve().parents[1]
 src_path = repo_root / "src"
@@ -39,6 +43,12 @@ def load_config(path: Path) -> dict[str, Any]:
 def validate_checkpoint(path: Path) -> None:
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint {path} does not exist.")
+    if path.suffix not in ALLOWED_CHECKPOINT_SUFFIXES:
+        raise ValueError("Checkpoint must use one of: " + ", ".join(sorted(ALLOWED_CHECKPOINT_SUFFIXES)))
+    try:
+        torch.load(path, map_location="cpu")
+    except (RuntimeError, ValueError, pickle.UnpicklingError) as exc:
+        raise RuntimeError(f"{path} is not a readable PyTorch checkpoint.") from exc
 
 
 def main() -> None:
