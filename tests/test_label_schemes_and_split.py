@@ -2,6 +2,8 @@ from fusion_malicious.data.label_schemes import (
     assign_binary_label,
     build_multiclass_label_map,
 )
+import pytest
+
 from fusion_malicious.data.records import SessionRecord
 from fusion_malicious.data.split import stratified_split_records
 
@@ -48,3 +50,11 @@ def test_stratified_split_records_preserves_total_count() -> None:
     assert len(split["train"]) + len(split["val"]) + len(split["test"]) == 20
     assert len(split["test"]) == 4
     assert {record.label_id for record in split["train"]} == {0, 1}
+
+
+def test_stratified_split_records_rejects_incorrect_sizes() -> None:
+    records = [make_record("a", "ISCX", "VPN"), make_record("b", "MTA", "Trickbot")]
+    with pytest.raises(ValueError):
+        stratified_split_records(
+            records, train_size=0.6, val_size=0.2, test_size=0.3, seed=1
+        )
