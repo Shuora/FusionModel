@@ -57,6 +57,9 @@ class Trainer:
         )
         self.stages = list(stages)
         self.current_stage_index = 0
+        self._active_text_mode: str | None = None
+        self._oom_policy: OOMFallbackPolicy | None = None
+        self._sync_stage_mode()
 
     @property
     def current_stage(self) -> StageConfig | None:
@@ -66,11 +69,14 @@ class Trainer:
 
     @property
     def active_text_mode(self) -> str | None:
+        if self._active_text_mode:
+            return self._active_text_mode
         stage = self.current_stage
         return stage.text_train_mode if stage else None
 
     def run_epoch(self, loader: Iterable[dict], train_mode: bool) -> dict[str, float]:
         """Execute a single epoch of train/eval and collect loss/accuracy."""
+        self._sync_stage_mode()
         self.model.train(train_mode)
         total_loss = 0.0
         correct = 0
@@ -81,7 +87,6 @@ class Trainer:
         )
 
         for batch in progress:
-            steps += 1
             tensors = {
                 key: value.to(self.device)
                 for key, value in batch.items()
@@ -91,28 +96,37 @@ class Trainer:
             if labels is None:
                 raise KeyError("Batch must include 'label'.")
 
-            with torch.amp.autocast(device_type=self.device.type, enabled=self.scaler is not None):
-                logits = self.model(
-                    tensors.get("image"),
-                    tensors.get("input_ids"),
-                    tensors.get("attention_mask"),
-                )
-                loss = self.criterion(logits, labels)
+            try:
+                with torch.set_grad_enabled(train_mode), torch.amp.autocast(
+                    device_type=self.device.type, enabled=self.scaler is not None
+                ):
+                    logits = self.model(
+                        tensors.get("image"),
+                        tensors.get("input_ids"),
+                        tensors.get("attention_mask"),
+                    )
+                    loss = self.criterion(logits, labels)
 
-            if train_mode:
-                self.optimizer.zero_grad()
-                if self.scaler:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    self.optimizer.step()
+                if train_mode:
+                    self.optimizer.zero_grad()
+                    if self.scaler:
+                        self.scaler.scale(loss).backward()
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        loss.backward()
+                        self.optimizer.step()
+            except RuntimeError as exc:
+                if "out of memory" in str(exc).lower():
+                    self._handle_oom()
+                    continue
+                raise
 
             total_loss += float(loss.item())
             preds = logits.argmax(dim=1)
             correct += int((preds == labels).sum().item())
             total += labels.size(0)
+            steps += 1
             progress.set_postfix(
                 loss=total_loss / steps, acc=(correct / total if total else 0.0)
             )
@@ -131,3 +145,30 @@ class Trainer:
         """Move to the next stage if available."""
         if self.current_stage_index + 1 < len(self.stages):
             self.current_stage_index += 1
+            self._sync_stage_mode()
+
+    def _handle_oom(self) -> None:
+        """Handle CUDA OOM by downgrading text mode and clearing cache."""
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        next_mode = (
+            self._oom_policy.next_mode() if self._oom_policy else "partial"
+        )
+        stage = self.current_stage
+        if stage:
+            self.stages[self.current_stage_index] = StageConfig(
+                name=stage.name,
+                enable_fusion=stage.enable_fusion,
+                text_train_mode=next_mode,
+            )
+        self._sync_stage_mode()
+
+    def _sync_stage_mode(self) -> None:
+        """Refresh the tracked text mode and OOM policy for the current stage."""
+        stage = self.current_stage
+        if stage:
+            self._active_text_mode = stage.text_train_mode
+            self._oom_policy = OOMFallbackPolicy(stage.text_train_mode)
+        else:
+            self._active_text_mode = None
+            self._oom_policy = OOMFallbackPolicy("full")
