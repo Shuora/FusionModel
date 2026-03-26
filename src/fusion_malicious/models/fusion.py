@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 from torch import nn
 
@@ -14,8 +16,14 @@ class BidirectionalCrossAttention(nn.Module):
         self,
         image_tokens: torch.Tensor,
         text_tokens: torch.Tensor,
+        text_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        image_attended, _ = self.image_to_text(image_tokens, text_tokens, text_tokens)
+        image_attended, _ = self.image_to_text(
+            image_tokens,
+            text_tokens,
+            text_tokens,
+            key_padding_mask=text_key_padding_mask,
+        )
         text_attended, _ = self.text_to_image(text_tokens, image_tokens, image_tokens)
         return image_attended, text_attended
 
