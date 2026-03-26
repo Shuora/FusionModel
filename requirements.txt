@@ -1,0 +1,14 @@
+accelerate
+matplotlib
+numpy
+pandas
+peft
+PyYAML
+scapy
+scikit-learn
+seaborn
+torch
+torchvision
+timm
+transformers
+tqdm

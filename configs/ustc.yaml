@@ -1,0 +1,22 @@
+task_name: ustc_10cls
+num_classes: 10
+train_split: 0.7
+val_split: 0.1
+test_split: 0.2
+image_size: 112
+fixed_bytes: 784
+train:
+  subset: train
+  dataset: ustc
+  batch_size: 32
+  source_root: SourceData/ustc
+val:
+  subset: val
+  dataset: ustc
+  batch_size: 32
+  source_root: SourceData/ustc
+test:
+  subset: test
+  dataset: ustc
+  batch_size: 32
+  source_root: SourceData/ustc

@@ -1,0 +1,22 @@
+task_name: mta_7cls
+num_classes: 7
+train_split: 0.7
+val_split: 0.1
+test_split: 0.2
+image_size: 112
+fixed_bytes: 784
+train:
+  subset: train
+  dataset: mta_multiclass
+  batch_size: 48
+  source_root: SourceData/mta
+val:
+  subset: val
+  dataset: mta_multiclass
+  batch_size: 48
+  source_root: SourceData/mta
+test:
+  subset: test
+  dataset: mta_multiclass
+  batch_size: 48
+  source_root: SourceData/mta
