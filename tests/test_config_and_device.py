@@ -1,11 +1,14 @@
 from datetime import datetime
 from pathlib import Path
+import random
 
+import numpy as np
 import pytest
 import torch
 
 from fusion_malicious.config import StageConfig, build_run_layout
 from fusion_malicious.utils.device import require_cuda
+from fusion_malicious.utils.seed import seed_everything
 
 
 def test_build_run_layout_uses_date_then_task_name(tmp_path: Path) -> None:
@@ -28,3 +31,15 @@ def test_require_cuda_raises_when_cuda_is_missing(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="CUDA"):
         require_cuda()
+
+
+def test_seed_everything_produces_reproducible_outcomes() -> None:
+    seed_everything(222)
+    python_value = random.random()
+    numpy_value = np.random.rand()
+    torch_value = torch.rand(2).tolist()
+
+    seed_everything(222)
+    assert python_value == random.random()
+    assert numpy_value == np.random.rand()
+    assert torch_value == torch.rand(2).tolist()
