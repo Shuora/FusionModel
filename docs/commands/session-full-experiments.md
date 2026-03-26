@@ -291,6 +291,10 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
 
 ## 3. Stage2 多分类
 
+> 语义变更（2026-03-26）：Stage2 推荐主线已切到 unified runner（shared Stage A + dataset Stage B + acceptance manifest）。
+> 
+> `stacking/moe` 两级/三级链路在 `stage2_multiclass --execute` 里属于 legacy/retired 语义，不再作为主验收路径。
+
 当前 `stage2_multiclass` 的基础任务固定为：
 
 - `MTA`，`num_classes=7`
@@ -309,7 +313,7 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
 - `stage2_tasks.json` 只会写入上面 3 个基础任务。
 - `USTC 4000/3000/2000` 限样任务不会写入这个 JSON。
 
-### 3.2 推荐：统一 cross-attention 主线（Stage A -> Stage B -> eval/report）
+### 3.2 一键执行全部基础任务
 
 ```bash
 "${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
@@ -336,19 +340,24 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --num-workers 4
 ```
 
-当前推荐的 stage2 执行主线已经固定为三步：
+当前行为：
 
-- **Stage A shared stabilization**：脚本先在 `runs/YYYY-MM-DD/stage2-unified-shared` 里训练统一的 cross-attention checkpoint，`shared_checkpoint` 会输出到 `checkpoints/best.ckpt`，供后续 Stage B 使用。
-- **Stage B per-dataset fine-tune**：紧接着依序对 `MTA`、`MFCP`、`USTC-TFC2016` 做 dataset-specific `stage2` 训练，跑出 `runs/YYYY-MM-DD/stage2-unified-<dataset>` 目录。
-- **End-to-end eval/report**：每个 dataset run 结束后都会立刻执行 `src.evaluate`/`src.report`（通过 `_run_stage_report`），并把结果写入 acceptance manifest。
+- 会先在当天日期分区下跑：
+  - `runs/YYYY-MM-DD/stage2-unified-mta`
+  - `runs/YYYY-MM-DD/stage2-unified-mfcp`
+  - `runs/YYYY-MM-DD/stage2-unified-ustc-tfc2016`
+- 主验收产物写到：
+  - `runs/YYYY-MM-DD/stage2_acceptance.json`
 
-所有 Stage B run 的 acceptance 结果会汇总到 `runs/YYYY-MM-DD/stage2_acceptance.json`，该文件目前仅包含一串字典，结构中至少记录 `dataset`、`run_dir`、`code`、`shared_checkpoint`、`test_top1` 与 `gate_passed`，Gate 0 代表协议 hygiene（code=0）、Gate 1/2/3 分别验证 `MTA>=0.70`、`MFCP>=0.70`、`USTC-TFC2016>=0.86` 的 test top1。`shared_checkpoint` 字段会写入 Stage A 产出的 `checkpoints/best.ckpt`，但如果 Stage A 尚未产出可信 checkpoint，则该字段可能是空字符串；当字段非空时，我们约定它必须以 `best.ckpt` 结尾。当前 manifest 依旧是最低限度的输出，后续如需更多 metadata 再扩展。
+### 3.2.1 Legacy/Retired：`fusion + stacking meta-classifier`
 
-**不再推荐**把 `stage2` 路径切到 stacking 或 Level 3 MoE；新主线已经固定在 shared Stage A + dataset Stage B + eval/report，中间不会再引入 stacking/meta-classifier 的训练阶段，也不会默认触发 Level 3 路由。
+以下链路保留为历史语义说明，不是当前推荐主线：
 
-### 3.3 退役：`fusion + stacking meta-classifier`
+1. Level 1 `fusion`
+2. `meta_features/`
+3. Level 2 `stacking`
 
-这段是遗留方案，仅供查阅历史产物。它曾经跑 Level 1 fusion -> meta features -> Level 2 stacking 的两级路径，但现在不再作为主线，也不接受新的维护或验收记录。
+推荐命令：
 
 ```bash
 "${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
@@ -370,18 +379,54 @@ export RUN_ID="stage1-binary-$(date +%H%M%S)"
   --fusion-layers 3 \
   --fusion-heads 5 \
   --fusion-dropout 0.2 \
+  --fusion-mode residual_enhancer \
+  --text-shortcut-scale 0.5 \
   --alpha 0.2 \
   --beta 0.2 \
   --val-fraction 0.1 \
   --best-metric val_acc \
+  --early-stopping-patience 5 \
   --device auto \
   --num-workers 4 \
   --skip-ustc-limited
 ```
 
-### 3.4 退役：`Level 3 MoE`
+关键产物目录：
 
-Level 3 路由曾作为 stacking 之上的可选增强器，现在也退役，只有在调查旧 MoE 结果时才会用。
+- Level 1 run（legacy）：`runs/YYYY-MM-DD/stage2-<dataset>/`
+- Level 2 artifacts（legacy）：`runs/YYYY-MM-DD/stage2-<dataset>/meta_features/`
+- Level 2 outputs（legacy）：`runs/YYYY-MM-DD/stage2-<dataset>/stacking/`
+
+关键产物文件：
+
+- `meta_features/oof_meta_train.npz`
+- `meta_features/meta_test.npz`
+- `stacking/meta_metrics.json`
+- `stacking/final_metrics.json`
+
+说明（legacy）：
+
+- 这些 stacking 产物不是 unified 主线验收必需产物。
+- 当前建议把 Level 1 fusion baseline 显式固定为：
+  - `--fusion-mode residual_enhancer`
+  - `--text-shortcut-scale 0.5`
+  - `--early-stopping-patience 5`
+- 即使省略这三个参数，`stage2_multiclass --execute --stage fusion` 现在也会默认提升到这套更强的 Level 1 协议；文档仍建议显式写出，避免复现实验时歧义。
+- `stage2_multiclass` 支持透传关键 train knobs 到 unified 主训练（legacy level2 链路不再是默认验收依赖），例如：
+  - `--checkpoint-selection {best_metric,score_optimized}`
+  - `--early-stopping-patience`
+  - `--class-weight-mode {none,balanced}`
+  - `--scheduler {none,cosine}`
+  - `--freeze-image-backbone-epochs`
+  - `--fusion-mode {legacy,residual_enhancer}`
+  - `--text-shortcut-scale`
+  - `--max-grad-norm`
+  - `--grad-explode-threshold`
+- 如果你之前是靠 `src.train` 直跑 stage2 并依赖这些参数提分，改用 `stage2_multiclass --execute` 时不会再静默退回弱默认值。
+
+### 3.2.2 Legacy/Retired：`Level 3 MoE`
+
+如果你想在 `stacking` 之后继续叠加一个可选 `Level 3` 增强器：
 
 ```bash
 "${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
@@ -396,11 +441,70 @@ Level 3 路由曾作为 stacking 之上的可选增强器，现在也退役，�
   --skip-ustc-limited
 ```
 
-### 3.5 按数据集分别手动跑
+说明：
+
+- `moe/` 仅保留 legacy 参考，不属于当前推荐主验收路径。
+- unified 主线验收仍以 `stage2_acceptance.json` 为准。
+
+如果你只想跑 3 个基础任务，不跑额外 USTC 限样任务：
+
+```bash
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4 \
+  --skip-ustc-limited
+```
+
+如果想自定义 USTC 限样规模：
+
+```bash
+"${PYTHON_BIN}" -m src.experiments.stage2_multiclass \
+  --output outputs/protocol/stage2_tasks.json \
+  --execute \
+  --processed-root outputs/processed \
+  --policy session_full \
+  --run-root runs \
+  --stage fusion \
+  --epochs 12 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --seed 42 \
+  --hidden-dim 160 \
+  --fusion-layers 3 \
+  --fusion-heads 5 \
+  --fusion-dropout 0.2 \
+  --alpha 0.2 \
+  --beta 0.2 \
+  --val-fraction 0.1 \
+  --best-metric val_acc \
+  --device auto \
+  --num-workers 4 \
+  --ustc-train-limits 5000 2500 1000
+```
+
+### 3.3 按数据集分别手动跑
 
 下面这些命令就是旧 `stage2-multiclass-e2e.sh` 的替代版本，直接写在总文档里维护。
 
-#### 3.5.1 MTA
+#### 3.3.1 MTA
 
 ```bash
 "${PYTHON_BIN}" -m src.data.preprocess_runner \
@@ -447,7 +551,7 @@ Level 3 路由曾作为 stacking 之上的可选增强器，现在也退役，�
   --run-dir runs/stage2-mta
 ```
 
-#### 3.5.2 MFCP
+#### 3.3.2 MFCP
 
 ```bash
 "${PYTHON_BIN}" -m src.data.preprocess_runner \
@@ -494,7 +598,7 @@ Level 3 路由曾作为 stacking 之上的可选增强器，现在也退役，�
   --run-dir runs/stage2-mfcp
 ```
 
-#### 3.5.3 USTC-TFC2016
+#### 3.3.3 USTC-TFC2016
 
 ```bash
 "${PYTHON_BIN}" -m src.data.preprocess_runner \

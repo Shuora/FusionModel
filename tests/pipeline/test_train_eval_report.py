@@ -67,6 +67,54 @@ def _prepare_dummy_processed(root: Path) -> None:
         writer.writerows(rows)
 
 
+def _prepare_dummy_processed_for_dataset(root: Path, dataset: str, *, num_classes: int = 2) -> None:
+    policy = "strict"
+    rgb_dir = root / dataset / policy / "rgb"
+    etbert_dir = root / dataset / policy / "etbert"
+    manifest_dir = root / dataset / policy / "manifest"
+    rgb_dir.mkdir(parents=True, exist_ok=True)
+    etbert_dir.mkdir(parents=True, exist_ok=True)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    session_ids = np.array([f"{dataset.lower()}-{i}" for i in range(1, 9)], dtype="U64")
+    labels = np.array([idx % num_classes for idx in range(8)], dtype=np.int32)
+    rgbs = np.random.default_rng(142).integers(0, 256, size=(8, 3, 28, 28), dtype=np.uint8)
+    input_ids = np.random.default_rng(143).integers(0, 512, size=(8, 128), dtype=np.int32)
+    attention = np.ones((8, 128), dtype=np.uint8)
+    token_types = np.zeros((8, 128), dtype=np.uint8)
+
+    np.savez_compressed(
+        rgb_dir / "rgb_shard_00000.npz",
+        session_id=session_ids,
+        label=labels,
+        rgb=rgbs,
+    )
+    np.savez_compressed(
+        etbert_dir / "etbert_shard_00000.npz",
+        session_id=session_ids,
+        input_ids=input_ids,
+        attention_mask=attention,
+        token_type_ids=token_types,
+    )
+
+    splits = ["train", "train", "train", "train", "val", "val", "test", "test"]
+    rows = [
+        {
+            "session_id": sid,
+            "dataset": dataset,
+            "family": f"Fam{label}",
+            "capture_id": f"{dataset.lower()}-{label}.pcap",
+            "split": split,
+            "policy": policy,
+        }
+        for sid, label, split in zip(session_ids, labels, splits)
+    ]
+    with (manifest_dir / "session_manifest.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def _prepare_dummy_processed_without_test(root: Path) -> None:
     dataset = "DemoSet"
     policy = "strict"
@@ -1010,6 +1058,157 @@ def test_evaluate_uses_fusion_mode_and_shortcut_scale_from_config(tmp_path: Path
     assert captured["text_shortcut_scale"] == pytest.approx(0.5)
 
 
+def test_evaluate_loads_stage2_unified_model_from_config(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "runs" / "eval-stage2-unified-run"
+    (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_id": "eval-stage2-unified-run",
+                "processed_root": str(tmp_path / "outputs" / "processed"),
+                "policy": "strict",
+                "stage": "fusion",
+                "model_type": "Stage2UnifiedClassifier",
+                "dataset_name": "MTA",
+                "dataset_vocab": {"MTA": 0},
+                "output_dims": {"MTA": 2},
+                "num_classes": 5,
+                "hidden_dim": 8,
+                "num_heads": 2,
+                "trunk_layers": 1,
+                "fusion_dropout": 0.0,
+                "device_requested": "cpu",
+                "device": "cpu",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_policy_multimodal_data",
+        lambda *args, **kwargs: {
+            "rgb": np.zeros((2, 3, 28, 28), dtype=np.float32),
+            "input_ids": np.zeros((2, 128), dtype=np.int32),
+            "attention_mask": np.ones((2, 128), dtype=np.uint8),
+            "token_type_ids": np.zeros((2, 128), dtype=np.uint8),
+            "y": np.array([0, 1], dtype=np.int32),
+            "split": np.array(["test", "test"], dtype="U8"),
+        },
+    )
+    monkeypatch.setattr(
+        evaluate_module.torch,
+        "load",
+        lambda *args, **kwargs: {"model_state": {}, "decision_threshold": 0.8},
+    )
+
+    class ShouldNotBeCalledFusionModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("MobileViTETBertFusionClassifier should not be used for Stage2UnifiedClassifier config")
+
+    captured = {"dataset_name": None}
+
+    class DummyStage2UnifiedModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def load_state_dict(self, state):
+            return
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, dataset_name, return_summary=False):
+            captured["dataset_name"] = dataset_name
+            logits = torch.tensor([[3.0, 1.0], [1.0, 3.0]], dtype=torch.float32, device=rgb.device)
+            return {"logits": logits}
+
+    monkeypatch.setattr(evaluate_module, "MobileViTETBertFusionClassifier", ShouldNotBeCalledFusionModel)
+    monkeypatch.setattr(evaluate_module, "Stage2UnifiedClassifier", DummyStage2UnifiedModel, raising=False)
+
+    code = eval_main(["--run-dir", str(run_dir), "--split", "test", "--device", "cpu"])
+    assert code == 0
+    assert captured["dataset_name"] == "MTA"
+    assert (run_dir / "eval_test.json").exists()
+    eval_payload = json.loads((run_dir / "eval_test.json").read_text(encoding="utf-8"))
+    assert eval_payload["decision_threshold"] == pytest.approx(0.8)
+    assert eval_payload["paper_precision"] is not None
+    assert eval_payload["paper_recall"] is not None
+    assert eval_payload["paper_f1"] is not None
+
+
+def test_report_stage2_unified_prefers_eval_test_over_stacking_final(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-stage2-unified-run"
+    _write_minimal_run_dir(run_dir, stage="fusion")
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    cfg["model_type"] = "Stage2UnifiedClassifier"
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    (run_dir / "eval_test.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.77,
+                "macro_precision": 0.76,
+                "macro_f1": 0.75,
+                "macro_recall": 0.74,
+                "num_samples": 10,
+                "split": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    stack_dir = run_dir / "stacking"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    (stack_dir / "final_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.99,
+                "macro_f1": 0.98,
+                "macro_recall": 0.97,
+                "n_test_samples": 10,
+                "metric_source": "stacking_final",
+                "is_final_stage2_result": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Metric Source: eval" in report_text
+    assert "Top-1: 0.7700" in report_text
+    assert "eval_test.json" in report_text
+
+
+def test_report_stage2_unified_does_not_fall_back_to_stacking_without_eval_artifact(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "report-stage2-unified-no-eval-run"
+    _write_minimal_run_dir(run_dir, stage="fusion")
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    cfg["model_type"] = "Stage2UnifiedClassifier"
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    stack_dir = run_dir / "stacking"
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    (stack_dir / "final_metrics.json").write_text(
+        json.dumps(
+            {
+                "top1": 0.99,
+                "macro_f1": 0.98,
+                "macro_recall": 0.97,
+                "n_test_samples": 10,
+                "metric_source": "stacking_final",
+                "is_final_stage2_result": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    code = report_main(["--run-dir", str(run_dir)])
+    assert code == 0
+    report_text = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Metric Source: stacking" not in report_text
+    assert "Top-1:" not in report_text
+
+
 def _early_stopping_dummy_payload() -> dict:
     return {
         "rgb": np.random.default_rng(31).integers(0, 256, size=(8, 3, 28, 28), dtype=np.uint8),
@@ -1018,6 +1217,7 @@ def _early_stopping_dummy_payload() -> dict:
         "token_type_ids": np.zeros((8, 128), dtype=np.uint8),
         "y": np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
         "split": np.array(["train", "train", "train", "train", "val", "val", "val", "val"], dtype="U8"),
+        "dataset": np.array(["MTA", "MTA", "MTA", "MTA", "MTA", "MTA", "MTA", "MTA"], dtype="U16"),
     }
 
 
@@ -1036,6 +1236,23 @@ class _DummyTrainModel(torch.nn.Module):
             dim=1,
         )
         return {"logits_fuse": logits, "logits_img": logits, "logits_tls": logits}
+
+
+class _DummyStage2UnifiedTrainModel(torch.nn.Module):
+    def __init__(self, *args, dataset_vocab: dict[str, int], output_dims: dict[str, int], **kwargs):
+        super().__init__()
+        self.bias = torch.nn.Parameter(torch.tensor(0.0))
+        self.dataset_vocab = {str(key): int(value) for key, value in dataset_vocab.items()}
+        self.output_dims = {str(key): int(value) for key, value in output_dims.items()}
+
+    def forward(self, rgb, input_ids, attention_mask, token_type_ids, dataset_name, return_summary=False):
+        batch = rgb.shape[0]
+        num_classes = int(self.output_dims[str(dataset_name)])
+        logits = torch.zeros((batch, num_classes), dtype=torch.float32, device=rgb.device)
+        logits[:, 0] = self.bias
+        if num_classes > 1:
+            logits[:, 1] = -self.bias
+        return {"logits": logits}
 
 
 class _StopAfterTrainBootstrap(Exception):
@@ -1101,6 +1318,130 @@ def test_train_fusion_stage_can_resume_from_warmup_checkpoint(tmp_path: Path, mo
     cfg = yaml.safe_load((run_root / "fusion-resume-run" / "config.yaml").read_text(encoding="utf-8"))
     assert cfg["stage"] == "fusion"
     assert cfg["warmup_checkpoint"] == str(warmup_dir / "checkpoints" / "best.ckpt")
+
+
+def test_train_stage2_unified_entry_instantiates_unified_classifier_not_fusion(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "runs"
+    _patch_early_stopping_train_dependencies(
+        monkeypatch,
+        [
+            (0.8, 0.80, 0.78, 0.55, None),
+        ],
+    )
+    captured: dict[str, object] = {}
+
+    class ShouldNotBeCalledFusionModel(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("MobileViTETBertFusionClassifier should not be used for --model-type stage2_unified")
+
+    class CapturingStage2UnifiedModel(_DummyStage2UnifiedTrainModel):
+        def __init__(self, *args, **kwargs):
+            captured["init_kwargs"] = dict(kwargs)
+            super().__init__(*args, **kwargs)
+
+        def forward(self, rgb, input_ids, attention_mask, token_type_ids, dataset_name, return_summary=False):
+            captured["dataset_name"] = dataset_name
+            return super().forward(
+                rgb,
+                input_ids,
+                attention_mask,
+                token_type_ids,
+                dataset_name=dataset_name,
+                return_summary=return_summary,
+            )
+
+    monkeypatch.setattr(train_module, "MobileViTETBertFusionClassifier", ShouldNotBeCalledFusionModel)
+    monkeypatch.setattr(train_module, "Stage2UnifiedClassifier", CapturingStage2UnifiedModel, raising=False)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(tmp_path / "outputs" / "processed"),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--model-type",
+            "stage2_unified",
+            "--datasets",
+            "MTA",
+            "--num-classes",
+            "2",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "stage2-unified-select-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+
+    assert code == 0
+    assert captured["dataset_name"] == "MTA"
+    assert captured["init_kwargs"]["dataset_vocab"] == {"MTA": 0}
+    assert captured["init_kwargs"]["output_dims"] == {"MTA": 2}
+
+
+def test_train_stage2_unified_smoke_writes_unified_config_and_artifacts(tmp_path: Path):
+    processed_root = tmp_path / "outputs" / "processed"
+    run_root = tmp_path / "runs"
+    _prepare_dummy_processed_for_dataset(processed_root, dataset="MTA", num_classes=2)
+
+    code = train_main(
+        [
+            "--processed-root",
+            str(processed_root),
+            "--policy",
+            "strict",
+            "--stage",
+            "fusion",
+            "--model-type",
+            "stage2_unified",
+            "--datasets",
+            "MTA",
+            "--num-classes",
+            "2",
+            "--run-root",
+            str(run_root),
+            "--run-id",
+            "stage2-unified-smoke-run",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--hidden-dim",
+            "16",
+            "--fusion-heads",
+            "2",
+            "--fusion-layers",
+            "1",
+            "--fusion-dropout",
+            "0.0",
+            "--device",
+            "cpu",
+            "--no-progress",
+        ]
+    )
+
+    assert code == 0
+    run_dir = run_root / "stage2-unified-smoke-run"
+    assert (run_dir / "metrics.csv").exists()
+    assert (run_dir / "checkpoints" / "last.ckpt").exists()
+    assert (run_dir / "checkpoints" / "best.ckpt").exists()
+
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["model_type"] == "Stage2UnifiedClassifier"
+    assert cfg["dataset_name"] == "MTA"
+    assert cfg["dataset_vocab"] == {"MTA": 0}
+    assert cfg["output_dims"] == {"MTA": 2}
+
+    metrics = pd.read_csv(run_dir / "metrics.csv")
+    assert metrics["epoch"].tolist() == [1]
 
 
 def test_train_checkpoint_selection_prefers_stable_threshold_when_metrics_tie(tmp_path: Path, monkeypatch):

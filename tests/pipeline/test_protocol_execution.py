@@ -267,43 +267,13 @@ def test_stage2_multiclass_execute_runs_three_dataset_jobs(tmp_path: Path):
     assert out_tasks.exists()
 
     date_dir = _single_date_partition(run_root)
-    expected_dirs = [
-        date_dir / "stage2-unified-mta",
-        date_dir / "stage2-unified-mfcp",
-        date_dir / "stage2-unified-ustc-tfc2016",
-    ]
-    for run_dir in expected_dirs:
-        assert run_dir.exists()
+    for dataset in ("mta", "mfcp", "ustc-tfc2016"):
+        run_dir = date_dir / f"stage2-unified-{dataset}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
 
-    acceptance_path = date_dir / "stage2_acceptance.json"
-    assert acceptance_path.exists()
-
-
-def test_stage2_runner_main_path_calls_shared_stage_a_then_dataset_stage_b(monkeypatch, tmp_path):
-    from src.experiments import stage2_multiclass as stage2_mod
-
-    calls = []
-
-    monkeypatch.setattr(stage2_mod, "run_stage2_shared_stage_a", lambda **kwargs: calls.append(("stage_a", kwargs)) or 0)
-    monkeypatch.setattr(stage2_mod, "run_stage2_stage_b", lambda **kwargs: calls.append(("stage_b", kwargs["dataset"])) or 0)
-
-    code = stage2_mod.main(
-        [
-            "--output",
-            str(tmp_path / "stage2_tasks.json"),
-            "--execute",
-            "--processed-root",
-            str(tmp_path / "processed"),
-            "--skip-ustc-limited",
-        ]
-    )
-
-    assert code == 0
-    assert calls[0][0] == "stage_a"
-    assert calls[1:] == [("stage_b", "MTA"), ("stage_b", "MFCP"), ("stage_b", "USTC-TFC2016")]
+    assert (date_dir / "stage2_acceptance.json").exists()
 
 
 def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path):
@@ -339,15 +309,13 @@ def test_stage2_multiclass_execute_stacking_reports_stage_metrics(tmp_path: Path
     assert code == 0
 
     date_dir = _single_date_partition(run_root)
-    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
-        assert run_dir.exists()
+    for dataset in ("mta", "mfcp", "ustc-tfc2016"):
+        run_dir = date_dir / f"stage2-unified-{dataset}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
-
-    acceptance_path = date_dir / "stage2_acceptance.json"
-    assert acceptance_path.exists()
+        assert not (run_dir / "stacking").exists()
+    assert (date_dir / "stage2_acceptance.json").exists()
 
 
 def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
@@ -383,15 +351,13 @@ def test_stage2_multiclass_execute_moe_reports_stage_metrics(tmp_path: Path):
     assert code == 0
 
     date_dir = _single_date_partition(run_root)
-    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
-        assert run_dir.exists()
+    for dataset in ("mta", "mfcp", "ustc-tfc2016"):
+        run_dir = date_dir / f"stage2-unified-{dataset}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
-
-    acceptance_path = date_dir / "stage2_acceptance.json"
-    assert acceptance_path.exists()
+        assert not (run_dir / "moe").exists()
+    assert (date_dir / "stage2_acceptance.json").exists()
 
 
 def test_stage2_fusion_then_stacking_requires_level2_meta_artifacts_and_shared_run_family(tmp_path: Path):
@@ -436,23 +402,19 @@ def test_stage2_fusion_then_stacking_requires_level2_meta_artifacts_and_shared_r
     assert code == 0
 
     date_dir = _single_date_partition(run_root)
-    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
-        assert run_dir.exists()
+    acceptance_path = date_dir / "stage2_acceptance.json"
+    assert acceptance_path.exists()
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    assert [row["dataset"] for row in acceptance] == ["MTA", "MFCP", "USTC-TFC2016"]
+
+    for dataset in ("mta", "mfcp", "ustc-tfc2016"):
+        run_dir = date_dir / f"stage2-unified-{dataset}"
         assert (run_dir / "metrics.csv").exists()
         assert (run_dir / "eval_test.json").exists()
         assert (run_dir / "report.md").exists()
-
-    acceptance_path = date_dir / "stage2_acceptance.json"
-    assert acceptance_path.exists()
-    entries = json.loads(acceptance_path.read_text(encoding="utf-8"))
-    assert isinstance(entries, list)
-    for entry in entries:
-        shared_ckpt = entry.get("shared_checkpoint")
-        assert "shared_checkpoint" in entry
-        assert isinstance(shared_ckpt, str)
-        if shared_ckpt:
-            assert shared_ckpt.endswith("best.ckpt")
+        assert not (run_dir / "meta_features").exists()
+        assert not (run_dir / "stacking").exists()
+    assert all("shared_checkpoint" in row for row in acceptance)
 
 
 def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source(tmp_path: Path):
@@ -496,24 +458,22 @@ def test_stage2_execution_summary_records_level1_run_dir_and_final_metric_source
     assert code == 0
 
     date_dir = _single_date_partition(run_root)
-    for dataset in ("MTA", "MFCP", "USTC-TFC2016"):
-        run_dir = date_dir / f"stage2-unified-{dataset.lower()}"
-        assert run_dir.exists()
-        assert (run_dir / "metrics.csv").exists()
-        assert (run_dir / "eval_test.json").exists()
-        assert (run_dir / "report.md").exists()
     acceptance_path = date_dir / "stage2_acceptance.json"
     assert acceptance_path.exists()
-    entries = json.loads(acceptance_path.read_text(encoding="utf-8"))
-    assert isinstance(entries, list)
-    assert len(entries) == 3
-    for entry in entries:
-        for key in ("dataset", "run_dir", "shared_checkpoint", "test_top1", "gate_passed"):
-            assert key in entry
-        shared_ckpt = entry.get("shared_checkpoint")
-        assert isinstance(shared_ckpt, str)
-        if shared_ckpt:
-            assert shared_ckpt.endswith("best.ckpt")
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    assert [row["dataset"] for row in acceptance] == ["MTA", "MFCP", "USTC-TFC2016"]
+
+    expected_run_dirs = {
+        "MTA": str(date_dir / "stage2-unified-mta"),
+        "MFCP": str(date_dir / "stage2-unified-mfcp"),
+        "USTC-TFC2016": str(date_dir / "stage2-unified-ustc-tfc2016"),
+    }
+    for row in acceptance:
+        assert row["run_dir"] == expected_run_dirs[row["dataset"]]
+        assert "shared_checkpoint" in row
+        assert isinstance(row["shared_checkpoint"], str)
+        assert "test_top1" in row
+        assert "gate_passed" in row
 
 
 def test_stage2_summary_final_metric_source_prefers_moe_over_stacking_final(tmp_path: Path):
@@ -1003,3 +963,269 @@ def test_stage2_multiclass_execute_forwards_latest_fusion_train_args(tmp_path: P
         assert "0.2" in argv
         assert "--best-metric" in argv
         assert "val_acc" in argv
+
+
+def test_stage2_multiclass_execute_defaults_to_stronger_level1_fusion_profile(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage2_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+            "--stage",
+            "fusion",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for argv in captured:
+        assert "--fusion-mode" in argv and argv[argv.index("--fusion-mode") + 1] == "residual_enhancer"
+        assert "--text-shortcut-scale" in argv and argv[argv.index("--text-shortcut-scale") + 1] == "0.5"
+        assert "--early-stopping-patience" in argv and argv[argv.index("--early-stopping-patience") + 1] == "5"
+
+
+def test_stage2_multiclass_execute_respects_explicit_level1_fusion_profile_overrides(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+
+    def fake_train_main(argv):
+        captured.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(stage2_mod, "train_main", fake_train_main)
+    monkeypatch.setattr(stage2_mod, "_run_stage_report", lambda run_dir, stage, device: 0)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+            "--stage",
+            "fusion",
+            "--fusion-mode",
+            "legacy",
+            "--text-shortcut-scale",
+            "0.0",
+            "--early-stopping-patience",
+            "0",
+        ]
+    )
+    assert code == 0
+    assert captured
+    for argv in captured:
+        assert "--fusion-mode" in argv and argv[argv.index("--fusion-mode") + 1] == "legacy"
+        assert "--text-shortcut-scale" in argv and argv[argv.index("--text-shortcut-scale") + 1] == "0.0"
+        assert "--early-stopping-patience" in argv and argv[argv.index("--early-stopping-patience") + 1] == "0"
+
+
+def test_stage2_multiclass_execute_forwards_advanced_train_knobs_to_level1_and_level2(tmp_path: Path, monkeypatch):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    captured = []
+    monkeypatch.setattr(stage2_mod, "build_stage2_tasks", lambda: [{"dataset": "MTA", "num_classes": 2}])
+    monkeypatch.setattr(
+        stage2_mod,
+        "run_stage2_shared_stage_a",
+        lambda **kwargs: {"best_checkpoint": str(tmp_path / "runs" / "2026-03-26" / "stage2-unified-shared" / "checkpoints" / "best.ckpt")},
+    )
+
+    def fake_stage_b(**kwargs):
+        args = kwargs["args"]
+        captured.append(
+            {
+                "dataset": kwargs["dataset"],
+                "shared_checkpoint": kwargs["shared_checkpoint"],
+                "checkpoint_selection": args.checkpoint_selection,
+                "early_stopping_patience": args.early_stopping_patience,
+                "fusion_mode": args.fusion_mode,
+                "text_shortcut_scale": args.text_shortcut_scale,
+                "class_weight_mode": args.class_weight_mode,
+                "scheduler": args.scheduler,
+            }
+        )
+        return {
+            "dataset": kwargs["dataset"],
+            "run_dir": str(tmp_path / "runs" / "2026-03-26" / "stage2-unified-mta"),
+            "code": 0,
+            "shared_checkpoint": kwargs["shared_checkpoint"],
+            "test_top1": 0.71,
+            "gate_passed": True,
+        }
+
+    monkeypatch.setattr(stage2_mod, "run_stage2_stage_b", fake_stage_b)
+
+    out_tasks = tmp_path / "outputs" / "protocol" / "stage2_tasks.json"
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(out_tasks),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--skip-ustc-limited",
+            "--stage",
+            "fusion",
+            "--meta-classifier",
+            "stacking",
+            "--level2-n-splits",
+            "2",
+            "--checkpoint-selection",
+            "score_optimized",
+            "--early-stopping-patience",
+            "5",
+            "--fusion-mode",
+            "residual_enhancer",
+            "--text-shortcut-scale",
+            "0.5",
+            "--class-weight-mode",
+            "balanced",
+            "--scheduler",
+            "cosine",
+        ]
+    )
+    assert code == 0
+    assert captured
+    stage_b_call = captured[0]
+    assert stage_b_call["dataset"] == "MTA"
+    assert stage_b_call["shared_checkpoint"].endswith("best.ckpt")
+    assert stage_b_call["checkpoint_selection"] == "score_optimized"
+    assert stage_b_call["early_stopping_patience"] == 5
+    assert stage_b_call["fusion_mode"] == "residual_enhancer"
+    assert stage_b_call["text_shortcut_scale"] == 0.5
+    assert stage_b_call["class_weight_mode"] == "balanced"
+    assert stage_b_call["scheduler"] == "cosine"
+
+
+def test_stage2_runner_main_path_calls_shared_stage_a_then_dataset_stage_b(monkeypatch, tmp_path: Path):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    calls: list[tuple[str, object]] = []
+    run_root = tmp_path / "runs"
+    monkeypatch.setattr(stage2_mod, "current_run_date_partition", lambda: "2026-03-26")
+    shared_payload = {
+        "shared_run_dir": str(run_root / "2026-03-26" / "stage2-unified-shared"),
+        "best_checkpoint": str(
+            run_root / "2026-03-26" / "stage2-unified-shared" / "checkpoints" / "best.ckpt"
+        ),
+        "best_score": 1.02,
+    }
+
+    def fake_stage_a(**kwargs):
+        calls.append(("stage_a", kwargs))
+        return dict(shared_payload)
+
+    def fake_stage_b(**kwargs):
+        calls.append(("stage_b", {"dataset": kwargs["dataset"], "shared_checkpoint": kwargs["shared_checkpoint"]}))
+        return {
+            "dataset": kwargs["dataset"],
+            "run_dir": str(tmp_path / kwargs["dataset"].lower()),
+            "code": 0,
+            "shared_checkpoint": kwargs["shared_checkpoint"],
+            "test_top1": 0.71,
+            "gate_passed": True,
+        }
+
+    monkeypatch.setattr(stage2_mod, "run_stage2_shared_stage_a", fake_stage_a)
+    monkeypatch.setattr(stage2_mod, "run_stage2_stage_b", fake_stage_b)
+
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(tmp_path / "stage2_tasks.json"),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--run-root",
+            str(run_root),
+            "--skip-ustc-limited",
+        ]
+    )
+
+    assert code == 0
+    assert calls[0][0] == "stage_a"
+    stage_a_kwargs = calls[0][1]
+    assert stage_a_kwargs["processed_root"] == tmp_path / "processed"
+    assert stage_a_kwargs["policy"] == "session_full"
+    assert stage_a_kwargs["layout"].shared_run_dir == run_root / "2026-03-26" / "stage2-unified-shared"
+    assert stage_a_kwargs["args"].processed_root == str(tmp_path / "processed")
+    assert calls[1:] == [
+        ("stage_b", {"dataset": "MTA", "shared_checkpoint": shared_payload["best_checkpoint"]}),
+        ("stage_b", {"dataset": "MFCP", "shared_checkpoint": shared_payload["best_checkpoint"]}),
+        ("stage_b", {"dataset": "USTC-TFC2016", "shared_checkpoint": shared_payload["best_checkpoint"]}),
+    ]
+    acceptance = json.loads((run_root / "2026-03-26" / "stage2_acceptance.json").read_text(encoding="utf-8"))
+    assert [row["shared_checkpoint"] for row in acceptance] == [shared_payload["best_checkpoint"]] * 3
+    assert all(row["shared_checkpoint"] == shared_payload["best_checkpoint"] for row in acceptance)
+    assert all(bool(row["gate_passed"]) for row in acceptance)
+
+
+def test_stage2_runner_writes_acceptance_manifest_after_stage_b(monkeypatch, tmp_path: Path):
+    from src.experiments import stage2_multiclass as stage2_mod
+
+    run_root = tmp_path / "runs"
+    monkeypatch.setattr(stage2_mod, "current_run_date_partition", lambda: "2026-03-26")
+    monkeypatch.setattr(
+        stage2_mod,
+        "run_stage2_shared_stage_a",
+        lambda **kwargs: {
+            "shared_run_dir": str(run_root / "2026-03-26" / "stage2-unified-shared"),
+            "best_checkpoint": str(run_root / "2026-03-26" / "stage2-unified-shared" / "checkpoints" / "best.ckpt"),
+            "best_score": 1.03,
+        },
+    )
+
+    def fake_stage_b(**kwargs):
+        dataset = str(kwargs["dataset"])
+        return {
+            "dataset": dataset,
+            "run_dir": str(run_root / "2026-03-26" / f"stage2-unified-{dataset.lower()}"),
+            "code": 0,
+            "shared_checkpoint": str(run_root / "2026-03-26" / "stage2-unified-shared" / "checkpoints" / "best.ckpt"),
+            "test_top1": {"MTA": 0.71, "MFCP": 0.70, "USTC-TFC2016": 0.86}[dataset],
+            "gate_passed": True,
+        }
+
+    monkeypatch.setattr(stage2_mod, "run_stage2_stage_b", fake_stage_b)
+
+    code = stage2_mod.main(
+        [
+            "--output",
+            str(tmp_path / "stage2_tasks.json"),
+            "--execute",
+            "--processed-root",
+            str(tmp_path / "processed"),
+            "--run-root",
+            str(run_root),
+            "--skip-ustc-limited",
+        ]
+    )
+    assert code == 0
+
+    acceptance_path = run_root / "2026-03-26" / "stage2_acceptance.json"
+    assert acceptance_path.exists()
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    assert [row["dataset"] for row in acceptance] == ["MTA", "MFCP", "USTC-TFC2016"]
+    assert all(bool(row["gate_passed"]) for row in acceptance)
+    assert all(row["shared_checkpoint"].endswith("best.ckpt") for row in acceptance)
+    assert [row["shared_checkpoint"] for row in acceptance] == [
+        str(run_root / "2026-03-26" / "stage2-unified-shared" / "checkpoints" / "best.ckpt")
+    ] * 3

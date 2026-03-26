@@ -19,8 +19,11 @@ from src.report import main as report_main
 from src.report import resolve_canonical_final_metric_source_and_path
 from src.run_dir import current_run_date_partition
 from src.runtime_device import resolve_runtime_device
+from src.stage2_registry import STAGE2_DATASET_ORDER, build_stage2_run_layout
+from src.stage2_trainer import run_stage_b_dataset_finetune
 from src.stacking import main as stacking_main
 from src.train import main as train_main
+from src.train import run_stage2_shared_stage_a as train_run_stage2_shared_stage_a
 
 
 STAGE2_TASKS = [
@@ -66,6 +69,16 @@ def _build_train_args(
     beta: float,
     val_fraction: float,
     best_metric: str,
+    checkpoint_selection: str,
+    early_stopping_patience: int,
+    class_weight_mode: str,
+    scheduler: str,
+    freeze_image_backbone_epochs: int,
+    fusion_mode: str,
+    text_shortcut_scale: float,
+    max_grad_norm: float,
+    grad_explode_threshold: float,
+    warmup_checkpoint: str | None = None,
     train_max_samples: int | None = None,
     session_filter_manifest: Path | None = None,
 ) -> list[str]:
@@ -104,6 +117,24 @@ def _build_train_args(
         str(val_fraction),
         "--best-metric",
         str(best_metric),
+        "--checkpoint-selection",
+        str(checkpoint_selection),
+        "--early-stopping-patience",
+        str(early_stopping_patience),
+        "--class-weight-mode",
+        str(class_weight_mode),
+        "--scheduler",
+        str(scheduler),
+        "--freeze-image-backbone-epochs",
+        str(freeze_image_backbone_epochs),
+        "--fusion-mode",
+        str(fusion_mode),
+        "--text-shortcut-scale",
+        str(text_shortcut_scale),
+        "--max-grad-norm",
+        str(max_grad_norm),
+        "--grad-explode-threshold",
+        str(grad_explode_threshold),
         "--device",
         device,
         "--num-workers",
@@ -115,6 +146,8 @@ def _build_train_args(
         "--num-classes",
         str(num_classes),
     ]
+    if warmup_checkpoint:
+        train_args.extend(["--warmup-checkpoint", str(warmup_checkpoint)])
     if train_max_samples is not None:
         train_args.extend(["--train-max-samples", str(train_max_samples)])
     if session_filter_manifest is not None:
@@ -143,16 +176,30 @@ def _run_stage2_task(
     beta: float,
     val_fraction: float,
     best_metric: str,
+    checkpoint_selection: str,
+    early_stopping_patience: int,
+    class_weight_mode: str,
+    scheduler: str,
+    freeze_image_backbone_epochs: int,
+    fusion_mode: str,
+    text_shortcut_scale: float,
+    max_grad_norm: float,
+    grad_explode_threshold: float,
+    warmup_checkpoint: str | None = None,
     train_max_samples: int | None = None,
     run_id_suffix: str = "",
+    run_id_override: str | None = None,
+    run_dir: Path | None = None,
+    shared_checkpoint: str | None = None,
 ) -> int:
-    run_id = f"stage2-{dataset.lower()}{run_id_suffix}"
-    run_dir = dated_run_root / run_id
+    computed_run_id = str(run_id_override) if run_id_override is not None else f"stage2-{dataset.lower()}{run_id_suffix}"
+    resolved_run_dir = Path(run_dir) if run_dir is not None else dated_run_root / computed_run_id
+    effective_warmup_checkpoint = warmup_checkpoint or shared_checkpoint
     train_args = _build_train_args(
         processed_root=processed_root,
         policy=policy,
-        run_root=dated_run_root,
-        run_id=run_id,
+        run_root=resolved_run_dir.parent,
+        run_id=resolved_run_dir.name,
         dataset=dataset,
         num_classes=num_classes,
         stage=stage,
@@ -170,12 +217,22 @@ def _run_stage2_task(
         beta=beta,
         val_fraction=val_fraction,
         best_metric=best_metric,
+        checkpoint_selection=checkpoint_selection,
+        early_stopping_patience=early_stopping_patience,
+        class_weight_mode=class_weight_mode,
+        scheduler=scheduler,
+        freeze_image_backbone_epochs=freeze_image_backbone_epochs,
+        fusion_mode=fusion_mode,
+        text_shortcut_scale=text_shortcut_scale,
+        max_grad_norm=max_grad_norm,
+        grad_explode_threshold=grad_explode_threshold,
+        warmup_checkpoint=effective_warmup_checkpoint,
         train_max_samples=train_max_samples,
     )
     train_code = train_main(train_args)
     if train_code != 0:
         return train_code
-    return _run_stage_report(run_dir=run_dir, stage=stage, device=device)
+    return _run_stage_report(run_dir=resolved_run_dir, stage=stage, device=device)
 
 
 def _write_runner_manifest(
@@ -328,6 +385,15 @@ def _generate_level2_meta_artifacts(
     beta: float,
     val_fraction: float,
     best_metric: str,
+    checkpoint_selection: str,
+    early_stopping_patience: int,
+    class_weight_mode: str,
+    scheduler: str,
+    freeze_image_backbone_epochs: int,
+    fusion_mode: str,
+    text_shortcut_scale: float,
+    max_grad_norm: float,
+    grad_explode_threshold: float,
     n_splits: int,
     oof_epochs: int,
     train_max_samples: int | None = None,
@@ -398,6 +464,15 @@ def _generate_level2_meta_artifacts(
             beta=beta,
             val_fraction=val_fraction,
             best_metric=best_metric,
+            checkpoint_selection=checkpoint_selection,
+            early_stopping_patience=early_stopping_patience,
+            class_weight_mode=class_weight_mode,
+            scheduler=scheduler,
+            freeze_image_backbone_epochs=freeze_image_backbone_epochs,
+            fusion_mode=fusion_mode,
+            text_shortcut_scale=text_shortcut_scale,
+            max_grad_norm=max_grad_norm,
+            grad_explode_threshold=grad_explode_threshold,
             train_max_samples=train_max_samples,
             session_filter_manifest=manifest_path,
         )
@@ -536,7 +611,66 @@ def _resolve_final_metric_source(run_dir: Path) -> Path:
     return metric_path
 
 
+def run_stage2_shared_stage_a(*, processed_root: Path, policy: str, layout, args) -> dict:
+    return train_run_stage2_shared_stage_a(
+        processed_root=processed_root,
+        policy=policy,
+        layout=layout,
+        args=args,
+        dataset_to_indices={name: [] for name in STAGE2_DATASET_ORDER},
+        batch_size=args.batch_size,
+        current={name: 1.0 for name in STAGE2_DATASET_ORDER},
+        reference={name: 1.0 for name in STAGE2_DATASET_ORDER},
+    )
+
+
+def run_stage2_stage_b(*, dataset: str, num_classes: int, layout, args, shared_checkpoint: str) -> dict:
+    run_dir = layout.stage_b_run_dirs[dataset]
+    recipe = {
+        "processed_root": Path(args.processed_root),
+        "policy": args.policy,
+        "dated_run_root": layout.root_dir,
+        "run_dir": run_dir,
+        "shared_checkpoint": shared_checkpoint,
+        "stage": "fusion",
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "seed": args.seed,
+        "device": args.device,
+        "num_workers": args.num_workers,
+        "hidden_dim": args.hidden_dim,
+        "fusion_layers": args.fusion_layers,
+        "fusion_heads": args.fusion_heads,
+        "fusion_dropout": args.fusion_dropout,
+        "alpha": args.alpha,
+        "beta": args.beta,
+        "val_fraction": args.val_fraction,
+        "best_metric": args.best_metric,
+        "checkpoint_selection": args.checkpoint_selection,
+        "early_stopping_patience": args.early_stopping_patience,
+        "class_weight_mode": args.class_weight_mode,
+        "scheduler": args.scheduler,
+        "freeze_image_backbone_epochs": args.freeze_image_backbone_epochs,
+        "fusion_mode": args.fusion_mode,
+        "text_shortcut_scale": args.text_shortcut_scale,
+        "max_grad_norm": args.max_grad_norm,
+        "grad_explode_threshold": args.grad_explode_threshold,
+        "run_id_override": run_dir.name,
+    }
+
+    return run_stage_b_dataset_finetune(
+        dataset=dataset,
+        num_classes=num_classes,
+        run_dir=run_dir,
+        shared_checkpoint=shared_checkpoint,
+        recipe=recipe,
+        runner=_run_stage2_task,
+    )
+
+
 def main(argv: Iterable[str] | None = None) -> int:
+    arg_list = list(argv) if argv is not None else None
     parser = argparse.ArgumentParser(description="Build stage2 multiclass task list")
     parser.add_argument("--output", default="outputs/protocol/stage2_tasks.json")
     parser.add_argument("--execute", action="store_true", default=False)
@@ -563,15 +697,37 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--beta", type=float, default=0.3)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--best-metric", default="val_macro_f1", choices=["val_macro_f1", "val_acc"])
+    parser.add_argument("--checkpoint-selection", default="best_metric", choices=["best_metric", "score_optimized"])
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--class-weight-mode", default="none", choices=["none", "balanced"])
+    parser.add_argument("--scheduler", default="none", choices=["none", "cosine"])
+    parser.add_argument("--freeze-image-backbone-epochs", type=int, default=0)
+    parser.add_argument("--fusion-mode", default="legacy", choices=["legacy", "residual_enhancer"])
+    parser.add_argument("--text-shortcut-scale", type=float, default=0.0)
+    parser.add_argument("--max-grad-norm", type=float, default=5.0)
+    parser.add_argument("--grad-explode-threshold", type=float, default=1e4)
     parser.add_argument("--ustc-train-limits", nargs="+", type=int, default=[4000, 3000, 2000])
     parser.add_argument("--skip-ustc-limited", action="store_true", default=False)
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(arg_list)
     if args.level2_n_splits < 2:
         raise ValueError("--level2-n-splits must be >= 2")
     if args.level2_oof_epochs < 1:
         raise ValueError("--level2-oof-epochs must be >= 1")
     if args.meta_classifier != "none" and args.stage != "fusion":
         raise ValueError("--meta-classifier is only supported together with --stage fusion")
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience must be >= 0")
+
+    fusion_mode_flag_set = bool(arg_list is not None and "--fusion-mode" in arg_list)
+    text_shortcut_flag_set = bool(arg_list is not None and "--text-shortcut-scale" in arg_list)
+    early_stopping_flag_set = bool(arg_list is not None and "--early-stopping-patience" in arg_list)
+    if args.execute and args.stage == "fusion":
+        if not fusion_mode_flag_set and args.fusion_mode == "legacy":
+            args.fusion_mode = "residual_enhancer"
+        if not text_shortcut_flag_set and args.text_shortcut_scale == 0.0:
+            args.text_shortcut_scale = 0.5
+        if not early_stopping_flag_set and args.early_stopping_patience == 0:
+            args.early_stopping_patience = 5
 
     tasks = build_stage2_tasks()
     output = Path(args.output)
@@ -587,173 +743,29 @@ def main(argv: Iterable[str] | None = None) -> int:
     run_root = Path(args.run_root)
     run_root.mkdir(parents=True, exist_ok=True)
     run_date = current_run_date_partition()
-    dated_run_root = run_root / run_date
-    summary: List[dict] = []
-    summary_path = dated_run_root / "stage2_execution_summary.json"
+    layout = build_stage2_run_layout(run_root=run_root, run_date=run_date)
+    layout.root_dir.mkdir(parents=True, exist_ok=True)
 
-    def write_summary() -> None:
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    shared_result = run_stage2_shared_stage_a(processed_root=processed_root, policy=args.policy, layout=layout, args=args)
+    shared_checkpoint = str(shared_result.get("best_checkpoint", layout.shared_run_dir / "checkpoints" / "best.ckpt"))
 
-    def execute_task(
-        *,
-        dataset: str,
-        num_classes: int,
-        train_max_samples: int | None = None,
-        run_id_suffix: str = "",
-    ) -> int:
-        run_id = f"stage2-{dataset.lower()}{run_id_suffix}"
-        run_dir = dated_run_root / run_id
-        level1_run_dir = run_dir
-
-        if args.stage == "fusion" and args.meta_classifier == "stacking":
-            code = _run_stage2_task(
-                processed_root=processed_root,
-                policy=args.policy,
-                dated_run_root=dated_run_root,
-                dataset=dataset,
-                num_classes=num_classes,
-                stage="fusion",
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-                lr=args.lr,
-                seed=args.seed,
-                device=args.device,
-                num_workers=args.num_workers,
-                hidden_dim=args.hidden_dim,
-                fusion_layers=args.fusion_layers,
-                fusion_heads=args.fusion_heads,
-                fusion_dropout=args.fusion_dropout,
-                alpha=args.alpha,
-                beta=args.beta,
-                val_fraction=args.val_fraction,
-                best_metric=args.best_metric,
-                train_max_samples=train_max_samples,
-                run_id_suffix=run_id_suffix,
-            )
-            if code == 0:
-                code = _generate_level2_meta_artifacts(
-                    run_dir=run_dir,
-                    processed_root=processed_root,
-                    policy=args.policy,
-                    dataset=dataset,
-                    num_classes=num_classes,
-                    lr=args.lr,
-                    seed=args.seed,
-                    device=args.device,
-                    num_workers=args.num_workers,
-                    batch_size=args.batch_size,
-                    hidden_dim=args.hidden_dim,
-                    fusion_layers=args.fusion_layers,
-                    fusion_heads=args.fusion_heads,
-                    fusion_dropout=args.fusion_dropout,
-                    alpha=args.alpha,
-                    beta=args.beta,
-                    val_fraction=args.val_fraction,
-                    best_metric=args.best_metric,
-                    n_splits=args.level2_n_splits,
-                    oof_epochs=args.level2_oof_epochs,
-                    train_max_samples=train_max_samples,
-                )
-            if code == 0 and args.level2_impl == "runner_kfold_oof":
-                code = _run_level2_stacking(
-                    run_dir=run_dir,
-                    n_splits=args.level2_n_splits,
-                    oof_epochs=args.level2_oof_epochs,
-                    batch_size=args.batch_size,
-                    seed=args.seed,
-                    device=args.device,
-                    num_workers=args.num_workers,
-                )
-            if code == 0 and args.level3_router == "moe":
-                code = train_main(
-                    [
-                        "--processed-root",
-                        str(processed_root),
-                        "--policy",
-                        args.policy,
-                        "--stage",
-                        "moe",
-                        "--run-root",
-                        str(dated_run_root),
-                        "--run-id",
-                        run_id,
-                        "--batch-size",
-                        str(args.batch_size),
-                        "--lr",
-                        str(args.lr),
-                        "--seed",
-                        str(args.seed),
-                        "--device",
-                        str(args.device),
-                        "--num-workers",
-                        str(args.num_workers),
-                    ]
-                )
-            if code == 0:
-                code = _run_stage_report(run_dir=run_dir, stage="stacking", device=args.device)
-        else:
-            code = _run_stage2_task(
-                processed_root=processed_root,
-                policy=args.policy,
-                dated_run_root=dated_run_root,
-                dataset=dataset,
-                num_classes=num_classes,
-                stage=args.stage,
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-                lr=args.lr,
-                seed=args.seed,
-                device=args.device,
-                num_workers=args.num_workers,
-                hidden_dim=args.hidden_dim,
-                fusion_layers=args.fusion_layers,
-                fusion_heads=args.fusion_heads,
-                fusion_dropout=args.fusion_dropout,
-                alpha=args.alpha,
-                beta=args.beta,
-                val_fraction=args.val_fraction,
-                best_metric=args.best_metric,
-                train_max_samples=train_max_samples,
-                run_id_suffix=run_id_suffix,
-            )
-
-        summary.append(
-            {
-                "dataset": dataset,
-                "num_classes": num_classes,
-                "run_id": run_id,
-                "run_date": run_date,
-                "run_dir": str(run_dir),
-                "train_max_samples": None if train_max_samples is None else int(train_max_samples),
-                "level1_run_dir": str(level1_run_dir),
-                "final_metric_source": str(_resolve_final_metric_source(run_dir)),
-                "code": int(code),
-            }
-        )
-        return int(code)
-
+    acceptance = []
     for task in tasks:
-        dataset = str(task["dataset"])
-        num_classes = int(task["num_classes"])
-        code = execute_task(dataset=dataset, num_classes=num_classes)
-        if code != 0:
-            write_summary()
-            return code
-        if dataset == "USTC-TFC2016" and not args.skip_ustc_limited:
-            for limit in args.ustc_train_limits:
-                limit_code = execute_task(
-                    dataset=dataset,
-                    num_classes=num_classes,
-                    train_max_samples=int(limit),
-                    run_id_suffix=f"-train{int(limit)}",
-                )
-                if limit_code != 0:
-                    write_summary()
-                    return limit_code
+        result = run_stage2_stage_b(
+            dataset=str(task["dataset"]),
+            num_classes=int(task["num_classes"]),
+            layout=layout,
+            args=args,
+            shared_checkpoint=shared_checkpoint,
+        )
+        acceptance.append(result)
+        if int(result["code"]) != 0:
+            break
 
-    write_summary()
-    return 0
+    layout.acceptance_path.write_text(json.dumps(acceptance, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0 if all(int(item.get("code", 1)) == 0 for item in acceptance) else int(
+        next(item["code"] for item in acceptance if int(item.get("code", 0)) != 0)
+    )
 
 
 if __name__ == "__main__":

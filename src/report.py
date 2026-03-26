@@ -31,6 +31,26 @@ def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, 
     def _is_stage2_final(payload: dict) -> bool:
         return bool(payload.get("is_final_stage2_result")) or str(payload.get("metric_source", "")) == "stacking_final"
 
+    cfg_path = run_dir / "config.yaml"
+    is_stage2_unified = False
+    if cfg_path.exists():
+        try:
+            cfg_payload = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            cfg_payload = {}
+        is_stage2_unified = str(cfg_payload.get("model_type", "")) == "Stage2UnifiedClassifier"
+
+    eval_test = run_dir / "eval_test.json"
+    other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
+
+    # Unified stage2 主路径优先采用端到端 eval 结果。
+    if is_stage2_unified:
+        if eval_test.exists():
+            return "eval", eval_test
+        if other_eval_files:
+            return "eval", other_eval_files[0]
+        return "none", eval_test
+
     # Later-stage final (if present) should supersede stacking-final.
     moe_final = run_dir / "moe" / "final_metrics.json"
     if moe_final.exists():
@@ -58,11 +78,9 @@ def resolve_canonical_final_metric_source_and_path(run_dir: Path) -> Tuple[str, 
         return "moe", moe_file
 
     # Non-stage2 runs fall back to eval artifacts.
-    eval_test = run_dir / "eval_test.json"
     if eval_test.exists():
         return "eval", eval_test
 
-    other_eval_files = sorted(p for p in run_dir.glob("eval_*.json") if p.name != "eval_test.json")
     if other_eval_files:
         return "eval", other_eval_files[0]
 
