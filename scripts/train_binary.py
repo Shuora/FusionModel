@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+
 from pathlib import Path
 from typing import Any
 
 import torch
 import yaml
 
+from fusion_malicious.config import build_run_layout
+
 repo_root = Path(__file__).resolve().parents[1]
 src_path = repo_root / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
-
 
 def build_parser() -> argparse.ArgumentParser:
     default_config = repo_root / "configs" / "binary.yaml"
@@ -39,20 +40,15 @@ def ensure_cuda() -> torch.device:
     return torch.device("cuda")
 
 
-def build_run_layout(task_name: str) -> Path:
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    run_dir = repo_root / "runs" / task_name / timestamp
-    for child in ("checkpoints", "logs", "tmp"):
-        (run_dir / child).mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
     device = ensure_cuda()
     task_name = config.get("task_name", "unknown_binary")
-    run_dir = build_run_layout(task_name)
+    layout = build_run_layout(repo_root / "runs", task_name)
+    run_dir = layout.run_dir
+    for child in ("checkpoints", "logs", "tmp"):
+        (run_dir / child).mkdir(parents=True, exist_ok=True)
 
     print(f"Task: {task_name}")
     print(f"Config: {args.config}")

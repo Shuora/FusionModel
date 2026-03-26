@@ -1,8 +1,17 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Union
 
+import importlib.util
+import sys
+
 import pytest
 import yaml
+
+repo_root = Path(__file__).resolve().parents[1]
+src_path = repo_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
 
 
 CONFIG_EXPECTATIONS = [
@@ -62,3 +71,27 @@ def test_config_metadata(path: Path, expected: dict[str, Union[int, float]]) -> 
     config = yaml.safe_load(path.read_text())
     for key, value in expected.items():
         assert config[key] == value
+
+
+def _load_evaluate_module():
+    script_path = repo_root / "scripts" / "evaluate.py"
+    spec = importlib.util.spec_from_file_location("scripts.evaluate", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_run_layout_uses_date(tmp_path):
+    from fusion_malicious.config import build_run_layout
+
+    layout = build_run_layout(tmp_path / "runs", "binary", now=datetime(2026, 3, 26))
+    assert layout.run_dir == tmp_path / "runs" / "2026-03-26" / "binary"
+
+
+def test_evaluate_rejects_non_checkpoint_file(tmp_path):
+    module = _load_evaluate_module()
+    bad_checkpoint = tmp_path / "bad_checkpoint.pt"
+    bad_checkpoint.write_text("not a checkpoint")
+    with pytest.raises(RuntimeError):
+        module.validate_checkpoint(bad_checkpoint)
