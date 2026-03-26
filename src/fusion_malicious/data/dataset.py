@@ -23,7 +23,18 @@ class CachedSessionDataset:
             image = torch.from_numpy(np.transpose(image, (2, 0, 1)) / 255.0)
             input_ids = torch.from_numpy(arrays["input_ids"].astype(np.int64))
             attention_mask = torch.from_numpy(arrays["attention_mask"].astype(np.int64))
-            label = torch.tensor(int(arrays["label"].item()), dtype=torch.long)
+            cached_label = torch.tensor(int(arrays["label"].item()), dtype=torch.long)
+        label_id = row.get("label_id")
+        if label_id is not None:
+            label_id = torch.tensor(int(label_id), dtype=torch.long)
+            if cached_label is not None and cached_label != label_id:
+                raise ValueError(
+                    "cached label does not match DataFrame label_id: %s vs %s"
+                    % (cached_label.item(), label_id.item())
+                )
+            label = label_id
+        else:
+            label = cached_label
         return {
             "image": image,
             "input_ids": input_ids,
