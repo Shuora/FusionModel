@@ -67,3 +67,23 @@ def test_cached_dataset_mismatched_label_raises(tmp_path: Path) -> None:
     ])
     with pytest.raises(ValueError):
         _ = CachedSessionDataset(frame)[0]
+
+
+def test_cached_dataset_ignores_missing_cached_label_when_label_id_present(tmp_path: Path) -> None:
+    cache_path = tmp_path / "label_id_only.npz"
+    np.savez(
+        cache_path,
+        image=np.zeros((28, 28, 3), dtype=np.uint8),
+        input_ids=np.array([1, 2, 3, 4], dtype=np.int64),
+        attention_mask=np.array([1, 1, 1, 1], dtype=np.int64),
+    )
+    frame = pd.DataFrame(
+        [
+            {
+                "cache_path": str(cache_path),
+                "label_id": 11,
+            }
+        ]
+    )
+    sample = CachedSessionDataset(frame)[0]
+    assert sample["label"].item() == 11
