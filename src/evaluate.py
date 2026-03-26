@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 
 from src.common.structured_logging import format_log_line
 from src.models.fusion_model import MobileViTETBertFusionClassifier
+from src.models.stage2_unified_model import Stage2UnifiedClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.run_dir import resolve_run_dir
 from src.runtime_device import resolve_runtime_device
@@ -158,16 +159,43 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     ckpt_name = "best.ckpt" if args.checkpoint == "best" else "last.ckpt"
     ckpt = torch.load(run_dir / "checkpoints" / ckpt_name, map_location="cpu")
-    model = MobileViTETBertFusionClassifier(
-        num_classes=int(cfg["num_classes"]),
-        hidden_dim=int(cfg.get("hidden_dim", 128)),
-        vocab_size=int(cfg.get("vocab_size", 30522)),
-        fusion_layers=int(cfg.get("fusion_layers", 2)),
-        fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
-        dropout=float(cfg.get("fusion_dropout", 0.1)),
-        fusion_mode=str(cfg.get("fusion_mode", "legacy")),
-        text_shortcut_scale=float(cfg.get("text_shortcut_scale", 0.0)),
-    ).to(device)
+    model_type = str(cfg.get("model_type", "MobileViTETBertFusionClassifier"))
+    is_stage2_unified = model_type == "Stage2UnifiedClassifier"
+    output_dims: dict[str, int] = {}
+    if is_stage2_unified:
+        dataset_vocab = cfg.get("dataset_vocab") or {}
+        output_dims = {str(key): int(value) for key, value in dict(cfg.get("output_dims") or {}).items()}
+        dataset_name = str(cfg.get("dataset_name") or cfg.get("dataset") or next(iter(dataset_vocab), ""))
+        if not dataset_name:
+            print(
+                format_log_line(
+                    level="error",
+                    module="eval",
+                    event="missing_stage2_dataset_name",
+                    kv={"model_type": model_type},
+                )
+            )
+            return 2
+        model = Stage2UnifiedClassifier(
+            dataset_vocab={str(key): int(value) for key, value in dict(dataset_vocab).items()},
+            output_dims=output_dims,
+            hidden_dim=int(cfg.get("hidden_dim", 128)),
+            num_heads=int(cfg.get("num_heads", cfg.get("fusion_heads", 4))),
+            trunk_layers=int(cfg.get("trunk_layers", cfg.get("fusion_layers", 2))),
+            dropout=float(cfg.get("fusion_dropout", 0.1)),
+        ).to(device)
+    else:
+        dataset_name = ""
+        model = MobileViTETBertFusionClassifier(
+            num_classes=int(cfg["num_classes"]),
+            hidden_dim=int(cfg.get("hidden_dim", 128)),
+            vocab_size=int(cfg.get("vocab_size", 30522)),
+            fusion_layers=int(cfg.get("fusion_layers", 2)),
+            fusion_heads=int(cfg.get("fusion_heads", cfg.get("num_heads", 4))),
+            dropout=float(cfg.get("fusion_dropout", 0.1)),
+            fusion_mode=str(cfg.get("fusion_mode", "legacy")),
+            text_shortcut_scale=float(cfg.get("text_shortcut_scale", 0.0)),
+        ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     eval_batch_size = int(args.eval_batch_size or cfg.get("eval_batch_size") or cfg.get("batch_size", 32))
@@ -176,21 +204,53 @@ def main(argv: Iterable[str] | None = None) -> int:
         out_batches = []
         for start in range(0, len(y_eval), eval_batch_size):
             end = start + eval_batch_size
-            batch_out = model(
-                torch.from_numpy(rgb_eval[start:end]).float().to(device),
-                torch.from_numpy(input_eval[start:end]).long().to(device),
-                torch.from_numpy(attn_eval[start:end]).long().to(device),
-                torch.from_numpy(token_type_eval[start:end]).long().to(device),
-                use_fusion=cfg.get("stage") != "warmup",
-            )
-            out_batches.append({key: value.detach().cpu() for key, value in batch_out.items() if key.startswith("logits_")})
+            rgb_batch = torch.from_numpy(rgb_eval[start:end]).float().to(device)
+            input_batch = torch.from_numpy(input_eval[start:end]).long().to(device)
+            attn_batch = torch.from_numpy(attn_eval[start:end]).long().to(device)
+            token_type_batch = torch.from_numpy(token_type_eval[start:end]).long().to(device)
+            if is_stage2_unified:
+                batch_out = model(
+                    rgb_batch,
+                    input_batch,
+                    attn_batch,
+                    token_type_batch,
+                    dataset_name=dataset_name,
+                    return_summary=False,
+                )
+                logits = batch_out["logits"].detach().cpu()
+                out_batches.append({"logits_fuse": logits, "logits_img": logits, "logits_tls": logits})
+            else:
+                batch_out = model(
+                    rgb_batch,
+                    input_batch,
+                    attn_batch,
+                    token_type_batch,
+                    use_fusion=cfg.get("stage") != "warmup",
+                )
+                out_batches.append(
+                    {key: value.detach().cpu() for key, value in batch_out.items() if key.startswith("logits_")}
+                )
         out = _concat_eval_outputs(out_batches)
     if cfg.get("stage") == "warmup":
         logits = (out["logits_img"] + out["logits_tls"]) / 2.0
     else:
         logits = out["logits_fuse"]
 
-    num_classes = int(cfg["num_classes"])
+    if is_stage2_unified:
+        try:
+            num_classes = int(dict(output_dims)[dataset_name])
+        except Exception:
+            print(
+                format_log_line(
+                    level="error",
+                    module="eval",
+                    event="missing_stage2_output_dim",
+                    kv={"dataset_name": dataset_name},
+                )
+            )
+            return 2
+    else:
+        num_classes = int(cfg["num_classes"])
     decision_threshold = None
     if num_classes == 2:
         raw_threshold = ckpt.get("decision_threshold", cfg.get("decision_threshold"))

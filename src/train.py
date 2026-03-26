@@ -24,9 +24,17 @@ from src.common.structured_logging import format_log_line
 from src.meta_features import STAGE2_META_SCHEMA_VERSION
 from src.meta_features import flatten_meta_feature_blocks
 from src.models.fusion_model import MobileViTETBertFusionClassifier
+from src.models.stage2_unified_model import Stage2UnifiedClassifier
 from src.pipeline_data import load_policy_multimodal_data
 from src.run_dir import build_timestamped_run_identity
 from src.runtime_device import resolve_runtime_device
+from src.stage2_trainer import build_stage2_single_dataset_contract
+
+
+def run_stage2_shared_stage_a(**kwargs):
+    from src.stage2_trainer import run_stage_a_shared_training
+
+    return run_stage_a_shared_training(**kwargs)
 
 
 def _build_run_identity(run_root: Path) -> tuple[str, Path]:
@@ -283,7 +291,11 @@ def _loss_and_logits(
     ce: nn.Module,
     alpha: float,
     beta: float,
+    model_type: str = "fusion",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    if model_type == "stage2_unified":
+        logits = out["logits"]
+        return ce(logits, y), logits
     if stage == "warmup":
         loss = 0.5 * ce(out["logits_img"], y) + 0.5 * ce(out["logits_tls"], y)
         pred_logits = 0.5 * (out["logits_img"] + out["logits_tls"])
@@ -293,8 +305,10 @@ def _loss_and_logits(
     return loss, pred_logits
 
 
-def _confidence_mean(out: dict, stage: str) -> float:
-    if stage == "warmup":
+def _confidence_mean(out: dict, stage: str, model_type: str = "fusion") -> float:
+    if model_type == "stage2_unified":
+        logits = out["logits"]
+    elif stage == "warmup":
         logits = 0.5 * (out["logits_img"] + out["logits_tls"])
     else:
         logits = out["logits_fuse"]
@@ -313,6 +327,8 @@ def _evaluate_loader(
     epoch: int,
     total_epochs: int,
     lr: float,
+    model_type: str = "fusion",
+    dataset_name: str | None = None,
 ) -> tuple[float, float, float, float, float | None]:
     if len(loader) == 0:
         return 0.0, 0.0, 0.0, 0.0, None
@@ -342,8 +358,26 @@ def _evaluate_loader(
             attn_b = attn_b.to(device)
             token_type_b = token_type_b.to(device)
             y_b = y_b.to(device)
-            out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=stage != "warmup")
-            loss, pred_logits = _loss_and_logits(out, y_b, stage, ce, alpha, beta)
+            if model_type == "stage2_unified":
+                out = model(
+                    rgb_b,
+                    input_ids_b,
+                    attn_b,
+                    token_type_b,
+                    dataset_name=str(dataset_name),
+                    return_summary=False,
+                )
+            else:
+                out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=stage != "warmup")
+            loss, pred_logits = _loss_and_logits(
+                out,
+                y_b,
+                stage,
+                ce,
+                alpha,
+                beta,
+                model_type=model_type,
+            )
             pred = pred_logits.argmax(dim=1)
             batch_acc = float((pred == y_b).float().mean().item())
             batch_size = int(y_b.shape[0])
@@ -351,7 +385,7 @@ def _evaluate_loader(
             losses.append(float(loss.item()))
             preds.append(pred.cpu().numpy())
             labels.append(y_b.cpu().numpy())
-            fuse_conf_means.append(_confidence_mean(out, stage=stage))
+            fuse_conf_means.append(_confidence_mean(out, stage=stage, model_type=model_type))
             seen_samples += batch_size
             correct_samples += int((pred == y_b).sum().item())
             if pred_logits.shape[1] == 2:
@@ -588,6 +622,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--processed-root", required=True)
     parser.add_argument("--policy", default="strict")
     parser.add_argument("--stage", default="warmup", choices=["warmup", "fusion", "stacking", "moe"])
+    parser.add_argument("--model-type", default="fusion", choices=["fusion", "stage2_unified"])
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--datasets", nargs="+")
@@ -673,6 +708,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     token_type_ids = data["token_type_ids"]
     y = data["y"]
     split = data["split"]
+    dataset_values = np.asarray(data.get("dataset", np.asarray([], dtype="U64"))).astype(str)
     if rgb.shape[0] == 0:
         log("error", "data", "empty_dataset", {"processed_root": args.processed_root, "policy": args.policy})
         return 2
@@ -683,6 +719,35 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 2
     num_classes = int(args.num_classes) if args.num_classes is not None else inferred_classes
     vocab_size = int(max(30522, int(input_ids.max()) + 1)) if input_ids.size > 0 else 30522
+    model_type_name = "Stage2UnifiedClassifier" if args.model_type == "stage2_unified" else "MobileViTETBertFusionClassifier"
+    is_stage2_unified = args.model_type == "stage2_unified"
+    dataset_contract: dict[str, object] = {}
+    if is_stage2_unified:
+        if args.stage != "fusion":
+            log("error", "model", "unsupported_stage2_unified_stage", {"stage": args.stage})
+            return 2
+        requested_datasets = [str(name) for name in (args.datasets or []) if str(name).strip()]
+        if len(requested_datasets) != 1:
+            log(
+                "error",
+                "data",
+                "stage2_unified_requires_single_dataset",
+                {"datasets": requested_datasets or ["all"]},
+            )
+            return 2
+        dataset_name = str(requested_datasets[0])
+        observed_datasets = {str(name) for name in dataset_values.tolist() if str(name)}
+        if observed_datasets and observed_datasets != {dataset_name}:
+            log(
+                "error",
+                "data",
+                "stage2_unified_dataset_mismatch",
+                {"requested": dataset_name, "observed": sorted(observed_datasets)},
+            )
+            return 2
+        dataset_contract = build_stage2_single_dataset_contract(dataset_name=dataset_name, output_dim=num_classes)
+    else:
+        dataset_name = ""
     cfg = {
         "run_id": run_id,
         "processed_root": args.processed_root,
@@ -695,7 +760,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "batch_size": args.batch_size,
         "lr": args.lr,
         "seed": args.seed,
-        "model_type": "MobileViTETBertFusionClassifier",
+        "model_type": model_type_name,
         "hidden_dim": args.hidden_dim,
         "fusion_layers": args.fusion_layers,
         "fusion_heads": args.fusion_heads,
@@ -703,6 +768,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "fusion_mode": args.fusion_mode,
         "text_shortcut_scale": args.text_shortcut_scale,
         "num_heads": args.fusion_heads,
+        "trunk_layers": args.fusion_layers,
         "vocab_size": vocab_size,
         "num_classes": num_classes,
         "alpha": args.alpha,
@@ -723,6 +789,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "val_fraction": args.val_fraction,
         "train_max_samples": args.train_max_samples,
     }
+    if dataset_contract:
+        cfg.update(dataset_contract)
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
     git_commit = _git_commit_short(Path(__file__).resolve().parents[1])
@@ -733,6 +801,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "config_summary",
         {
             "stage": args.stage,
+            "model_type": model_type_name,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
@@ -851,16 +920,26 @@ def main(argv: Iterable[str] | None = None) -> int:
         pin_memory=pin_memory,
     )
 
-    model = MobileViTETBertFusionClassifier(
-        num_classes=num_classes,
-        hidden_dim=args.hidden_dim,
-        vocab_size=vocab_size,
-        fusion_layers=args.fusion_layers,
-        fusion_heads=args.fusion_heads,
-        dropout=args.fusion_dropout,
-        fusion_mode=args.fusion_mode,
-        text_shortcut_scale=args.text_shortcut_scale,
-    ).to(device)
+    if is_stage2_unified:
+        model = Stage2UnifiedClassifier(
+            dataset_vocab=dict(dataset_contract["dataset_vocab"]),
+            output_dims=dict(dataset_contract["output_dims"]),
+            hidden_dim=args.hidden_dim,
+            num_heads=args.fusion_heads,
+            trunk_layers=args.fusion_layers,
+            dropout=args.fusion_dropout,
+        ).to(device)
+    else:
+        model = MobileViTETBertFusionClassifier(
+            num_classes=num_classes,
+            hidden_dim=args.hidden_dim,
+            vocab_size=vocab_size,
+            fusion_layers=args.fusion_layers,
+            fusion_heads=args.fusion_heads,
+            dropout=args.fusion_dropout,
+            fusion_mode=args.fusion_mode,
+            text_shortcut_scale=args.text_shortcut_scale,
+        ).to(device)
     if args.warmup_checkpoint:
         warmup_ckpt = torch.load(args.warmup_checkpoint, map_location="cpu")
         model.load_state_dict(warmup_ckpt["model_state"], strict=False)
@@ -934,8 +1013,26 @@ def main(argv: Iterable[str] | None = None) -> int:
             token_type_b = token_type_b.to(device)
             y_b = y_b.to(device)
             optim.zero_grad()
-            out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=loss_stage != "warmup")
-            loss, pred_logits = _loss_and_logits(out, y_b, loss_stage, ce, args.alpha, args.beta)
+            if is_stage2_unified:
+                out = model(
+                    rgb_b,
+                    input_ids_b,
+                    attn_b,
+                    token_type_b,
+                    dataset_name=dataset_name,
+                    return_summary=False,
+                )
+            else:
+                out = model(rgb_b, input_ids_b, attn_b, token_type_b, use_fusion=loss_stage != "warmup")
+            loss, pred_logits = _loss_and_logits(
+                out,
+                y_b,
+                loss_stage,
+                ce,
+                args.alpha,
+                args.beta,
+                model_type=args.model_type,
+            )
             if not torch.isfinite(loss):
                 log("error", "model", "nan_loss", {"epoch": epoch, "stage": args.stage})
                 return 3
@@ -964,7 +1061,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             train_losses.append(float(loss.item()))
             train_preds.append(pred.cpu().numpy())
             train_targets.append(y_b.cpu().numpy())
-            train_fuse_confidences.append(_confidence_mean(out, stage=loss_stage))
+            train_fuse_confidences.append(_confidence_mean(out, stage=loss_stage, model_type=args.model_type))
             train_seen_samples += batch_size
             train_correct_samples += int((pred == y_b).sum().item())
             running_loss = float(np.mean(train_losses)) if train_losses else float(loss.item())
@@ -1005,6 +1102,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             epoch=epoch,
             total_epochs=args.epochs,
             lr=args.lr,
+            model_type=args.model_type,
+            dataset_name=dataset_name,
         )
         epoch_time = time.time() - start
 
