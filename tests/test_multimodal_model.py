@@ -117,18 +117,18 @@ def test_image_encoder_flattens_spatial_tokens() -> None:
 
 
 def test_image_encoder_projects_to_hidden_dim() -> None:
-    encoder = ImageEncoder(backbone=FourDimImageBackbone(), output_dim=8)
-    output = encoder(torch.randn(2, 3, 64, 64))
-    assert output.shape == (2, 16, 8)
+    encoder = ImageEncoder(backbone=HighDimImageBackbone(feature_dim=64), output_dim=8)
+    output = encoder(torch.randn(2, 3, 32, 32))
+    assert output.shape == (2, 6, 8)
 
 
 def test_text_encoder_projects_to_hidden_dim() -> None:
-    encoder = TextEncoder(backbone=DictOutputTextBackbone(), output_dim=6)
+    encoder = TextEncoder(backbone=HighDimTextBackbone(feature_dim=48), output_dim=6)
     output = encoder(
-        input_ids=torch.ones(2, 16, dtype=torch.long),
-        attention_mask=torch.ones(2, 16, dtype=torch.long),
+        input_ids=torch.ones(2, 12, dtype=torch.long),
+        attention_mask=torch.ones(2, 12, dtype=torch.long),
     )
-    assert output.shape == (2, 8, 6)
+    assert output.shape == (2, 12, 6)
 
 
 def test_multimodal_masked_pooling_respects_attention_mask() -> None:
@@ -160,17 +160,9 @@ def test_multimodal_masked_pooling_respects_attention_mask() -> None:
 
 
 def test_multimodal_classifier_handles_mismatched_branch_dims() -> None:
-    class WideImageBackbone(nn.Module):
-        def forward(self, image: torch.Tensor) -> torch.Tensor:
-            return torch.ones(image.size(0), 5, 48)
-
-    class WideTextBackbone(nn.Module):
-        def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-            return torch.ones(input_ids.size(0), 7, 96)
-
     model = MultimodalClassifier(
-        image_backbone=WideImageBackbone(),
-        text_backbone=WideTextBackbone(),
+        image_backbone=HighDimImageBackbone(feature_dim=48),
+        text_backbone=HighDimTextBackbone(feature_dim=96),
         hidden_dim=32,
         num_classes=3,
         num_heads=4,
