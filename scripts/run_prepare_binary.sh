@@ -11,6 +11,8 @@ mkdir -p "$MPLCONFIGDIR"
 TOKENIZER_MODEL="${TOKENIZER_MODEL:-distilbert-base-uncased}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/dataset}"
 SOURCE_ROOT="${SOURCE_ROOT:-$REPO_ROOT/SourceData}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
+PROGRESS_EVERY="${PROGRESS_EVERY:-250}"
 
 ARGS=(
   --task binary
@@ -19,7 +21,17 @@ ARGS=(
   --tokenizer-model "$TOKENIZER_MODEL"
   --splitcap-launcher "${SPLITCAP_LAUNCHER:-mono}"
   --editcap-path "${EDITCAP_BIN:-editcap}"
+  --num-workers "$NUM_WORKERS"
+  --progress-every "$PROGRESS_EVERY"
 )
+
+if [[ -n "${INCLUDE_PATHS:-}" ]]; then
+  IFS=',' read -r -a include_filters <<< "$INCLUDE_PATHS"
+  for filter in "${include_filters[@]}"; do
+    [[ -n "$filter" ]] || continue
+    ARGS+=(--include-path "$filter")
+  done
+fi
 
 if [[ "${USE_SPLITCAP:-0}" != "1" ]]; then
   ARGS+=(--skip-splitcap)
