@@ -58,6 +58,27 @@ If you want real session-level slicing with `SplitCap`, run:
 USE_SPLITCAP=1 bash scripts/run_prepare_binary.sh
 ```
 
+On Linux/WSL, the script now assumes `SplitCap` should be launched as:
+
+```bash
+mono Tools/SplitCap.exe
+```
+
+If your launcher differs, override it:
+
+```bash
+USE_SPLITCAP=1 SPLITCAP_LAUNCHER="mono" bash scripts/run_prepare_binary.sh
+```
+
+If your raw file is `.pcapng`, the pipeline will first do:
+
+```bash
+editcap -F pcap input.pcapng output.pcap
+```
+
+before handing the converted file to `SplitCap`.
+So on Linux/WSL you should make sure `editcap` is installed and visible in `PATH`.
+
 Multiclass preparation:
 
 ```bash
@@ -72,6 +93,8 @@ Useful overrides:
 TOKENIZER_MODEL=/path/to/your/etbert-tokenizer \
 OUTPUT_ROOT=/home/shuora/Traffic/FusionModel/dataset \
 SOURCE_ROOT=/home/shuora/Traffic/FusionModel/SourceData \
+SPLITCAP_LAUNCHER="mono" \
+EDITCAP_BIN="editcap" \
 bash scripts/run_prepare_binary.sh
 ```
 

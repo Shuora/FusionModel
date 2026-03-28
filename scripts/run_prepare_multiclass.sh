@@ -33,6 +33,8 @@ ARGS=(
   --source-root "$SOURCE_ROOT"
   --output-root "$OUTPUT_ROOT"
   --tokenizer-model "$TOKENIZER_MODEL"
+  --splitcap-launcher "${SPLITCAP_LAUNCHER:-mono}"
+  --editcap-path "${EDITCAP_BIN:-editcap}"
 )
 
 if [[ "${USE_SPLITCAP:-0}" != "1" ]]; then
