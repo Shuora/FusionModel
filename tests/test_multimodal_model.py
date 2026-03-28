@@ -173,6 +173,10 @@ def test_multimodal_classifier_handles_mismatched_branch_dims() -> None:
         attention_mask=torch.ones(2, 11, dtype=torch.long),
     )
     assert logits.shape == (2, 3)
+    assert isinstance(model.image_projection, nn.Linear)
+    assert isinstance(model.text_projection, nn.Linear)
+    assert model.image_projection.out_features == 32
+    assert model.text_projection.out_features == 32
 
 
 def test_build_image_backbone_selects_feature_index() -> None:
