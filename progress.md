@@ -41,3 +41,16 @@
 - [x] 补并行规划测试
 - [x] 实现并行规划
 - [x] 跑测试验证
+
+## Session Byte Extraction
+
+- [x] 确认 `read_session_bytes(...)` 当前单点依赖 `Raw` 层
+- [x] 补回归测试：`Raw` 缺失但存在传输层 payload 不应判空
+- [x] 补回归测试：header-only session 仍应视为空
+- [x] 修改 session 字节提取逻辑，去除对 `Raw` 的单点依赖
+- [x] 跑目标 pytest 验证
+
+## Verification
+
+- `env -u PYTHONPATH -u PYTHONUSERBASE TMPDIR=/tmp /home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q tests/test_session_bytes_and_image_features.py`
+- `env -u PYTHONPATH -u PYTHONUSERBASE TMPDIR=/tmp /home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q tests/test_splitcap_cleaning_and_manifest.py`

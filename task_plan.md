@@ -49,3 +49,13 @@
 2. 实现有序消费的 payload inspection worker。
 3. 保持 `[plan]` 日志、empty/duplicate/cache 统计语义不变。
 4. 跑回归测试并记录结果。
+
+## Session Byte Extraction
+
+### Goal
+调整预处理的 session 字节提取逻辑，使其不再单点依赖 Scapy `Raw` 层；对于“无 `Raw` 但存在传输层负载字节”的 session，仍应保留并进入后续 `784` 字节统一长度流程。
+
+### Steps
+1. 为 `read_session_bytes(...)` 增加回归测试，覆盖 `Raw` 缺失但 `Padding`/传输层 payload 存在的场景，以及真正 header-only 的空 session。
+2. 修改 `read_session_bytes(...)`，优先提取 TCP/UDP payload bytes，必要时回退到 IP/IPv6 更底层 payload，再回退 `Raw`。
+3. 运行相关 pytest，确认图像特征与预处理链路不回归。

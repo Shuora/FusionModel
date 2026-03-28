@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scapy.all import Ether, IP, TCP, Raw, wrpcap
+from scapy.all import Ether, IP, TCP, UDP, Padding, Raw, wrpcap
 
 from fusion_malicious.data.image_features import bytes_to_rgb_image
 from fusion_malicious.data.session_bytes import normalize_session_bytes, read_session_bytes
@@ -19,6 +19,32 @@ def test_read_session_bytes_extracts_packet_payload(tmp_path: Path) -> None:
     wrpcap(str(pcap_path), [packet])
     raw_bytes = read_session_bytes(pcap_path)
     assert raw_bytes[:3] == b"\x11\x22\x33"
+
+
+def test_read_session_bytes_uses_transport_payload_when_raw_layer_missing(tmp_path: Path) -> None:
+    pcap_path = tmp_path / "padding_session.pcap"
+    packets = [
+        Ether() / IP() / TCP() / Padding(load=b"\xaa\xbb"),
+        Ether() / IP() / UDP() / Padding(load=b"\xcc"),
+    ]
+    wrpcap(str(pcap_path), packets)
+
+    raw_bytes = read_session_bytes(pcap_path)
+
+    assert raw_bytes == b"\xaa\xbb\xcc"
+
+
+def test_read_session_bytes_returns_empty_for_header_only_session(tmp_path: Path) -> None:
+    pcap_path = tmp_path / "empty_session.pcap"
+    packets = [
+        Ether() / IP() / TCP(),
+        Ether() / IP() / UDP(),
+    ]
+    wrpcap(str(pcap_path), packets)
+
+    raw_bytes = read_session_bytes(pcap_path)
+
+    assert raw_bytes == b""
 
 
 def test_bytes_to_rgb_image_returns_28x28x3_uint8() -> None:
