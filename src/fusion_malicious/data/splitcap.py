@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
 
 def build_splitcap_command(
     splitcap_exe: Path,
     input_pcap: Path,
     output_dir: Path,
-    *,
-    launcher: list[str] | None = None,
+    launcher: Sequence[str] | None = None,
 ) -> list[str]:
     """
     Build the command line that invokes SplitCap with the specified PCAP and output folder.
     """
-    command = [
+    prefix = list(launcher or [])
+    return prefix + [
         str(splitcap_exe),
         "-r",
         str(input_pcap),
@@ -22,6 +23,3 @@ def build_splitcap_command(
         "-o",
         str(output_dir),
     ]
-    if launcher:
-        return [*launcher, *command]
-    return command
