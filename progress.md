@@ -21,3 +21,23 @@
 ## Verification
 
 - `env -u PYTHONPATH -u PYTHONUSERBASE TMPDIR=/tmp /home/shuora/miniconda3/envs/FusionModel/bin/python -m pytest -q --capture=no tests/test_splitcap_cleaning_and_manifest.py`
+
+## Preprocess Planning Logs
+
+- [x] 读取 `Ctrl+C` 栈并确认卡在 `prepare_cached_rows(...)`
+- [x] 审阅相关实现与测试
+- [x] 补规划阶段日志测试
+- [x] 实现 `[plan]` heartbeat
+- [x] 跑测试验证
+
+## Preprocess Planning Performance
+
+- [x] 明确优化目标：提速但不改变去重结果
+- [x] 写实现计划文档
+- [x] 补并行规划测试
+- [x] 实现并行规划
+- [x] 跑测试验证
+
+- [x] 补并行规划测试
+- [x] 实现并行规划
+- [x] 跑测试验证

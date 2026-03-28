@@ -15,3 +15,18 @@
 - 父进程保留样本顺序和去重判定，worker 只负责清洗、tokenize 和写缓存，避免并行导致去重结果漂移。
 - 新增 `--num-workers` 和 `--progress-every`，默认值偏保守，优先兼顾吞吐和内存占用。
 - 二分类与多分类入口脚本都支持 `INCLUDE_PATHS`、`NUM_WORKERS`、`PROGRESS_EVERY`。
+
+## Preprocess Planning Logs
+
+- `Ctrl+C` 栈明确落在 `prepare_cached_rows(...) -> read_session_bytes(...)`，说明长时间无输出发生在父进程串行去重阶段，而不是 worker 池。
+- 全量二分类会在 `sessions_raw` 上先做一次完整的 payload 扫描和 fingerprint 判重；这一阶段在进入 `[cache] planned` 前原本没有任何 heartbeat。
+- 最小且安全的修复是给规划阶段增加周期性 `[plan]` 日志，保留现有去重顺序和判定逻辑，不把去重下放到 worker。
+
+## Preprocess Planning Performance
+
+- 当前性能瓶颈来自 `prepare_cached_rows(...)` 在父进程串行调用 `read_session_bytes(...)`。
+- payload 提取与 fingerprint 计算可以并行，因为每个 session 的检查彼此独立；真正需要顺序的是“首次出现保留、后续重复丢弃”的决策。
+- 使用 `ProcessPoolExecutor.map(...)` 按输入顺序消费 worker 结果，可以在并行读取的同时保持去重结果与串行实现一致。
+
+- 规划阶段现在也会复用 `--num-workers`，将 `read_session_bytes(...)` + fingerprint 计算分发给多个进程。
+- 父进程仍按 manifest 顺序消费 `executor.map(...)` 结果，因此重复样本的“首个保留”语义保持不变。
