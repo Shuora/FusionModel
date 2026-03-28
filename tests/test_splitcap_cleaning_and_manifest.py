@@ -1,17 +1,20 @@
 from pathlib import Path
+
 from scapy.all import Ether, IP, TCP, Raw, rdpcap, wrpcap
 
-from fusion_malicious.data.manifest import build_manifest_dataframe
 from fusion_malicious.data.cleaning import (
     anonymize_session_pcap,
     fingerprint_session_bytes,
     should_keep_session,
 )
+from fusion_malicious.data.manifest import build_manifest_dataframe
 from fusion_malicious.data.splitcap import build_splitcap_command
 from scripts.prepare_dataset import (
     collect_session_paths,
     discover_capture_files,
+    prepare_cached_rows,
     prepare_splitcap_input,
+    run_postprocess_tasks,
 )
 
 
@@ -150,6 +153,28 @@ def test_discover_capture_files_filters_by_task(tmp_path: Path) -> None:
     assert ustc_files == [other_path]
 
 
+def test_discover_capture_files_filters_by_include_path(tmp_path: Path) -> None:
+    dridex_path = tmp_path / "SourceData" / "MTA" / "Dridex" / "a.pcap"
+    trickbot_path = tmp_path / "SourceData" / "MTA" / "Trickbot" / "b.pcap"
+    for path in (dridex_path, trickbot_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+
+    dridex_only = discover_capture_files(
+        tmp_path / "SourceData",
+        "binary",
+        include_paths=["MTA/Dridex"],
+    )
+    assert dridex_only == [dridex_path]
+
+    mta_all = discover_capture_files(
+        tmp_path / "SourceData",
+        "binary",
+        include_paths=["MTA"],
+    )
+    assert mta_all == [dridex_path, trickbot_path]
+
+
 def test_prepare_splitcap_input_converts_pcapng(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "sample.pcapng"
     source.write_bytes(b"pcapng")
@@ -219,6 +244,107 @@ def test_collect_session_paths_reuses_checkpointed_splitcap_output(tmp_path: Pat
         resume_splitcap=True,
     )
     assert sessions == [expected_session]
+
+
+def test_prepare_cached_rows_reuses_existing_cleaned_and_cache_outputs(tmp_path: Path) -> None:
+    session_path = tmp_path / "SourceData" / "MTA" / "Trickbot" / "flow1.pcap"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    packet = Ether() / IP() / TCP() / Raw(load=b"payload")
+    wrpcap(str(session_path), [packet])
+
+    output_root = tmp_path / "dataset"
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        [session_path],
+        task="binary",
+        output_root=output_root,
+    )
+    assert ready_rows == []
+    assert len(pending_rows) == 1
+    cleaned_path = Path(pending_rows[0]["cleaned_path"])
+    cache_path = Path(pending_rows[0]["cache_path"])
+    cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cleaned_path.write_bytes(b"pcap")
+    cache_path.write_bytes(b"npz")
+
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        [session_path],
+        task="binary",
+        output_root=output_root,
+    )
+    assert len(ready_rows) == 1
+    assert pending_rows == []
+    assert stats["cache_hits"] == 1
+    assert stats["clean_hits"] == 1
+
+
+def test_prepare_cached_rows_marks_existing_cleaned_for_resume(tmp_path: Path) -> None:
+    session_path = tmp_path / "SourceData" / "MTA" / "Trickbot" / "flow1.pcap"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    packet = Ether() / IP() / TCP() / Raw(load=b"payload")
+    wrpcap(str(session_path), [packet])
+
+    output_root = tmp_path / "dataset"
+    ready_rows, pending_rows, _ = prepare_cached_rows(
+        [session_path],
+        task="binary",
+        output_root=output_root,
+    )
+    assert ready_rows == []
+    cleaned_path = Path(pending_rows[0]["cleaned_path"])
+    cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+    cleaned_path.write_bytes(b"pcap")
+
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        [session_path],
+        task="binary",
+        output_root=output_root,
+    )
+    assert ready_rows == []
+    assert len(pending_rows) == 1
+    assert pending_rows[0]["skip_cleaning"] is True
+    assert stats["clean_hits"] == 1
+
+
+def test_run_postprocess_tasks_uses_executor_when_num_workers_gt_one(monkeypatch) -> None:
+    executor_calls = []
+    progress_messages = []
+
+    class FakeExecutor:
+        def __init__(self, max_workers: int):
+            executor_calls.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def map(self, worker, rows):
+            for row in rows:
+                yield worker(row)
+
+    def fake_worker(row, tokenizer_model, tokenizer_max_length, seed):
+        return {**row, "cache_path": f"done::{row['sample_id']}"}
+
+    monkeypatch.setattr("scripts.prepare_dataset.ProcessPoolExecutor", FakeExecutor)
+    rows = [
+        {"sample_id": "a", "order": 0},
+        {"sample_id": "b", "order": 1},
+    ]
+    results = run_postprocess_tasks(
+        rows,
+        tokenizer_model="local-tokenizer",
+        tokenizer_max_length=128,
+        seed=17,
+        num_workers=2,
+        progress_every=1,
+        log_fn=progress_messages.append,
+        worker_fn=fake_worker,
+    )
+    assert executor_calls == [2]
+    assert [row["cache_path"] for row in results] == ["done::a", "done::b"]
+    assert progress_messages
 
 
 def test_build_splitcap_command_supports_launcher(tmp_path: Path) -> None:

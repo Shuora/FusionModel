@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 from shutil import which
+from typing import Callable, Sequence
 
 import pandas as pd
 
@@ -14,7 +18,10 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 from fusion_malicious.data.cache import write_cached_sample
-from fusion_malicious.data.cleaning import anonymize_session_pcap, should_keep_session
+from fusion_malicious.data.cleaning import (
+    anonymize_session_pcap,
+    fingerprint_session_bytes,
+)
 from fusion_malicious.data.etbert_tokens import load_etbert_tokenizer, tokenize_session_bytes
 from fusion_malicious.data.image_features import bytes_to_rgb_image
 from fusion_malicious.data.manifest import build_manifest_dataframe
@@ -32,6 +39,10 @@ TASK_DATASETS = {
 
 PCAPNG_MAGIC = b"\x0a\x0d\x0d\x0a"
 SPLITCAP_DONE_FLAG = ".splitcap.done"
+DEFAULT_NUM_WORKERS = max(1, min(4, os.cpu_count() or 1))
+DEFAULT_PROGRESS_EVERY = 250
+_WORKER_TOKENIZER = None
+_WORKER_TOKENIZER_MODEL = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-splitcap", action="store_true")
     parser.add_argument("--resume-splitcap", dest="resume_splitcap", action="store_true", default=True)
     parser.add_argument("--no-resume-splitcap", dest="resume_splitcap", action="store_false")
+    parser.add_argument("--include-path", action="append", default=[])
+    parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
+    parser.add_argument("--progress-every", type=int, default=DEFAULT_PROGRESS_EVERY)
     parser.add_argument("--tokenizer-model", type=str, required=True)
     parser.add_argument("--tokenizer-max-length", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
@@ -54,8 +68,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def discover_capture_files(source_root: Path, task: str) -> list[Path]:
+def _normalize_include_paths(include_paths: Sequence[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for fragment in include_paths or []:
+        cleaned = fragment.replace("\\", "/").strip("/")
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
+def discover_capture_files(
+    source_root: Path,
+    task: str,
+    include_paths: Sequence[str] | None = None,
+) -> list[Path]:
     allowed = TASK_DATASETS[task]
+    filters = _normalize_include_paths(include_paths)
     files: list[Path] = []
     for path in source_root.rglob("*"):
         if not path.is_file():
@@ -64,6 +92,10 @@ def discover_capture_files(source_root: Path, task: str) -> list[Path]:
             continue
         if not any(part in allowed for part in path.parts):
             continue
+        if filters:
+            relative = path.relative_to(source_root).as_posix()
+            if not any(fragment in relative for fragment in filters):
+                continue
         files.append(path)
     return sorted(files)
 
@@ -178,6 +210,141 @@ def _task_root(output_root: Path, task: str) -> Path:
     return output_root / task
 
 
+def prepare_cached_rows(
+    session_paths: list[Path],
+    *,
+    task: str,
+    output_root: Path,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
+    manifest = build_manifest_dataframe(session_paths, task_name=task)
+    task_root = _task_root(output_root, task)
+    cleaned_root = task_root / "sessions_clean"
+    cache_root = task_root / "cache"
+    seen_fingerprints: set[str] = set()
+    ready_rows: list[dict[str, object]] = []
+    pending_rows: list[dict[str, object]] = []
+    stats = {
+        "empty": 0,
+        "duplicates": 0,
+        "clean_hits": 0,
+        "cache_hits": 0,
+    }
+
+    for order, row in enumerate(manifest.to_dict(orient="records")):
+        source_path = Path(str(row["source_path"]))
+        payload_bytes = read_session_bytes(source_path)
+        if not payload_bytes:
+            stats["empty"] += 1
+            continue
+
+        fingerprint = fingerprint_session_bytes(payload_bytes)
+        if fingerprint in seen_fingerprints:
+            stats["duplicates"] += 1
+            continue
+        seen_fingerprints.add(fingerprint)
+
+        sample_id = str(row["sample_id"])
+        cleaned_path = cleaned_root / f"{sample_id}.pcap"
+        cache_path = cache_root / f"{sample_id}.npz"
+        row["order"] = order
+        row["cleaned_path"] = str(cleaned_path)
+        row["cache_path"] = str(cache_path)
+        row["skip_cleaning"] = cleaned_path.exists()
+        if row["skip_cleaning"]:
+            stats["clean_hits"] += 1
+
+        if cleaned_path.exists() and cache_path.exists():
+            stats["cache_hits"] += 1
+            ready_rows.append(row)
+        else:
+            pending_rows.append(row)
+
+    return ready_rows, pending_rows, stats
+
+
+def _load_worker_tokenizer(model_name_or_path: str):
+    global _WORKER_TOKENIZER, _WORKER_TOKENIZER_MODEL
+    if _WORKER_TOKENIZER is None or _WORKER_TOKENIZER_MODEL != model_name_or_path:
+        _WORKER_TOKENIZER = load_etbert_tokenizer(model_name_or_path)
+        _WORKER_TOKENIZER_MODEL = model_name_or_path
+    return _WORKER_TOKENIZER
+
+
+def process_postprocess_row(
+    row: dict[str, object],
+    tokenizer_model: str,
+    tokenizer_max_length: int,
+    seed: int,
+) -> dict[str, object]:
+    source_path = Path(str(row["source_path"]))
+    cleaned_path = Path(str(row["cleaned_path"]))
+    cache_path = Path(str(row["cache_path"]))
+    if not bool(row.get("skip_cleaning")) or not cleaned_path.exists():
+        anonymize_session_pcap(source_path, cleaned_path, seed=seed)
+
+    payload_bytes = read_session_bytes(cleaned_path)
+    normalized = normalize_session_bytes(payload_bytes, size=784).tobytes()
+    image = bytes_to_rgb_image(normalized, size=784)
+    tokenizer = _load_worker_tokenizer(tokenizer_model)
+    token_text, input_ids, attention_mask = tokenize_session_bytes(
+        normalized,
+        tokenizer=tokenizer,
+        max_length=tokenizer_max_length,
+    )
+    write_cached_sample(
+        cache_path=cache_path,
+        image=image,
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        label=int(row["label_id"]),
+        token_text=token_text,
+    )
+    updated = dict(row)
+    updated["cleaned_path"] = str(cleaned_path)
+    updated["cache_path"] = str(cache_path)
+    return updated
+
+
+def run_postprocess_tasks(
+    pending_rows: list[dict[str, object]],
+    *,
+    tokenizer_model: str,
+    tokenizer_max_length: int,
+    seed: int,
+    num_workers: int,
+    progress_every: int,
+    log_fn: Callable[[str], None] = print,
+    worker_fn: Callable[[dict[str, object], str, int, int], dict[str, object]] = process_postprocess_row,
+) -> list[dict[str, object]]:
+    if not pending_rows:
+        return []
+
+    total = len(pending_rows)
+    results: list[dict[str, object]] = []
+    worker = partial(
+        worker_fn,
+        tokenizer_model=tokenizer_model,
+        tokenizer_max_length=tokenizer_max_length,
+        seed=seed,
+    )
+
+    def consume(iterator) -> None:
+        for completed, row in enumerate(iterator, start=1):
+            results.append(row)
+            if progress_every > 0 and (completed % progress_every == 0 or completed == total):
+                log_fn(f"[cache] completed {completed}/{total}")
+
+    worker_count = max(1, num_workers)
+    if worker_count == 1:
+        consume(map(worker, pending_rows))
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            consume(executor.map(worker, pending_rows))
+
+    results.sort(key=lambda row: int(row["order"]))
+    return results
+
+
 def build_cached_manifest(
     session_paths: list[Path],
     *,
@@ -186,47 +353,35 @@ def build_cached_manifest(
     tokenizer_model: str,
     tokenizer_max_length: int,
     seed: int,
+    num_workers: int,
+    progress_every: int,
 ) -> pd.DataFrame:
-    tokenizer = load_etbert_tokenizer(tokenizer_model)
-    manifest = build_manifest_dataframe(session_paths, task_name=task)
-    task_root = _task_root(output_root, task)
-    cleaned_root = task_root / "sessions_clean"
-    cache_root = task_root / "cache"
-    seen_payloads: set[str] = set()
-    rows: list[dict[str, object]] = []
-
-    for row in manifest.to_dict(orient="records"):
-        source_path = Path(str(row["source_path"]))
-        sample_id = str(row["sample_id"])
-        cleaned_path = cleaned_root / f"{sample_id}.pcap"
-        anonymize_session_pcap(source_path, cleaned_path, seed=seed)
-
-        payload_bytes = read_session_bytes(cleaned_path)
-        if not should_keep_session(payload_bytes, seen_payloads):
-            continue
-
-        normalized = normalize_session_bytes(payload_bytes, size=784).tobytes()
-        image = bytes_to_rgb_image(normalized, size=784)
-        token_text, input_ids, attention_mask = tokenize_session_bytes(
-            normalized,
-            tokenizer=tokenizer,
-            max_length=tokenizer_max_length,
-        )
-        cache_path = cache_root / f"{sample_id}.npz"
-        write_cached_sample(
-            cache_path=cache_path,
-            image=image,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            label=int(row["label_id"]),
-            token_text=token_text,
-        )
-
-        row["cleaned_path"] = str(cleaned_path)
-        row["cache_path"] = str(cache_path)
-        rows.append(row)
-
-    return pd.DataFrame(rows)
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        session_paths,
+        task=task,
+        output_root=output_root,
+    )
+    print(
+        "[cache] planned "
+        f"ready={len(ready_rows)} pending={len(pending_rows)} "
+        f"cache_hits={stats['cache_hits']} clean_hits={stats['clean_hits']} "
+        f"duplicates={stats['duplicates']} empty={stats['empty']}"
+    )
+    processed_rows = run_postprocess_tasks(
+        pending_rows,
+        tokenizer_model=tokenizer_model,
+        tokenizer_max_length=tokenizer_max_length,
+        seed=seed,
+        num_workers=num_workers,
+        progress_every=progress_every,
+    )
+    rows = ready_rows + processed_rows
+    rows.sort(key=lambda row: int(row["order"]))
+    materialized_rows = [
+        {key: value for key, value in row.items() if key not in {"order", "skip_cleaning"}}
+        for row in rows
+    ]
+    return pd.DataFrame(materialized_rows)
 
 
 def write_split_manifests(
@@ -282,7 +437,7 @@ def main() -> None:
         if which(splitcap_launcher[0]) is None:
             raise RuntimeError(f"SplitCap launcher '{splitcap_launcher[0]}' was not found in PATH.")
 
-    raw_paths = discover_capture_files(args.source_root, args.task)
+    raw_paths = discover_capture_files(args.source_root, args.task, include_paths=args.include_path)
     if not raw_paths:
         print(f"No capture files found for task {args.task} under {args.source_root}")
         return
@@ -304,6 +459,8 @@ def main() -> None:
         tokenizer_model=args.tokenizer_model,
         tokenizer_max_length=args.tokenizer_max_length,
         seed=args.seed,
+        num_workers=args.num_workers,
+        progress_every=args.progress_every,
     )
     write_split_manifests(
         frame,
