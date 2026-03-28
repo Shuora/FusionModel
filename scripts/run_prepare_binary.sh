@@ -17,10 +17,18 @@ ARGS=(
   --source-root "$SOURCE_ROOT"
   --output-root "$OUTPUT_ROOT"
   --tokenizer-model "$TOKENIZER_MODEL"
+  --splitcap-launcher "${SPLITCAP_LAUNCHER:-mono}"
+  --editcap-path "${EDITCAP_BIN:-editcap}"
 )
 
 if [[ "${USE_SPLITCAP:-0}" != "1" ]]; then
   ARGS+=(--skip-splitcap)
+else
+  if [[ "${RESUME_SPLITCAP:-1}" == "0" ]]; then
+    ARGS+=(--no-resume-splitcap)
+  else
+    ARGS+=(--resume-splitcap)
+  fi
 fi
 
 python "$REPO_ROOT/scripts/prepare_dataset.py" "${ARGS[@]}" "$@"
