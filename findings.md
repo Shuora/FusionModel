@@ -30,3 +30,10 @@
 
 - 规划阶段现在也会复用 `--num-workers`，将 `read_session_bytes(...)` + fingerprint 计算分发给多个进程。
 - 父进程仍按 manifest 顺序消费 `executor.map(...)` 结果，因此重复样本的“首个保留”语义保持不变。
+
+## Session Byte Extraction
+
+- 根因确认：`read_session_bytes(...)` 之前只拼接 `packet.getlayer(Raw)` 的 `load`，会把“传输层 payload 存在，但 Scapy 未建成 `Raw` 层”的 session 误判为空。
+- 这类误判可以用 `TCP/UDP + Padding` 稳定复现：`Raw` 为 `None`，但 `bytes(packet[TCP].payload)` 或 `bytes(packet[UDP].payload)` 仍有有效字节。
+- 修复后，session 字节提取逻辑改为优先读取 TCP/UDP payload bytes，必要时回退到 IP/IPv6 更底层 payload，最后再回退 `Raw`；真正的 empty session 定义为“最终拼接出的有效字节串长度为 0”。
+- 这次修改保持了下游 `normalize_session_bytes(..., size=784)`、图像构造、tokenize、去重与缓存流程不变，因此语义变化只集中在“哪些 session 被视为非空并进入后续处理”。
