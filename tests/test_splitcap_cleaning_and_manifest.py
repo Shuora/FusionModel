@@ -8,7 +8,11 @@ from fusion_malicious.data.cleaning import (
     should_keep_session,
 )
 from fusion_malicious.data.splitcap import build_splitcap_command
-from scripts.prepare_dataset import discover_capture_files
+from scripts.prepare_dataset import (
+    collect_session_paths,
+    discover_capture_files,
+    prepare_splitcap_input,
+)
 
 
 def test_build_splitcap_command_uses_repo_tool_path(tmp_path: Path) -> None:
@@ -144,3 +148,85 @@ def test_discover_capture_files_filters_by_task(tmp_path: Path) -> None:
 
     ustc_files = discover_capture_files(tmp_path / "SourceData", "ustc")
     assert ustc_files == [other_path]
+
+
+def test_prepare_splitcap_input_converts_pcapng(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "sample.pcapng"
+    source.write_bytes(b"pcapng")
+    commands = []
+
+    def fake_run(command, check):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"pcap")
+
+    monkeypatch.setattr("scripts.prepare_dataset.which", lambda name: "/usr/bin/editcap")
+    monkeypatch.setattr("scripts.prepare_dataset.subprocess.run", fake_run)
+    converted = prepare_splitcap_input(
+        source,
+        working_dir=tmp_path / "work",
+        editcap_path="editcap",
+    )
+    assert converted.suffix == ".pcap"
+    assert converted.exists()
+    assert commands[0][:3] == ["/usr/bin/editcap", "-F", "pcap"]
+
+
+def test_prepare_splitcap_input_converts_pcapng_magic_with_pcap_suffix(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "misnamed.pcap"
+    source.write_bytes(b"\x0a\x0d\x0d\x0a" + b"payload")
+    commands = []
+
+    def fake_run(command, check):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"pcap")
+
+    monkeypatch.setattr("scripts.prepare_dataset.which", lambda name: "/usr/bin/editcap")
+    monkeypatch.setattr("scripts.prepare_dataset.subprocess.run", fake_run)
+    converted = prepare_splitcap_input(
+        source,
+        working_dir=tmp_path / "work",
+        editcap_path="editcap",
+    )
+    assert converted.suffix == ".pcap"
+    assert converted.exists()
+    assert converted.name != source.name
+    assert commands[0][:3] == ["/usr/bin/editcap", "-F", "pcap"]
+
+
+def test_collect_session_paths_reuses_checkpointed_splitcap_output(tmp_path: Path) -> None:
+    raw_path = tmp_path / "captures" / "sample.pcap"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_bytes(b"pcap")
+    output_root = tmp_path / "dataset"
+    session_dir = output_root / "binary" / "sessions_raw" / "sample"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    expected_session = session_dir / "TCP" / "flow.pcap"
+    expected_session.parent.mkdir(parents=True, exist_ok=True)
+    expected_session.write_bytes(b"x")
+    (session_dir / ".splitcap.done").write_text("ok")
+
+    sessions = collect_session_paths(
+        [raw_path],
+        task="binary",
+        output_root=output_root,
+        splitcap_exe=Path("Tools/SplitCap.exe"),
+        splitcap_launcher=None,
+        editcap_path="editcap",
+        skip_splitcap=False,
+        resume_splitcap=True,
+    )
+    assert sessions == [expected_session]
+
+
+def test_build_splitcap_command_supports_launcher(tmp_path: Path) -> None:
+    command = build_splitcap_command(
+        splitcap_exe=Path("Tools/SplitCap.exe"),
+        input_pcap=tmp_path / "input.pcap",
+        output_dir=tmp_path / "sessions",
+        launcher=["mono"],
+    )
+    assert command[0] == "mono"
+    assert command[1].endswith("SplitCap.exe")
