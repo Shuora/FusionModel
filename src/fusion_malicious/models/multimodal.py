@@ -18,8 +18,8 @@ class MultimodalClassifier(nn.Module):
         num_heads: int,
     ) -> None:
         super().__init__()
-        self.image_encoder = ImageEncoder(image_backbone)
-        self.text_encoder = TextEncoder(text_backbone)
+        self.image_encoder = ImageEncoder(image_backbone, output_dim=hidden_dim)
+        self.text_encoder = TextEncoder(text_backbone, output_dim=hidden_dim)
         self.cross_attention = BidirectionalCrossAttention(hidden_dim, num_heads)
         self.gated_fusion = GatedFusion(hidden_dim)
         self.classifier = nn.Linear(hidden_dim, num_classes)

@@ -7,9 +7,10 @@ import pandas as pd
 
 _BINARY_MALICIOUS_DATASETS = {"MTA", "MFCP"}
 _BINARY_BENIGN_DATASETS = {"ISCX-VPN-NonVPN-2016", "ISCX-VPN-VPN-2016"}
+_MULTICLASS_TASKS = {"mta", "mfcp", "ustc"}
 
 
-def _infer_dataset_and_family(session_path: Path) -> tuple[str, str]:
+def infer_dataset_and_family(session_path: Path) -> tuple[str, str]:
     parts = list(session_path.parts)
     dataset = "unknown"
     family = "unknown"
@@ -34,7 +35,7 @@ def _relative_source_path(session_path: Path) -> Path:
     return Path(session_path.name)
 
 
-def _sample_id_from_path(dataset: str, family: str, session_path: Path) -> str:
+def sample_id_from_path(dataset: str, family: str, session_path: Path) -> str:
     relative = _relative_source_path(session_path).with_suffix("")
     identifier = relative.as_posix().replace("/", "_").strip("_")
     if not identifier:
@@ -60,14 +61,28 @@ def build_manifest_dataframe(
     Build a manifest DataFrame for the given session PCAP paths.
     """
     rows = []
+    families = set()
+    resolved_paths: list[tuple[Path, str, str]] = []
     for session_path in session_paths:
-        dataset, family = _infer_dataset_and_family(session_path)
-        sample_id = _sample_id_from_path(dataset, family, session_path)
-        label_name, label_id = (
-            _binary_label_for_dataset(dataset)
-            if task_name == "binary"
-            else ("unknown", -1)
-        )
+        dataset, family = infer_dataset_and_family(session_path)
+        label_key = family if family != "unknown" else dataset
+        families.add(label_key)
+        resolved_paths.append((session_path, dataset, family))
+
+    multi_label_map: dict[str, int] = {}
+    if task_name in _MULTICLASS_TASKS:
+        multi_label_map = {label: index for index, label in enumerate(sorted(families))}
+
+    for session_path, dataset, family in resolved_paths:
+        sample_id = sample_id_from_path(dataset, family, session_path)
+        if task_name == "binary":
+            label_name, label_id = _binary_label_for_dataset(dataset)
+        elif task_name in _MULTICLASS_TASKS:
+            normalized_family = family if family != "unknown" else dataset
+            label_name = normalized_family
+            label_id = multi_label_map.get(label_name, -1)
+        else:
+            label_name, label_id = "unknown", -1
         rows.append(
             {
                 "sample_id": sample_id,
