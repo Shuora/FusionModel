@@ -5,18 +5,23 @@ val_split: 0.1
 test_split: 0.2
 image_size: 112
 fixed_bytes: 784
+image_model: mobilevit_s
+text_model: distilbert-base-uncased
+tokenizer_model: distilbert-base-uncased
+manifest: dataset/ustc/test.csv
+subset: test
 train:
   subset: train
   dataset: ustc
   batch_size: 32
-  source_root: SourceData/ustc
+  source_root: dataset/ustc/train.csv
 val:
   subset: val
   dataset: ustc
   batch_size: 32
-  source_root: SourceData/ustc
+  source_root: dataset/ustc/val.csv
 test:
   subset: test
   dataset: ustc
   batch_size: 32
-  source_root: SourceData/ustc
+  source_root: dataset/ustc/test.csv

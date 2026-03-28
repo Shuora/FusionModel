@@ -8,6 +8,7 @@ from fusion_malicious.data.cleaning import (
     should_keep_session,
 )
 from fusion_malicious.data.splitcap import build_splitcap_command
+from scripts.prepare_dataset import discover_capture_files
 
 
 def test_build_splitcap_command_uses_repo_tool_path(tmp_path: Path) -> None:
@@ -110,3 +111,36 @@ def test_anonymize_invalidates_tcp_checksum(tmp_path: Path) -> None:
     anonymize_session_pcap(input_path, output_path, seed=17)
     anonymized = rdpcap(str(output_path))[0]
     assert anonymized[TCP].chksum != original_tcp
+
+
+def test_build_manifest_dataframe_for_multiclass_task(tmp_path: Path) -> None:
+    paths = []
+    for family in ("Dridex", "Trickbot"):
+        session_path = tmp_path / "SourceData" / "MTA" / family / f"{family}.pcap"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_bytes(b"pcap")
+        paths.append(session_path)
+
+    frame = build_manifest_dataframe(paths, task_name="mta")
+    assert len(frame) == 2
+    expected_label_map = {"Dridex": 0, "Trickbot": 1}
+    for row in frame.itertuples():
+        assert row.label_name in expected_label_map
+        assert row.label_id == expected_label_map[row.label_name]
+
+
+def test_discover_capture_files_filters_by_task(tmp_path: Path) -> None:
+    mta_path = tmp_path / "SourceData" / "MTA" / "Dridex" / "a.pcap"
+    benign_path = tmp_path / "SourceData" / "ISCX-VPN-NonVPN-2016" / "VPN-PCAPs-02" / "b.pcapng"
+    other_path = tmp_path / "SourceData" / "USTC-TFC2016" / "c.pcap"
+    for path in (mta_path, benign_path, other_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+
+    binary_files = discover_capture_files(tmp_path / "SourceData", "binary")
+    assert mta_path in binary_files
+    assert benign_path in binary_files
+    assert other_path not in binary_files
+
+    ustc_files = discover_capture_files(tmp_path / "SourceData", "ustc")
+    assert ustc_files == [other_path]

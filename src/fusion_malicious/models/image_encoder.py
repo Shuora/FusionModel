@@ -5,9 +5,11 @@ from torch import nn
 
 
 class ImageEncoder(nn.Module):
-    def __init__(self, backbone: nn.Module) -> None:
+    def __init__(self, backbone: nn.Module, output_dim: int | None = None) -> None:
         super().__init__()
         self.backbone = backbone
+        self.output_dim = output_dim
+        self.projection: nn.Linear | None = None
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         tokens = self.backbone(image)
@@ -15,14 +17,33 @@ class ImageEncoder(nn.Module):
             raise TypeError("Image backbone must return a tensor")
 
         if tokens.dim() == 3:
-            return tokens
+            pass
 
-        if tokens.dim() == 4:
+        elif tokens.dim() == 4:
             batch, channels, height, width = tokens.shape
             flatten = tokens.flatten(2)  # [B, C, H*W]
-            return flatten.transpose(1, 2).reshape(batch, height * width, channels)
+            tokens = flatten.transpose(1, 2).reshape(batch, height * width, channels)
 
-        if tokens.dim() == 2:
-            return tokens.unsqueeze(1)
+        elif tokens.dim() == 2:
+            tokens = tokens.unsqueeze(1)
 
-        raise ValueError(f"Unsupported image backbone output shape: {tokens.shape}")
+        else:
+            raise ValueError(f"Unsupported image backbone output shape: {tokens.shape}")
+
+        return self._project_if_needed(tokens)
+
+    def _project_if_needed(self, tokens: torch.Tensor) -> torch.Tensor:
+        if self.output_dim is None:
+            return tokens
+
+        feature_dim = tokens.size(-1)
+        if feature_dim == self.output_dim:
+            return tokens
+
+        projection = self.projection
+        if projection is None or projection.in_features != feature_dim:
+            projection = nn.Linear(feature_dim, self.output_dim)
+            projection.to(device=tokens.device, dtype=tokens.dtype)
+            self.projection = projection
+
+        return projection(tokens)
