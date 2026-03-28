@@ -27,3 +27,25 @@
 3. 实现 `prepare_dataset.py` 的参数、过滤、并行后处理和日志。
 4. 更新入口脚本透传新参数。
 5. 运行相关测试并汇总结果。
+
+## Preprocess Planning Logs
+
+### Goal
+为 `prepare_cached_rows(...)` 增加规划阶段进度日志，避免全量二分类在去重扫描阶段长时间静默。
+
+### Steps
+1. 复盘 `Ctrl+C` 栈和当前实现，确认瓶颈在父进程串行 `read_session_bytes(...)` 去重。
+2. 补测试，覆盖规划阶段日志输出。
+3. 在不改变去重语义的前提下实现 `[plan]` 周期性日志。
+4. 运行目标 pytest 验证，并给出新的运行预期。
+
+## Preprocess Planning Performance
+
+### Goal
+并行化 `prepare_cached_rows(...)` 中的 payload 读取与 fingerprint 计算，在不改变去重顺序与结果的前提下缩短规划阶段耗时。
+
+### Steps
+1. 为规划阶段并行 payload 检查补测试。
+2. 实现有序消费的 payload inspection worker。
+3. 保持 `[plan]` 日志、empty/duplicate/cache 统计语义不变。
+4. 跑回归测试并记录结果。

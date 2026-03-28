@@ -55,3 +55,14 @@
 - [ ] **Step 1: Update execution docs with actual outcomes**
 - [ ] **Step 2: Run final verification commands**
 - [ ] **Step 3: Summarize resulting CLI usage and tradeoffs**
+
+### Task 5: Surface planning-stage progress
+
+**Files:**
+- Modify: `scripts/prepare_dataset.py`
+- Modify: `tests/test_splitcap_cleaning_and_manifest.py`
+
+- [ ] **Step 1: Write a failing test that captures `[plan]` heartbeat output during `prepare_cached_rows(...)`**
+- [ ] **Step 2: Run the targeted test and verify current code stays silent until planning completes**
+- [ ] **Step 3: Implement lightweight planning logs without changing duplicate-filter semantics**
+- [ ] **Step 4: Re-run the targeted test and then the full related test file**

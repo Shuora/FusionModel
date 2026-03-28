@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -210,11 +211,24 @@ def _task_root(output_root: Path, task: str) -> Path:
     return output_root / task
 
 
+def inspect_session_payload(source_path: str) -> dict[str, object]:
+    payload_bytes = read_session_bytes(source_path)
+    if not payload_bytes:
+        return {"empty": True, "fingerprint": None}
+    return {
+        "empty": False,
+        "fingerprint": fingerprint_session_bytes(payload_bytes),
+    }
+
+
 def prepare_cached_rows(
     session_paths: list[Path],
     *,
     task: str,
     output_root: Path,
+    num_workers: int = 1,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
+    log_fn: Callable[[str], None] = print,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
     manifest = build_manifest_dataframe(session_paths, task_name=task)
     task_root = _task_root(output_root, task)
@@ -229,35 +243,62 @@ def prepare_cached_rows(
         "clean_hits": 0,
         "cache_hits": 0,
     }
+    total = len(manifest.index)
+    started_at = time.perf_counter()
 
-    for order, row in enumerate(manifest.to_dict(orient="records")):
+    if total:
+        log_fn(f"[plan] scanning {total} session(s)")
+
+    rows = manifest.to_dict(orient="records")
+    source_paths = [str(row["source_path"]) for row in rows]
+    worker_count = max(1, num_workers)
+    chunksize = max(1, total // (worker_count * 8)) if total and worker_count > 1 else 1
+
+    def process_inspection(order: int, row: dict[str, object], inspection: dict[str, object]) -> None:
         source_path = Path(str(row["source_path"]))
-        payload_bytes = read_session_bytes(source_path)
-        if not payload_bytes:
+        if bool(inspection["empty"]):
             stats["empty"] += 1
-            continue
-
-        fingerprint = fingerprint_session_bytes(payload_bytes)
-        if fingerprint in seen_fingerprints:
-            stats["duplicates"] += 1
-            continue
-        seen_fingerprints.add(fingerprint)
-
-        sample_id = str(row["sample_id"])
-        cleaned_path = cleaned_root / f"{sample_id}.pcap"
-        cache_path = cache_root / f"{sample_id}.npz"
-        row["order"] = order
-        row["cleaned_path"] = str(cleaned_path)
-        row["cache_path"] = str(cache_path)
-        row["skip_cleaning"] = cleaned_path.exists()
-        if row["skip_cleaning"]:
-            stats["clean_hits"] += 1
-
-        if cleaned_path.exists() and cache_path.exists():
-            stats["cache_hits"] += 1
-            ready_rows.append(row)
         else:
-            pending_rows.append(row)
+            fingerprint = str(inspection["fingerprint"])
+            if fingerprint in seen_fingerprints:
+                stats["duplicates"] += 1
+            else:
+                seen_fingerprints.add(fingerprint)
+                sample_id = str(row["sample_id"])
+                cleaned_path = cleaned_root / f"{sample_id}.pcap"
+                cache_path = cache_root / f"{sample_id}.npz"
+                row["order"] = order
+                row["cleaned_path"] = str(cleaned_path)
+                row["cache_path"] = str(cache_path)
+                row["skip_cleaning"] = cleaned_path.exists()
+                if row["skip_cleaning"]:
+                    stats["clean_hits"] += 1
+
+                if cleaned_path.exists() and cache_path.exists():
+                    stats["cache_hits"] += 1
+                    ready_rows.append(row)
+                else:
+                    pending_rows.append(row)
+
+        scanned = order + 1
+        if progress_every > 0 and (scanned % progress_every == 0 or scanned == total):
+            elapsed = time.perf_counter() - started_at
+            log_fn(
+                "[plan] scanned "
+                f"{scanned}/{total} ready={len(ready_rows)} pending={len(pending_rows)} "
+                f"cache_hits={stats['cache_hits']} clean_hits={stats['clean_hits']} "
+                f"duplicates={stats['duplicates']} empty={stats['empty']} "
+                f"elapsed={elapsed:.1f}s"
+            )
+
+    if worker_count == 1:
+        for order, (row, inspection) in enumerate(zip(rows, map(inspect_session_payload, source_paths))):
+            process_inspection(order, row, inspection)
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            inspections = executor.map(inspect_session_payload, source_paths, chunksize=chunksize)
+            for order, (row, inspection) in enumerate(zip(rows, inspections)):
+                process_inspection(order, row, inspection)
 
     return ready_rows, pending_rows, stats
 
@@ -360,6 +401,8 @@ def build_cached_manifest(
         session_paths,
         task=task,
         output_root=output_root,
+        num_workers=num_workers,
+        progress_every=progress_every,
     )
     print(
         "[cache] planned "

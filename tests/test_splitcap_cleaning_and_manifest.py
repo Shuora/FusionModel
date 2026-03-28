@@ -306,6 +306,80 @@ def test_prepare_cached_rows_marks_existing_cleaned_for_resume(tmp_path: Path) -
     assert stats["clean_hits"] == 1
 
 
+def test_prepare_cached_rows_reports_planning_progress(tmp_path: Path) -> None:
+    session_paths = []
+    for index in range(3):
+        session_path = tmp_path / "SourceData" / "MTA" / "Trickbot" / f"flow{index}.pcap"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        packet = Ether() / IP() / TCP() / Raw(load=f"payload-{index}".encode())
+        wrpcap(str(session_path), [packet])
+        session_paths.append(session_path)
+
+    messages = []
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        session_paths,
+        task="binary",
+        output_root=tmp_path / "dataset",
+        progress_every=2,
+        log_fn=messages.append,
+    )
+
+    assert ready_rows == []
+    assert len(pending_rows) == 3
+    assert stats["duplicates"] == 0
+    assert messages[0] == "[plan] scanning 3 session(s)"
+    assert any(message.startswith("[plan] scanned 2/3") for message in messages)
+    assert any(message.startswith("[plan] scanned 3/3") for message in messages)
+
+
+def test_prepare_cached_rows_uses_executor_for_payload_inspection(monkeypatch, tmp_path: Path) -> None:
+    session_paths = []
+    for name in ("a", "b", "c"):
+        session_path = tmp_path / "SourceData" / "MTA" / "Trickbot" / f"{name}.pcap"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_bytes(b"pcap")
+        session_paths.append(session_path)
+
+    executor_calls = []
+
+    class FakeExecutor:
+        def __init__(self, max_workers: int):
+            executor_calls.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def map(self, worker, rows, chunksize=1):
+            for row in rows:
+                yield worker(row)
+
+    fingerprints = {
+        str(session_paths[0]): {"empty": False, "fingerprint": "fp-a"},
+        str(session_paths[1]): {"empty": False, "fingerprint": "fp-b"},
+        str(session_paths[2]): {"empty": False, "fingerprint": "fp-a"},
+    }
+
+    monkeypatch.setattr("scripts.prepare_dataset.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("scripts.prepare_dataset.inspect_session_payload", lambda path: fingerprints[path])
+
+    ready_rows, pending_rows, stats = prepare_cached_rows(
+        session_paths,
+        task="binary",
+        output_root=tmp_path / "dataset",
+        num_workers=2,
+        progress_every=10,
+        log_fn=lambda message: None,
+    )
+
+    assert executor_calls == [2]
+    assert ready_rows == []
+    assert [row["source_path"] for row in pending_rows] == [str(session_paths[0]), str(session_paths[1])]
+    assert stats["duplicates"] == 1
+
+
 def test_run_postprocess_tasks_uses_executor_when_num_workers_gt_one(monkeypatch) -> None:
     executor_calls = []
     progress_messages = []

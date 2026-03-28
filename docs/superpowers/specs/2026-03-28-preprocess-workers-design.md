@@ -28,6 +28,7 @@ Make dataset preparation resumable beyond SplitCap, observable during long runs,
 
 - SplitCap remains single-process and checkpointed as-is.
 - Post-processing uses a worker pool with a new `--num-workers` option.
+- The same worker count is reused for planning-stage payload inspection so the expensive `read_session_bytes(...)` pass no longer stays single-process on large runs.
 - Each worker handles cleaning, byte normalization, tokenization, and cache writing for one sample at a time.
 - Tokenizer instances are initialized inside workers to avoid cross-process sharing issues.
 
@@ -35,6 +36,7 @@ Make dataset preparation resumable beyond SplitCap, observable during long runs,
 
 - Add `--progress-every` with a conservative default.
 - Log total scheduled items, completed items, skipped items, deduped items, and cache hits.
+- The parent-process planning pass must emit its own `[plan]` heartbeat before any worker output exists, because full binary runs can spend tens of minutes deduplicating `sessions_raw` serially.
 
 ## Risks
 
