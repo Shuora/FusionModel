@@ -67,3 +67,18 @@
   - `attention_curve.png`（可采集到注意力权重时）
 - attention_stacking 模式同样落到独立 run 子目录并产出固定核心文件；同时保留 method 级附加产物（如 `confusion_matrix_<method>.png`、`report_<method>.md`）以避免信息丢失。
 - `run_all_modes.py` 无需改动即可复用：在 `mode=all` 下两次调用共享同一 `output_dir`，但各自在 `output_dir/<run_name>/` 下保存，不再互相覆盖。
+
+## Findings (2026-03-29, attention plotting crash)
+
+- 用户日志中的致命崩溃不是 PyTorch nested tensor warning，也不是 `np.log` warning；真正导致进程 `core dumped` 的是 `tkinter`/Tcl：
+  - `RuntimeError: main thread is not in main loop`
+  - `Tcl_AsyncDelete: async handler deleted by the wrong thread`
+- 当前 [src/fusion_common.py](/home/shuora/Traffic/FusionModel/.worktrees/attention-headless-fix/src/fusion_common.py) 在 `plot_training_curves()`、`plot_confusion()`、`collect_attention_diagnostics()` 内直接 `import matplotlib.pyplot as plt`，未统一强制无头后端，CLI 训练进程可能落到 `TkAgg` 并在析构阶段触发 Tcl/Tk 跨线程崩溃。
+- `summarize_attention()` 在 `pad_mask` 分支中会生成真实的零值概率；原写法 `np.where(a_nonpad > 0, np.log(a_nonpad), 0.0)` 会先整体求 `np.log(a_nonpad)`，因此即使逻辑上过滤了零值，也仍会产生 `divide by zero encountered in log` warning。
+
+## Final Findings (2026-03-29, attention plotting crash)
+
+- 已新增 `load_pyplot_headless()`，统一将 `matplotlib` 后端切到 `Agg`；若 `pyplot` 已提前导入且后端不是 `Agg`，则回退到 `plt.switch_backend("Agg")`。
+- `plot_training_curves()`、`plot_confusion()`、`collect_attention_diagnostics()` 现在全部通过该 helper 获取 `pyplot`，不再依赖 Tk GUI backend。
+- 模块加载时额外设置 `MPLBACKEND=Agg` 默认值，进一步降低其他导入路径误选 `TkAgg` 的概率。
+- `summarize_attention()` 的 entropy 计算已改为 `np.log(a_nonpad, out=safe_log, where=a_nonpad > 0)`，`pad_mask` 产生的零值不会再触发运行时 warning。

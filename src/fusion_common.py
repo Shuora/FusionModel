@@ -75,10 +75,27 @@ except ModuleNotFoundError:
     MobileViTConfig = None
 
 logger = logging.getLogger(__name__)
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 
 def resolve_charbert_src() -> str:
     return str(Path(__file__).resolve().parent / 'CharBERT' / 'src')
+
+
+def load_pyplot_headless():
+    import matplotlib
+
+    if "matplotlib.pyplot" in sys.modules:
+        import matplotlib.pyplot as plt
+
+        if "agg" not in str(plt.get_backend()).lower():
+            plt.switch_backend("Agg")
+        return plt
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    return plt
 
 
 def _autocast_ctx(device: torch.device, enabled: bool):
@@ -1264,7 +1281,7 @@ def evaluate_full(model: nn.Module, data_loader: DataLoader, device: torch.devic
 
 
 def plot_training_curves(history: dict, path: Path, title: str) -> None:
-    import matplotlib.pyplot as plt
+    plt = load_pyplot_headless()
 
     epochs = range(1, len(history.get("train_acc", [])) + 1)
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
@@ -1290,7 +1307,7 @@ def plot_training_curves(history: dict, path: Path, title: str) -> None:
 
 
 def plot_confusion(cm: np.ndarray, labels: List[str], path: Path, title: str) -> None:
-    import matplotlib.pyplot as plt
+    plt = load_pyplot_headless()
 
     fig_cm, ax_cm = plt.subplots(figsize=(8, 8))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
@@ -1348,7 +1365,8 @@ def summarize_attention(attn: np.ndarray, pad_mask: Optional[np.ndarray] = None)
     mx = float(a_nonpad.max())
     mn = float(a_nonpad.min())
 
-    safe_log = np.where(a_nonpad > 0, np.log(a_nonpad), 0.0)
+    safe_log = np.zeros_like(a_nonpad)
+    np.log(a_nonpad, out=safe_log, where=a_nonpad > 0)
     ent = -(a_nonpad * safe_log).sum(axis=1)
     ent_mean = float(ent.mean())
 
@@ -1441,7 +1459,7 @@ def collect_attention_diagnostics(
         a_nonpad = (attn_all * nonpad) / denom
         mean_curve = a_nonpad.mean(axis=0)
 
-        import matplotlib.pyplot as plt
+        plt = load_pyplot_headless()
 
         fig, ax = plt.subplots(figsize=(10, 3))
         ax.plot(mean_curve)
@@ -2195,4 +2213,3 @@ def run_stacking_experiment(
 
     run_logger.info("done stacking: run_dir=%s log=%s", run_dir, log_path)
     print(f"[{ensemble_tag}] done. run_dir={run_dir}, saved_base={base_model_path}")
-

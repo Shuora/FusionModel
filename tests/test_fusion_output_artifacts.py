@@ -77,6 +77,17 @@ class FusionOutputArtifactsTests(unittest.TestCase):
             self.assertEqual(paths_a["metrics_curve"].read_text(encoding="utf-8"), "attention")
             self.assertEqual(paths_b["metrics_curve"].read_text(encoding="utf-8"), "stacking")
 
+    def test_load_pyplot_headless_uses_agg_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plt = fc.load_pyplot_headless()
+            fig = plt.figure()
+            output_path = Path(tmpdir) / "headless_plot.png"
+            fig.savefig(output_path)
+            plt.close(fig)
+
+            self.assertTrue(output_path.exists())
+            self.assertIn("agg", plt.get_backend().lower())
+
 
 if __name__ == "__main__":
     unittest.main()

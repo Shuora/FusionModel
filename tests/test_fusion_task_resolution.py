@@ -1,6 +1,7 @@
 import math
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,20 @@ class FusionTaskResolutionTests(unittest.TestCase):
         stats = summarize_attention([[1.0, 0.0, 0.0], [0.5, 0.5, 0.0]])
         self.assertTrue(math.isfinite(stats['entropy']))
         self.assertTrue(math.isfinite(stats['top1']))
+
+    def test_summarize_attention_does_not_warn_on_zero_probabilities(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            stats = summarize_attention(
+                [[0.4, 0.6, 0.0], [0.1, 0.9, 0.0]],
+                [[False, False, True], [False, False, True]],
+            )
+
+        self.assertTrue(math.isfinite(stats["entropy"]))
+        self.assertFalse(
+            any("divide by zero encountered in log" in str(item.message) for item in caught),
+            "summarize_attention() should avoid RuntimeWarning when attention contains zeros",
+        )
 
 
 class TemporaryDirectoryContext:
