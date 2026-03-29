@@ -38,3 +38,18 @@
 - 2026-03-29: 更新 `collect_attention_diagnostics()`，支持固定 `attention_curve.png` 输出（兼容旧前缀逻辑）。
 - 2026-03-29: 运行 GREEN：同命令复跑，结果 `Ran 2 tests ... OK`。
 - 2026-03-29: 回归验证：`python -m unittest tests.test_attention_entrypoints tests.test_run_all_modes tests.test_fusion_output_artifacts -v`，结果 `Ran 6 tests ... OK`。
+
+## Progress (2026-03-29, attention plotting crash)
+
+- 2026-03-29: 读取 `systematic-debugging`、`test-driven-development`、`using-git-worktrees`、`verification-before-completion` 技能。
+- 2026-03-29: 发现主工作区已有未提交改动，按要求创建 worktree `/home/shuora/Traffic/FusionModel/.worktrees/attention-headless-fix`，分支 `codex-attention-headless-fix`。
+- 2026-03-29: 发现当前 shell 存在 `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:...` 污染；后续验证统一使用 `env -u PYTHONPATH PYTHONNOUSERSITE=1` 隔离用户 site-package。
+- 2026-03-29: 在 worktree 运行基线：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_fusion_task_resolution tests.test_fusion_output_artifacts -v`，结果 `Ran 5 tests ... OK`。
+- 2026-03-29: 新增 RED 用例：
+  - `tests/test_fusion_task_resolution.py`：`pad_mask` + zero probability 不应触发 `divide by zero encountered in log`；
+  - `tests/test_fusion_output_artifacts.py`：`load_pyplot_headless()` 应返回 `Agg` backend 并可成功 `savefig`。
+- 2026-03-29: 运行 RED：同命令复跑，结果 `FAILED (failures=1, errors=1)`；失败点分别为 `np.log` warning 仍存在、`load_pyplot_headless` 尚未实现。
+- 2026-03-29: 修改 `src/fusion_common.py`，新增统一 headless `pyplot` helper，并将三处绘图入口切换到 `Agg`。
+- 2026-03-29: 修改 `src/fusion_common.py` 中 attention entropy 的对数计算方式，避免零值 warning。
+- 2026-03-29: 运行 GREEN：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_fusion_task_resolution tests.test_fusion_output_artifacts -v`，结果 `Ran 7 tests ... OK`。
+- 2026-03-29: 回归验证：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_attention_entrypoints tests.test_run_all_modes -v`，结果 `Ran 4 tests ... OK`。

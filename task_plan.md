@@ -58,3 +58,9 @@
 - [x] `run_fusion_experiment()`/`run_stacking_experiment()` 改为每次 run 独立子目录，固定文件名保存核心产物。
 - [x] `collect_attention_diagnostics()` 支持固定文件名参数，attention 诊断图稳定输出 `attention_curve.png`（可用时）。
 - [x] 兼容 `run_all_modes.py`：`mode=all` 同根目录执行时，attention 与 stacking 通过 run 子目录隔离。
+
+## Execution Update (2026-03-29, attention plotting crash)
+- [x] RED：在 `tests/test_fusion_task_resolution.py` 增加 `pad_mask` 分支 warning 回归用例，锁定 `np.where(..., np.log(...), ...)` 仍会触发 `divide by zero encountered in log`。
+- [x] RED：在 `tests/test_fusion_output_artifacts.py` 增加 `load_pyplot_headless()` 用例，要求绘图后端为 `Agg` 且可成功 `savefig`。
+- [x] GREEN：在 `src/fusion_common.py` 新增统一 headless `pyplot` helper，并让训练曲线、混淆矩阵、attention curve 全部经由该 helper 落图。
+- [x] GREEN：将 entropy 计算改为 `np.log(..., out=..., where=...)`，避免 padding 位置零值触发运行时 warning。
