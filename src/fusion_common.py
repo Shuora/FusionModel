@@ -17,18 +17,67 @@ from pathlib import Path
 from typing import Optional, Union, Iterable, List, Tuple
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 from PIL import Image
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, ConfusionMatrixDisplay
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-from torchvision import transforms
-from tqdm import tqdm
-from transformers import MobileViTForImageClassification, MobileViTConfig
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    import torch.nn.functional as F
+    from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+except ModuleNotFoundError:
+    torch = None
+
+    class _TorchModulePlaceholder:
+        pass
+
+    class _NNPlaceholder:
+        Module = object
+
+        def __getattr__(self, name):
+            raise ModuleNotFoundError("torch is required for training functionality")
+
+    nn = _NNPlaceholder()
+    optim = None
+    F = None
+    DataLoader = object
+    Dataset = object
+    WeightedRandomSampler = object
+
+try:
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, ConfusionMatrixDisplay
+except ModuleNotFoundError:
+    def _missing_sklearn(*args, **kwargs):
+        raise ModuleNotFoundError("scikit-learn is required for evaluation functionality")
+
+    accuracy_score = classification_report = confusion_matrix = f1_score = _missing_sklearn
+
+    class ConfusionMatrixDisplay:  # type: ignore[override]
+        def __init__(self, *args, **kwargs):
+            _missing_sklearn()
+
+try:
+    from torchvision import transforms
+except ModuleNotFoundError:
+    transforms = None
+
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:
+    def tqdm(iterable, **kwargs):
+        return iterable
+
+try:
+    from transformers import MobileViTForImageClassification, MobileViTConfig
+except ModuleNotFoundError:
+    MobileViTForImageClassification = None
+    MobileViTConfig = None
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_charbert_src() -> str:
+    return str(Path(__file__).resolve().parent / 'CharBERT' / 'src')
 
 
 def _autocast_ctx(device: torch.device, enabled: bool):
@@ -195,6 +244,34 @@ def default_dirs() -> tuple[str, str, str, str]:
     base = Path(__file__).resolve().parent
     train_img, train_pcap, test_img, test_pcap, _ = resolve_dataset_dirs(base / "dataset")
     return train_img, train_pcap, test_img, test_pcap
+
+
+def resolve_task_dataset_dirs(
+    processed_root: Union[str, os.PathLike],
+    task_name: str,
+) -> tuple[str, str, str, str, str]:
+    task_root = Path(processed_root) / task_name
+    if not task_root.exists() or not task_root.is_dir():
+        raise FileNotFoundError(f"task dataset root does not exist: {task_root}")
+
+    train_image_dir = task_root / "image_data" / "Train"
+    train_pcap_dir = task_root / "pcap_data" / "Train"
+    test_image_dir = task_root / "image_data" / "Test"
+    test_pcap_dir = task_root / "pcap_data" / "Test"
+    required_dirs = [train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir]
+    missing = [str(d) for d in required_dirs if not d.exists() or not d.is_dir()]
+    if missing:
+        raise FileNotFoundError(
+            f"Task dataset structure is incomplete for {task_name}. Missing directories: {missing}"
+        )
+
+    return (
+        str(train_image_dir),
+        str(train_pcap_dir),
+        str(test_image_dir),
+        str(test_pcap_dir),
+        task_name,
+    )
 
 
 def device_from_arg(device: str) -> torch.device:
@@ -683,7 +760,7 @@ class CharBERTTextEncoder(nn.Module):
         self.char_hidden_size = hidden_size
 
         try:
-            charbert_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "CharBERT", "src"))
+            charbert_src = resolve_charbert_src()
             if charbert_src not in sys.path:
                 sys.path.insert(0, charbert_src)
 
@@ -752,81 +829,6 @@ class CharBERTTextEncoder(nn.Module):
         return self.proj(x_mean)
 
 
-class FusionModel(nn.Module):
-    """
-    融合模型：结合 MobileViT（图像）和 CharBERT（Pcap 字节序列）
-    """
-
-    def __init__(self, num_classes: int = 10, fusion_mode: str = "concat"):
-        super().__init__()
-        self.fusion_mode = fusion_mode
-
-        config = MobileViTConfig()
-        self.mobilevit = MobileViTForImageClassification(config)
-        mobilevit_feature_dim = config.neck_hidden_sizes[-1] if hasattr(config, "neck_hidden_sizes") else 640
-
-        self.text_encoder = CharBERTTextEncoder(
-            feature_dim=256,
-            seq_len=784,
-            hidden_size=128,
-            num_layers=2,
-            num_heads=4,
-            dropout=0.3,
-        )
-        text_feature_dim = self.text_encoder.feature_dim
-
-        if fusion_mode == "concat":
-            fusion_dim = mobilevit_feature_dim + text_feature_dim
-            self.fusion_layer = nn.Sequential(
-                nn.Linear(fusion_dim, 512),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(512, 256),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, num_classes),
-            )
-        elif fusion_mode == "weighted":
-            self.image_weight = nn.Parameter(torch.tensor(0.5))
-            self.pcap_weight = nn.Parameter(torch.tensor(0.5))
-
-            self.image_proj = nn.Linear(mobilevit_feature_dim, 256)
-            self.pcap_proj = nn.Linear(text_feature_dim, 256)
-
-            self.fusion_layer = nn.Sequential(
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(128, num_classes),
-            )
-        else:
-            raise ValueError(f"未知融合模式: {fusion_mode}")
-
-        self.mobilevit.classifier = nn.Linear(mobilevit_feature_dim, mobilevit_feature_dim)
-
-    def forward(self, image: torch.Tensor, pcap_data: torch.Tensor) -> torch.Tensor:
-        image_features = self.mobilevit(image).logits
-        pcap_features = self.text_encoder(pcap_data)
-
-        if self.fusion_mode == "concat":
-            fused_features = torch.cat([image_features, pcap_features], dim=1)
-            output = self.fusion_layer(fused_features)
-        elif self.fusion_mode == "weighted":
-            image_features = self.image_proj(image_features)
-            pcap_features = self.pcap_proj(pcap_features)
-
-            total_weight = torch.abs(self.image_weight) + torch.abs(self.pcap_weight)
-            norm_image_weight = torch.abs(self.image_weight) / total_weight
-            norm_pcap_weight = torch.abs(self.pcap_weight) / total_weight
-
-            fused_features = norm_image_weight * image_features + norm_pcap_weight * pcap_features
-            output = self.fusion_layer(fused_features)
-        else:
-            raise ValueError(f"未知融合模式: {self.fusion_mode}")
-
-        return output
-
-
 class AttentionFusionModel(nn.Module):
     """Cross-attention fusion model."""
 
@@ -893,12 +895,13 @@ class AttentionFusionModel(nn.Module):
         return logits
 
 
-def initialize_fusion_model(num_classes: int, fusion_mode: str = "concat", attention_dim: int = 256) -> nn.Module:
+def initialize_fusion_model(num_classes: int, fusion_mode: str = "attention", attention_dim: int = 256) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
-    if fusion_mode == "attention":
-        model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim)
-    else:
-        model = FusionModel(num_classes=num_classes, fusion_mode=fusion_mode)
+    if fusion_mode != "attention":
+        raise ValueError(f"unsupported fusion mode: {fusion_mode}")
+    if torch is None or MobileViTForImageClassification is None or MobileViTConfig is None:
+        raise ModuleNotFoundError("torch and transformers are required for attention fusion training")
+    model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim)
     logger.info("融合模型初始化完成，分类头设置为 %s 个类别", num_classes)
     return model
 
@@ -1266,7 +1269,8 @@ def summarize_attention(attn: np.ndarray, pad_mask: Optional[np.ndarray] = None)
     mx = float(a_nonpad.max())
     mn = float(a_nonpad.min())
 
-    ent = -(a_nonpad * np.log(a_nonpad)).sum(axis=1)
+    safe_log = np.where(a_nonpad > 0, np.log(a_nonpad), 0.0)
+    ent = -(a_nonpad * safe_log).sum(axis=1)
     ent_mean = float(ent.mean())
 
     def topk_mass(k: int) -> float:
@@ -1483,6 +1487,11 @@ def add_common_args(p):
         help="Dataset folder name under dataset_root; empty means auto-select first by name",
     )
     p.add_argument(
+        "--task_name",
+        default="",
+        help="ProcessedData task name, e.g. binary_benign_vs_malicious or ustc_multiclass",
+    )
+    p.add_argument(
         "--cic_group",
         default="",
         help="For grouped CIC dataset, choose one or more top-level groups, e.g. Adware or Adware,Ransomware",
@@ -1583,10 +1592,16 @@ def build_common_kwargs(args):
         except Exception:
             pass
 
-    train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir, resolved_dataset_name = resolve_dataset_dirs(
-        args.dataset_root,
-        args.dataset_name or None,
-    )
+    if getattr(args, "task_name", ""):
+        train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir, resolved_dataset_name = resolve_task_dataset_dirs(
+            args.dataset_root,
+            args.task_name,
+        )
+    else:
+        train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir, resolved_dataset_name = resolve_dataset_dirs(
+            args.dataset_root,
+            args.dataset_name or None,
+        )
     _apply_preset_defaults(args, resolved_dataset_name)
     logger.info("Using dataset: %s (root=%s)", resolved_dataset_name, args.dataset_root)
     print(f"[Data] dataset={resolved_dataset_name}")

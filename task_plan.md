@@ -1,29 +1,12 @@
-# Task Plan
+## Task
+分析最新 attention 融合训练结果，解释为什么第一个 epoch 指标已经很高。
 
-## Goal
-
-Refactor preprocessing and training around the new `SourceData` layout, keep only attention-based fusion plus attention stacking, and support four independent training tasks:
-
-- `binary_benign_vs_malicious`
-- `ustc_multiclass`
-- `mta_multiclass`
-- `mfcp_multiclass`
-
-## Planned Steps
-
-1. Audit the current repository state and document the new raw-data layouts and current training/fusion boundaries.
-2. Write and review the design spec for config-driven preprocessing and task-driven training.
-3. Create an isolated git worktree before implementation.
-4. Refactor preprocessing to build standardized processed datasets from `SourceData`.
-5. Refactor image generation to operate on the new processed dataset roots.
-6. Refactor training code to remove non-attention fusion paths while preserving attention stacking.
-7. Introduce config-driven task definitions for binary and per-dataset multiclass training.
-8. Update run entrypoints and related documentation.
-9. Run targeted verification without `mvn test`.
+## Plan
+1. 定位最新训练日志、报告与输出文件，提取首轮指标与时间点。
+2. 检查训练循环和模型初始化，确认指标统计口径与是否存在预训练/冻结行为。
+3. 检查数据切分与 manifest，判断高首轮分数是否受数据泄漏或任务难度影响。
+4. 汇总结论与改进建议。
 
 ## Constraints
-
-- Do not revert unrelated user changes in the dirty worktree.
-- Do not run `mvn test`.
-- Use the new `SourceData` tree as the raw source of truth.
-- Second-stage multiclass training is independent from first-stage binary training.
+- 本次仅做排查，不修改训练代码。
+- 不运行 `mvn test`。
