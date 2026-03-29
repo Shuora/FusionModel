@@ -27,3 +27,14 @@
 - 2026-03-29: 运行同一 unittest 命令，得到 `FAILED (errors=1)`。
 - 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，将恢复逻辑前移到 `split_dataset()` 起始阶段。
 - 2026-03-29: 复跑同一 unittest 命令，结果 `Ran 16 tests ... OK`。
+
+## Progress (2026-03-29, attention output persistence)
+
+- 2026-03-29: 创建 worktree `/home/shuora/Traffic/FusionModel/.worktrees/attention-run-output-isolation`，分支 `codex/attention-run-output-isolation`。
+- 2026-03-29: 阅读 `src/fusion_common.py`、`src/run_all_modes.py`、`src/train_fusion_attention.py`、`src/train_fusion_attention_stacking.py` 与相关 tests，确认现有输出命名与冲突风险。
+- 2026-03-29: 新增 `tests/test_fusion_output_artifacts.py`，先写两个 TDD 用例（metrics 导出 + run 隔离）。
+- 2026-03-29: 运行 RED：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && python -m unittest tests.test_fusion_output_artifacts -v`，结果 `FAILED (errors=2)`（缺少 `export_metrics_artifacts`、`prepare_run_output_dir`）。
+- 2026-03-29: 修改 `src/fusion_common.py`，新增 run 目录和指标导出 helper，并将 attention / stacking 训练主流程接入固定文件名落盘。
+- 2026-03-29: 更新 `collect_attention_diagnostics()`，支持固定 `attention_curve.png` 输出（兼容旧前缀逻辑）。
+- 2026-03-29: 运行 GREEN：同命令复跑，结果 `Ran 2 tests ... OK`。
+- 2026-03-29: 回归验证：`python -m unittest tests.test_attention_entrypoints tests.test_run_all_modes tests.test_fusion_output_artifacts -v`，结果 `Ran 6 tests ... OK`。

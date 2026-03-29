@@ -45,3 +45,25 @@
 - 已将“检测并恢复 `.split_data_backup_*` 且 final 缺失”的逻辑前移到 `split_dataset()` 最开始，确保 discovery 前即恢复到最近一次提交态。
 - `promote` 阶段仍保留同一恢复逻辑，作为发布前防御，不影响现有 staging/rollback 机制。
 - 新增测试验证：手工制造 backup-only 损坏状态后，用 `unknown_task` 在 promote 前失败，函数会先恢复旧输出再抛出预期异常。
+
+## Findings (2026-03-29, attention output persistence)
+
+- 旧实现将产物直接写到 `output_dir` 根目录且普遍携带 `tag+timestamp` 文件名，缺少统一机器可读汇总，`metrics.json`/`epoch_metrics.csv` 未稳定产出。
+- `run_fusion_experiment()` 与 `run_stacking_experiment()` 之前共享同一输出平面；在同 `output_dir` 连续运行时虽靠文件名前缀降低碰撞，但不满足“固定文件名 + run 隔离”目标。
+- `collect_attention_diagnostics()` 原本仅支持 `attention_curve_{prefix}.png` 命名，不便在 run 目录内稳定落盘固定文件名。
+
+## Final Findings (2026-03-29, attention output persistence)
+
+- 已在 `src/fusion_common.py` 建立统一落盘抽象：
+  - `prepare_run_output_dir(output_dir, run_name)`：每次 run 创建独立子目录，并对重名 run 自动后缀避让。
+  - `build_run_artifact_paths(run_dir)`：统一固定文件名（`train.log`、`metrics.json`、`epoch_metrics.csv`、`metrics_curve.png`、`confusion_matrix.png`、`attention_curve.png` 等）。
+  - `export_metrics_artifacts(run_dir, history, metrics_payload)`：稳定导出 JSON + CSV。
+- attention 模式输出已改为固定文件名且全部落到 run 子目录：
+  - `train.log`
+  - `metrics.json`
+  - `epoch_metrics.csv`
+  - `metrics_curve.png`
+  - `confusion_matrix.png`
+  - `attention_curve.png`（可采集到注意力权重时）
+- attention_stacking 模式同样落到独立 run 子目录并产出固定核心文件；同时保留 method 级附加产物（如 `confusion_matrix_<method>.png`、`report_<method>.md`）以避免信息丢失。
+- `run_all_modes.py` 无需改动即可复用：在 `mode=all` 下两次调用共享同一 `output_dir`，但各自在 `output_dir/<run_name>/` 下保存，不再互相覆盖。

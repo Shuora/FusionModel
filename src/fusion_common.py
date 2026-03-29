@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import csv
 import logging
 import math
 import os
@@ -282,7 +283,85 @@ def device_from_arg(device: str) -> torch.device:
 
 def ensure_output_dirs(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+
+def prepare_run_output_dir(output_dir: Path, run_name: str) -> Path:
+    ensure_output_dirs(output_dir)
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(run_name).strip())
+    base_name = safe_name or "run"
+
+    run_dir = output_dir / base_name
+    if not run_dir.exists():
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+
+    suffix = 2
+    while True:
+        candidate = output_dir / f"{base_name}_{suffix}"
+        if not candidate.exists():
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        suffix += 1
+
+
+def build_run_artifact_paths(run_dir: Path) -> dict:
+    run_dir = Path(run_dir)
+    return {
+        "train_log": run_dir / "train.log",
+        "metrics_json": run_dir / "metrics.json",
+        "epoch_metrics_csv": run_dir / "epoch_metrics.csv",
+        "metrics_curve": run_dir / "metrics_curve.png",
+        "confusion_matrix": run_dir / "confusion_matrix.png",
+        "attention_curve": run_dir / "attention_curve.png",
+        "report_md": run_dir / "report.md",
+        "model": run_dir / "fusion_model.pth",
+        "base_model": run_dir / "fusion_model_base.pth",
+    }
+
+
+def _to_jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _history_epoch_rows(history: dict) -> List[dict]:
+    columns = ["train_loss", "train_acc", "train_f1", "val_loss", "val_acc", "val_f1"]
+    max_len = max((len(history.get(col, [])) for col in columns), default=0)
+    rows: List[dict] = []
+    for idx in range(max_len):
+        row = {"epoch": idx + 1}
+        for col in columns:
+            seq = history.get(col, [])
+            row[col] = seq[idx] if idx < len(seq) else ""
+        rows.append(row)
+    return rows
+
+
+def export_metrics_artifacts(run_dir: Path, history: dict, metrics_payload: dict) -> Tuple[Path, Path]:
+    paths = build_run_artifact_paths(run_dir)
+
+    metrics_path = paths["metrics_json"]
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(metrics_payload), f, ensure_ascii=False, indent=2)
+
+    epoch_csv_path = paths["epoch_metrics_csv"]
+    fieldnames = ["epoch", "train_loss", "train_acc", "train_f1", "val_loss", "val_acc", "val_f1"]
+    rows = _history_epoch_rows(history)
+    with open(epoch_csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return metrics_path, epoch_csv_path
 
 
 def log_saved(logger_obj, path: Path, what: str) -> None:
@@ -1305,6 +1384,7 @@ def collect_attention_diagnostics(
     prefix: str,
     logger_obj,
     max_batches: int = 6,
+    filename: Optional[str] = None,
 ) -> Optional[Path]:
     try:
         model.eval()
@@ -1368,7 +1448,8 @@ def collect_attention_diagnostics(
         ax.set_title("Mean attention over pcap positions")
         ax.set_xlabel("Token index")
         ax.set_ylabel("Attention")
-        attn_fig_path = output_dir / f"attention_curve_{prefix}.png"
+        attn_filename = filename or f"attention_curve_{prefix}.png"
+        attn_fig_path = output_dir / attn_filename
         fig.tight_layout()
         fig.savefig(attn_fig_path)
         plt.close(fig)
@@ -1698,10 +1779,13 @@ def run_fusion_experiment(
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = make_tag(fusion_mode, attention_dim)
-    log_path = output_dir / "logs" / f"{tag}_{ts}.log"
+    run_dir = prepare_run_output_dir(output_dir, f"{tag}_{ts}")
+    artifact_paths = build_run_artifact_paths(run_dir)
+
+    log_path = artifact_paths["train_log"]
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{fusion_mode}")
-    run_logger.info("start %s: outputs=%s", fusion_mode, output_dir)
+    run_logger.info("start %s: output_root=%s run_dir=%s", fusion_mode, output_dir, run_dir)
 
     train_loader, train_classes = load_fusion_data(
         train_image_dir,
@@ -1764,15 +1848,19 @@ def run_fusion_experiment(
         val_every=val_every,
     )
 
+    attention_curve_path: Optional[Path] = None
     if fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
-            output_dir,
+            run_dir,
             prefix=f"{tag}_{ts}",
             logger_obj=run_logger,
+            filename=artifact_paths["attention_curve"].name,
         )
+        if attention_curve_path is not None:
+            log_saved(run_logger, attention_curve_path, "attention_curve")
 
     eval_result = evaluate_full(model, test_loader, device)
     run_logger.info("评估结果:")
@@ -1782,15 +1870,15 @@ def run_fusion_experiment(
         run_logger.info("  分类报告:\n%s", eval_result["report"])
     run_logger.info("  混淆矩阵:\n%s", eval_result["cm"])
 
-    curve_path = output_dir / f"metrics_curve_{tag}_{ts}.png"
+    curve_path = artifact_paths["metrics_curve"]
     plot_training_curves(history, curve_path, title=f"Training Curves - {tag}")
-    log_saved(run_logger, curve_path, f"metrics_curve_{tag}")
+    log_saved(run_logger, curve_path, "metrics_curve")
 
-    cm_path = output_dir / f"confusion_matrix_{tag}_{ts}.png"
+    cm_path = artifact_paths["confusion_matrix"]
     plot_confusion(eval_result["cm"], train_classes, cm_path, f"Confusion Matrix - {tag}")
-    log_saved(run_logger, cm_path, f"confusion_matrix_{tag}")
+    log_saved(run_logger, cm_path, "confusion_matrix")
 
-    report_path = output_dir / f"report_{tag}_{ts}.md"
+    report_path = artifact_paths["report_md"]
     save_report_md(
         report_path,
         title=f"融合方式: {fusion_mode}",
@@ -1801,14 +1889,48 @@ def run_fusion_experiment(
         confusion_image=cm_path.name,
         curve_image=curve_path.name,
     )
-    log_saved(run_logger, report_path, f"report_{tag}")
+    log_saved(run_logger, report_path, "report")
 
-    model_path = output_dir / f"fusion_model_{tag}.pth"
+    model_path = artifact_paths["model"]
     torch.save(model.state_dict(), model_path)
-    log_saved(run_logger, model_path, f"model_{tag}")
+    log_saved(run_logger, model_path, "model")
 
-    run_logger.info("done %s: log=%s", fusion_mode, log_path)
-    print(f"[{fusion_mode}] done. acc={eval_result['acc']:.4f}, saved={model_path}, log={log_path}")
+    metrics_payload = {
+        "mode": fusion_mode,
+        "tag": tag,
+        "timestamp": ts,
+        "run_name": run_dir.name,
+        "run_dir": str(run_dir),
+        "output_root": str(output_dir),
+        "classes": train_classes,
+        "history": history,
+        "eval": {
+            "loss": eval_result["loss"],
+            "acc": eval_result["acc"],
+            "macro_f1": eval_result["macro_f1"],
+            "report": eval_result["report"],
+            "confusion_matrix": eval_result["cm"],
+            "per_class_f1": eval_result["per_class_f1"],
+        },
+        "artifacts": {
+            "train_log": log_path.name,
+            "metrics_curve": curve_path.name,
+            "confusion_matrix": cm_path.name,
+            "attention_curve": attention_curve_path.name if attention_curve_path else None,
+            "report": report_path.name,
+            "model": model_path.name,
+        },
+    }
+    metrics_path, epoch_csv_path = export_metrics_artifacts(
+        run_dir=run_dir,
+        history=history,
+        metrics_payload=metrics_payload,
+    )
+    log_saved(run_logger, metrics_path, "metrics_json")
+    log_saved(run_logger, epoch_csv_path, "epoch_metrics_csv")
+
+    run_logger.info("done %s: run_dir=%s log=%s", fusion_mode, run_dir, log_path)
+    print(f"[{fusion_mode}] done. acc={eval_result['acc']:.4f}, run_dir={run_dir}, saved={model_path}")
 
 
 def run_stacking_experiment(
@@ -1855,10 +1977,14 @@ def run_stacking_experiment(
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_tag = make_tag(base_fusion_mode, attention_dim)
     ensemble_tag = ensemble_tag or f"{base_tag}_stacking"
-    log_path = output_dir / "logs" / f"{ensemble_tag}_{ts}.log"
+    run_dir = prepare_run_output_dir(output_dir, f"{ensemble_tag}_{ts}")
+    artifact_paths = build_run_artifact_paths(run_dir)
+
+    log_path = artifact_paths["train_log"]
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
-    run_logger.info("start stacking: base=%s outputs=%s", base_fusion_mode, output_dir)
+    run_logger.info("start stacking: base=%s output_root=%s run_dir=%s", base_fusion_mode, output_dir, run_dir)
+    methods = list(meta_methods)
 
     train_loader, train_classes = load_fusion_data(
         train_image_dir,
@@ -1921,31 +2047,56 @@ def run_stacking_experiment(
         val_every=val_every,
     )
 
+    attention_curve_path: Optional[Path] = None
     if base_fusion_mode == "attention":
-        collect_attention_diagnostics(
+        attention_curve_path = collect_attention_diagnostics(
             model,
             test_loader,
             device,
-            output_dir,
+            run_dir,
             prefix=f"{ensemble_tag}_{ts}",
             logger_obj=run_logger,
+            filename=artifact_paths["attention_curve"].name,
         )
+        if attention_curve_path is not None:
+            log_saved(run_logger, attention_curve_path, "attention_curve")
 
-    curve_path = output_dir / f"metrics_curve_{ensemble_tag}_{ts}.png"
+    curve_path = artifact_paths["metrics_curve"]
     plot_training_curves(history, curve_path, title=f"Training Curves - {ensemble_tag}")
-    log_saved(run_logger, curve_path, f"metrics_curve_{ensemble_tag}")
+    log_saved(run_logger, curve_path, "metrics_curve")
+
+    base_eval = evaluate_full(model, test_loader, device)
+    cm_path = artifact_paths["confusion_matrix"]
+    plot_confusion(base_eval["cm"], train_classes, cm_path, f"Confusion Matrix - {ensemble_tag}")
+    log_saved(run_logger, cm_path, "confusion_matrix")
+
+    report_path = artifact_paths["report_md"]
+    save_report_md(
+        report_path,
+        title=f"融合方式: {base_fusion_mode}+stacking ({ensemble_tag})",
+        acc=base_eval["acc"],
+        macro_f1=base_eval["macro_f1"],
+        report=base_eval["report"],
+        cm=base_eval["cm"],
+        confusion_image=cm_path.name,
+        curve_image=curve_path.name,
+    )
+    log_saved(run_logger, report_path, "report")
 
     meta_features, meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, train_loader, device)
     test_meta_features, test_meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, test_loader, device)
 
-    for method in meta_methods:
+    method_results = []
+    for method in methods:
         try:
             meta_model = train_meta_learner(meta_features, meta_labels, method=method)
         except ImportError as e:
             run_logger.warning("跳过 %s: %s", method, e)
+            method_results.append({"method": method, "skipped": True, "reason": str(e)})
             continue
         except Exception as e:
             run_logger.warning("训练 %s 失败: %s", method, e)
+            method_results.append({"method": method, "failed": True, "reason": str(e)})
             continue
 
         preds = meta_model.predict(test_meta_features)
@@ -1960,36 +2111,88 @@ def run_stacking_experiment(
             run_logger.info("[%s] 分类报告:\n%s", tag, report)
         run_logger.info("[%s] 混淆矩阵:\n%s", tag, cm)
 
-        cm_path = output_dir / f"confusion_matrix_{tag}_{ts}.png"
-        plot_confusion(cm, train_classes, cm_path, f"Confusion Matrix - {tag}")
-        log_saved(run_logger, cm_path, f"confusion_matrix_{tag}")
+        method_cm_path = run_dir / f"confusion_matrix_{method}.png"
+        plot_confusion(cm, train_classes, method_cm_path, f"Confusion Matrix - {tag}")
+        log_saved(run_logger, method_cm_path, f"confusion_matrix_{method}")
 
-        report_path = output_dir / f"report_{tag}_{ts}.md"
+        method_report_path = run_dir / f"report_{method}.md"
         save_report_md(
-            report_path,
+            method_report_path,
             title=f"融合方式: {base_fusion_mode}+stacking ({method})",
             acc=acc,
             macro_f1=macro_f1,
             report=report,
             cm=cm,
-            confusion_image=cm_path.name,
+            confusion_image=method_cm_path.name,
             curve_image=curve_path.name,
         )
-        log_saved(run_logger, report_path, f"report_{tag}")
+        log_saved(run_logger, method_report_path, f"report_{method}")
 
+        meta_model_path = None
         try:
             import pickle
 
-            meta_path = output_dir / f"meta_model_{tag}.pkl"
-            with open(meta_path, "wb") as f:
+            meta_model_path = run_dir / f"meta_model_{method}.pkl"
+            with open(meta_model_path, "wb") as f:
                 pickle.dump(meta_model, f)
-            log_saved(run_logger, meta_path, f"meta_model_{tag}")
+            log_saved(run_logger, meta_model_path, f"meta_model_{method}")
         except Exception as e:
             run_logger.warning("保存 %s 失败: %s", method, e)
 
-    base_path = output_dir / f"fusion_model_{ensemble_tag}_base.pth"
-    torch.save(model.state_dict(), base_path)
-    log_saved(run_logger, base_path, f"model_{ensemble_tag}_base")
+        method_results.append(
+            {
+                "method": method,
+                "acc": acc,
+                "macro_f1": macro_f1,
+                "report": report,
+                "confusion_matrix": cm,
+                "confusion_matrix_path": method_cm_path.name,
+                "report_path": method_report_path.name,
+                "meta_model_path": meta_model_path.name if meta_model_path else None,
+            }
+        )
 
-    run_logger.info("done stacking: log=%s", log_path)
-    print(f"[{ensemble_tag}] done. saved_base={base_path}, log={log_path}")
+    base_model_path = artifact_paths["base_model"]
+    torch.save(model.state_dict(), base_model_path)
+    log_saved(run_logger, base_model_path, "model_base")
+
+    metrics_payload = {
+        "mode": "attention_stacking",
+        "base_fusion_mode": base_fusion_mode,
+        "tag": ensemble_tag,
+        "timestamp": ts,
+        "run_name": run_dir.name,
+        "run_dir": str(run_dir),
+        "output_root": str(output_dir),
+        "classes": train_classes,
+        "history": history,
+        "base_eval": {
+            "loss": base_eval["loss"],
+            "acc": base_eval["acc"],
+            "macro_f1": base_eval["macro_f1"],
+            "report": base_eval["report"],
+            "confusion_matrix": base_eval["cm"],
+            "per_class_f1": base_eval["per_class_f1"],
+        },
+        "meta_methods": methods,
+        "method_results": method_results,
+        "artifacts": {
+            "train_log": log_path.name,
+            "metrics_curve": curve_path.name,
+            "confusion_matrix": cm_path.name,
+            "attention_curve": attention_curve_path.name if attention_curve_path else None,
+            "report": report_path.name,
+            "base_model": base_model_path.name,
+        },
+    }
+    metrics_path, epoch_csv_path = export_metrics_artifacts(
+        run_dir=run_dir,
+        history=history,
+        metrics_payload=metrics_payload,
+    )
+    log_saved(run_logger, metrics_path, "metrics_json")
+    log_saved(run_logger, epoch_csv_path, "epoch_metrics_csv")
+
+    run_logger.info("done stacking: run_dir=%s log=%s", run_dir, log_path)
+    print(f"[{ensemble_tag}] done. run_dir={run_dir}, saved_base={base_model_path}")
+
