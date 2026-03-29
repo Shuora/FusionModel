@@ -1,12 +1,10 @@
 /.idea/
 /SourceData/
 /dataset/
-.worktrees/
+/.worktrees/
 /outputs/
 /runs/
 __pycache__/
 *.pyc
-/docs/planning-with-files/
-!/.worktrees/
-!/outputs/
-!/SourceData/
+/ProcessedData/
+.codex
