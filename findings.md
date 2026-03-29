@@ -1,32 +1,6 @@
-# Findings
+## Findings
 
-## Repository State
-
-- The worktree is already dirty, with many deleted files and a newly introduced `src/` training layout.
-- Existing planning files from a previous iteration were deleted in the current worktree state.
-
-## Data Layout
-
-- Raw data now lives under `SourceData/`.
-- `SourceData` contains heterogeneous dataset layouts:
-  - flat dataset files: `USTC-TFC2016/*.pcap`
-  - family directories: `MTA/<family>/*.pcap`, `MFCP/<family>/*.pcap`
-  - grouped files with `.pcap` and `.pcapng`: `ISCX-VPN-NonVPN-2016/<group>/*`
-
-## Current Code Limits
-
-- `src/split_data.py` is hard-coded for the old `CICAndMal2017` layout and only scans `.pcap`.
-- `src/ssl_tls_rgb_image.py` is hard-coded to fixed `pcap_data` and `image_data` roots under the old dataset path.
-- `src/fusion_common.py` still carries `concat`, `weighted`, and `attention` fusion paths plus multiple ensemble entrypoints.
-- Current training code expects already-processed datasets, not raw `SourceData`.
-
-## Confirmed Product Decisions
-
-- Keep only attention fusion for the neural fusion model.
-- Keep stacking support, but only on top of the attention base model.
-- Binary task is `benign` vs `malicious`.
-- Multiclass stage is independent from binary stage.
-- Multiclass tasks are dataset-specific and malicious-only:
-  - `USTC-TFC2016`
-  - `MTA`
-  - `MFCP`
+- 最新 attention 训练日志显示，首个记录点是完整 `Epoch 1` 结束后的汇总，不是第一个 batch。
+- `AttentionFusionModel` 使用 `MobileViTConfig()` 和 `build_model(cfg, ...)` 直接实例化编码器，未见加载外部预训练权重。
+- `split_data.py` 当前是在 session 级别随机划分 Train/Test，同一原始 pcap 的不同 session 会同时进入 Train 和 Test。
+- `binary_benign_vs_malicious/metadata/manifest.json` 中 Train/Test 的 `raw_path` 完全重叠，说明评估存在源文件级泄漏。
