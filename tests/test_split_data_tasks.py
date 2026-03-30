@@ -459,6 +459,21 @@ class SplitDataTaskTests(unittest.TestCase):
 
         self.assertEqual(packets, [(1.000002, packet)])
 
+    def test_iter_packets_tolerates_truncated_tail_in_pcap(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            capture_path = tmp_path / 'tail-truncated.pcap'
+            packet = b'\x00' * 60
+            capture_path.write_bytes(
+                struct.pack('<IHHIIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+                + struct.pack('<IIII', 1, 2, len(packet), len(packet))
+                + packet
+                + b'\x00\x00'
+            )
+
+            packets = list(iter_packets(capture_path))
+
+        self.assertEqual(packets, [(1.000002, packet)])
+
 
 class DummySample:
     def __init__(self, name: str, label: str) -> None:
