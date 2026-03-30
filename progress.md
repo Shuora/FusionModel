@@ -1,5 +1,6 @@
 ## Progress
 
+<<<<<<< HEAD
 <<<<<<< Updated upstream
 - 2026-03-30: 读取 `using-superpowers`、`systematic-debugging`、`test-driven-development`、`using-git-worktrees` 技能，并按仓库约束在项目内创建 `.worktrees/codex-pcap-tail-tolerance`。
 - 2026-03-30: 复核 `split_data.py` 的异常路径，确认 `expand_raw_samples_to_sessions()` 会在读取异常时跳过整个 `pcap`。
@@ -16,3 +17,67 @@
 - 2026-03-30: 新增 `AGENTS.md`，要求后续 AI 修改代码、命令或流程时同步更新 `README.md` 与 `AGENTS.md`。
 - 2026-03-30: 运行 `python3 -m unittest tests.test_attention_entrypoints tests.test_split_data_tasks tests.test_task_config tests.test_run_all_modes tests.test_ssl_tls_rgb_image tests.test_fusion_task_resolution`，结果通过。
 >>>>>>> Stashed changes
+=======
+<<<<<<< HEAD
+- 2026-03-30: 读取 `run_all_modes.py`、`train_fusion_attention.py`、`train_fusion_attention_stacking.py`、`fusion_common.py`，确认训练入口与通用参数集合。
+- 2026-03-30: 读取 `split_data.py` 与 `ssl_tls_rgb_image.py`，确认原始 pcap 到 `ProcessedData/<task>` 的标准数据处理流程。
+- 2026-03-30: 检查 `requirements.txt`、测试文件和 `.gitignore`，确认依赖、任务名范围与仓库忽略目录。
+- 2026-03-30: 运行 `python3 ... --help` 验证主要 CLI 可用，确认 README 应统一使用 `python3` 而不是 `python`。
+- 2026-03-30: 收集到 `tools/sort_outputs_by_mode.py` 与 `tools/split_concat_log.py` 含硬编码 Windows 路径，不适合写成通用命令。
+- 2026-03-30: 将训练默认参数统一调整为 `batch_size=32`、`num_workers=4`，并同步收敛 `prefetch_factor=2` 及相关文档说明。
+=======
+- 2026-03-29: 读取 `using-superpowers`、`brainstorming`、`writing-plans`、`using-git-worktrees`、`systematic-debugging`、`test-driven-development` 技能。
+- 2026-03-29: 确认用户批准“单 capture 先按时间切分，再分别 sessionize”的设计。
+- 2026-03-29: 创建 worktree `/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split`，分支 `codex/time-blocked-split`。
+- 2026-03-29: 在 worktree 运行 `python3 -m unittest tests.test_split_data_tasks -v`，基线通过。
+- 2026-03-29: 在 [tests/test_split_data_tasks.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/tests/test_split_data_tasks.py) 增加 3 个 TDD 用例（单 raw 时间切分、跨边界丢弃、多 raw raw-level）。
+- 2026-03-29: 运行 `source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && python -m unittest tests.test_split_data_tasks -v`，得到 `FAILED (failures=1, errors=2)`，进入 RED。
+- 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，实现 hybrid split policy 与跨边界丢弃逻辑。
+- 2026-03-29: 复跑同一命令，结果 `Ran 10 tests ... OK`，进入 GREEN。
+- 2026-03-29: 更新 task artifacts 与 superpowers spec/plan，记录最终策略与验证结果。
+- 2026-03-29: 在 [tests/test_split_data_tasks.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/tests/test_split_data_tasks.py) 新增质量回归测试（singleton 读包失败容错、同时间戳 packet-order fallback）。
+- 2026-03-29: 运行同一 unittest 命令，得到 `FAILED (failures=1, errors=1)`，确认 code review 问题可复现。
+- 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，完成 singleton 容错、同时间戳 fallback 与流式两遍扫描改造。
+- 2026-03-29: 复跑同一 unittest 命令，结果 `Ran 12 tests ... OK`。
+- 2026-03-29: 在 [tests/test_split_data_tasks.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/tests/test_split_data_tasks.py) 新增碰撞与 rerun 清理回归测试。
+- 2026-03-29: 运行同一 unittest 命令，得到 `FAILED (failures=2)`，确认存在 session 文件覆盖与 rerun 残留。
+- 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，加入 `raw_path hash` 命名策略与 rerun 去脏流程。
+- 2026-03-29: 复跑同一 unittest 命令，结果 `Ran 14 tests ... OK`。
+- 2026-03-29: 新增事务回归测试（成功后再次失败应保留旧输出），用 `unknown_task` 触发失败路径。
+- 2026-03-29: 运行同一 unittest 命令，得到 `FAILED (errors=1)`，确认失败 rerun 会清空旧 manifest。
+- 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，实现 `.split_data_staging` staging + commit/rollback 事务发布。
+- 2026-03-29: 复跑同一 unittest 命令，结果 `Ran 15 tests ... OK`。
+- 2026-03-29: 增强事务发布健壮性：若存在中断遗留的 `.split_data_backup_*` 且 final 缺失，先恢复再发布。
+- 2026-03-29: 复跑同一 unittest 命令，结果仍为 `Ran 15 tests ... OK`。
+- 2026-03-29: 新增恢复时机回归测试（backup-only 损坏 + promote 前失败），确认当前实现会失败。
+- 2026-03-29: 运行同一 unittest 命令，得到 `FAILED (errors=1)`。
+- 2026-03-29: 修改 [src/split_data.py](/home/shuora/Traffic/FusionModel/.worktrees/time-blocked-split/src/split_data.py)，将恢复逻辑前移到 `split_dataset()` 起始阶段。
+- 2026-03-29: 复跑同一 unittest 命令，结果 `Ran 16 tests ... OK`。
+
+## Progress (2026-03-29, attention output persistence)
+
+- 2026-03-29: 创建 worktree `/home/shuora/Traffic/FusionModel/.worktrees/attention-run-output-isolation`，分支 `codex/attention-run-output-isolation`。
+- 2026-03-29: 阅读 `src/fusion_common.py`、`src/run_all_modes.py`、`src/train_fusion_attention.py`、`src/train_fusion_attention_stacking.py` 与相关 tests，确认现有输出命名与冲突风险。
+- 2026-03-29: 新增 `tests/test_fusion_output_artifacts.py`，先写两个 TDD 用例（metrics 导出 + run 隔离）。
+- 2026-03-29: 运行 RED：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && python -m unittest tests.test_fusion_output_artifacts -v`，结果 `FAILED (errors=2)`（缺少 `export_metrics_artifacts`、`prepare_run_output_dir`）。
+- 2026-03-29: 修改 `src/fusion_common.py`，新增 run 目录和指标导出 helper，并将 attention / stacking 训练主流程接入固定文件名落盘。
+- 2026-03-29: 更新 `collect_attention_diagnostics()`，支持固定 `attention_curve.png` 输出（兼容旧前缀逻辑）。
+- 2026-03-29: 运行 GREEN：同命令复跑，结果 `Ran 2 tests ... OK`。
+- 2026-03-29: 回归验证：`python -m unittest tests.test_attention_entrypoints tests.test_run_all_modes tests.test_fusion_output_artifacts -v`，结果 `Ran 6 tests ... OK`。
+
+## Progress (2026-03-29, attention plotting crash)
+
+- 2026-03-29: 读取 `systematic-debugging`、`test-driven-development`、`using-git-worktrees`、`verification-before-completion` 技能。
+- 2026-03-29: 发现主工作区已有未提交改动，按要求创建 worktree `/home/shuora/Traffic/FusionModel/.worktrees/attention-headless-fix`，分支 `codex-attention-headless-fix`。
+- 2026-03-29: 发现当前 shell 存在 `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages:...` 污染；后续验证统一使用 `env -u PYTHONPATH PYTHONNOUSERSITE=1` 隔离用户 site-package。
+- 2026-03-29: 在 worktree 运行基线：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_fusion_task_resolution tests.test_fusion_output_artifacts -v`，结果 `Ran 5 tests ... OK`。
+- 2026-03-29: 新增 RED 用例：
+  - `tests/test_fusion_task_resolution.py`：`pad_mask` + zero probability 不应触发 `divide by zero encountered in log`；
+  - `tests/test_fusion_output_artifacts.py`：`load_pyplot_headless()` 应返回 `Agg` backend 并可成功 `savefig`。
+- 2026-03-29: 运行 RED：同命令复跑，结果 `FAILED (failures=1, errors=1)`；失败点分别为 `np.log` warning 仍存在、`load_pyplot_headless` 尚未实现。
+- 2026-03-29: 修改 `src/fusion_common.py`，新增统一 headless `pyplot` helper，并将三处绘图入口切换到 `Agg`。
+- 2026-03-29: 修改 `src/fusion_common.py` 中 attention entropy 的对数计算方式，避免零值 warning。
+- 2026-03-29: 运行 GREEN：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_fusion_task_resolution tests.test_fusion_output_artifacts -v`，结果 `Ran 7 tests ... OK`。
+- 2026-03-29: 回归验证：`source /home/shuora/miniconda3/etc/profile.d/conda.sh && conda activate FusionModel && env -u PYTHONPATH PYTHONNOUSERSITE=1 python -m unittest tests.test_attention_entrypoints tests.test_run_all_modes -v`，结果 `Ran 4 tests ... OK`。
+>>>>>>> c926dfcf8bb829c579b702d527601a20ba85ca45
+>>>>>>> b23c1ae5f224cc4b17dd1dd42703f3536fdf21d9
