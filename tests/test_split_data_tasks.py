@@ -1,3 +1,5 @@
+import json
+import os
 import sys
 import struct
 import unittest
@@ -104,29 +106,35 @@ class SplitDataTaskTests(unittest.TestCase):
         self.assertEqual(len(session_items), 2)
         self.assertEqual({item.label for item in session_items}, {'alpha'})
         self.assertEqual({item.raw_path for item in session_items}, {Path('/tmp/family.pcap')})
-        self.assertEqual(
-            {item.session_name for item in session_items},
-            {
-                'family.TCP_1-1-1-1_1111_2-2-2-2_80',
-                'family.UDP_3-3-3-3_2222_4-4-4-4_53',
-            },
+        self.assertEqual(len({item.session_name for item in session_items}), 2)
+        self.assertTrue(
+            any(
+                name.endswith('.TCP_1-1-1-1_1111_2-2-2-2_80') and name.startswith('family-')
+                for name in {item.session_name for item in session_items}
+            )
+        )
+        self.assertTrue(
+            any(
+                name.endswith('.UDP_3-3-3-3_2222_4-4-4-4_53') and name.startswith('family-')
+                for name in {item.session_name for item in session_items}
+            )
         )
 
-    def test_split_dataset_splits_sessions_from_single_raw_capture(self) -> None:
+    def test_split_dataset_time_splits_single_raw_capture_before_sessionize(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:
             source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
             source_root.mkdir(parents=True)
             capture_path = source_root / 'Geodo.pcap'
             capture_path.write_bytes(b'x')
 
-            fake_sessions = {
-                ('TCP', '1-1-1-1', 1111, '2-2-2-2', 80): bytearray(b'a'),
-                ('TCP', '1-1-1-1', 1112, '2-2-2-2', 80): bytearray(b'b'),
-                ('TCP', '1-1-1-1', 1113, '2-2-2-2', 80): bytearray(b'c'),
-                ('TCP', '1-1-1-1', 1114, '2-2-2-2', 80): bytearray(b'd'),
-            }
+            packet_stream = [
+                (1.0, ('TCP', '1-1-1-1', 1111, '2-2-2-2', 80), b'a'),
+                (2.0, ('TCP', '1-1-1-1', 1112, '2-2-2-2', 80), b'b'),
+                (8.0, ('TCP', '1-1-1-1', 1113, '2-2-2-2', 80), b'c'),
+                (9.0, ('TCP', '1-1-1-1', 1114, '2-2-2-2', 80), b'd'),
+            ]
 
-            with patch('split_data.extract_sessions', return_value=fake_sessions):
+            with patch('split_data.iter_session_payloads', return_value=packet_stream):
                 processed_root = split_dataset(
                     task_name='ustc_multiclass',
                     source_root=tmp_path / 'SourceData',
@@ -139,6 +147,302 @@ class SplitDataTaskTests(unittest.TestCase):
             test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Geodo').glob('*.bin'))
             self.assertEqual(len(train_bins), 2)
             self.assertEqual(len(test_bins), 2)
+            self.assertEqual(sorted(path.read_bytes() for path in train_bins), [b'a', b'b'])
+            self.assertEqual(sorted(path.read_bytes() for path in test_bins), [b'c', b'd'])
+
+    def test_split_dataset_drops_boundary_crossing_sessions_for_single_capture(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            capture_path = source_root / 'Geodo.pcap'
+            capture_path.write_bytes(b'x')
+
+            crossing_key = ('TCP', '9-9-9-9', 9999, '8-8-8-8', 80)
+            packet_stream = [
+                (1.0, crossing_key, b'left'),
+                (9.0, crossing_key, b'right'),
+                (2.0, ('TCP', '1-1-1-1', 1111, '2-2-2-2', 80), b'train-only'),
+                (8.5, ('TCP', '3-3-3-3', 3333, '4-4-4-4', 80), b'test-only'),
+            ]
+
+            with patch('split_data.iter_session_payloads', return_value=packet_stream):
+                processed_root = split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'ustc_multiclass',
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            train_bins = sorted((processed_root / 'pcap_data' / 'Train' / 'Geodo').glob('*.bin'))
+            test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Geodo').glob('*.bin'))
+            self.assertEqual(len(train_bins), 1)
+            self.assertEqual(len(test_bins), 1)
+            self.assertEqual([path.read_bytes() for path in train_bins], [b'train-only'])
+            self.assertEqual([path.read_bytes() for path in test_bins], [b'test-only'])
+
+    def test_split_dataset_keeps_multi_raw_label_split_at_raw_level(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            dridex_root = tmp_path / 'SourceData' / 'MTA' / 'Dridex'
+            dridex_root.mkdir(parents=True)
+            capture_a = dridex_root / 'a.pcap'
+            capture_b = dridex_root / 'b.pcap'
+            capture_a.write_bytes(b'x')
+            capture_b.write_bytes(b'x')
+
+            session_map = {
+                capture_a: {
+                    ('TCP', '1-1-1-1', 1001, '2-2-2-2', 80): bytearray(b'a1'),
+                    ('TCP', '1-1-1-1', 1002, '2-2-2-2', 80): bytearray(b'a2'),
+                },
+                capture_b: {
+                    ('TCP', '3-3-3-3', 2001, '4-4-4-4', 80): bytearray(b'b1'),
+                    ('TCP', '3-3-3-3', 2002, '4-4-4-4', 80): bytearray(b'b2'),
+                },
+            }
+
+            with patch('split_data.extract_sessions', side_effect=lambda path: session_map[Path(path)]):
+                processed_root = split_dataset(
+                    task_name='mta_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'mta_multiclass',
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            manifest_path = processed_root / 'metadata' / 'manifest.json'
+            rows = json.loads(manifest_path.read_text(encoding='utf-8'))
+            train_raws = {Path(row['raw_path']).name for row in rows if row['split'] == 'Train'}
+            test_raws = {Path(row['raw_path']).name for row in rows if row['split'] == 'Test'}
+            self.assertEqual(len(train_raws), 1)
+            self.assertEqual(len(test_raws), 1)
+            self.assertNotEqual(train_raws, test_raws)
+
+    def test_split_dataset_singleton_read_failure_does_not_abort_whole_task(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            bad_capture = source_root / 'Bad.pcap'
+            good_capture = source_root / 'Good.pcap'
+            bad_capture.write_bytes(b'x')
+            good_capture.write_bytes(b'x')
+
+            def fake_iter_session_payloads(path):
+                capture_path = Path(path)
+                if capture_path.name == 'Bad.pcap':
+                    raise RuntimeError('corrupted capture')
+                return [
+                    (1.0, ('TCP', '1-1-1-1', 1111, '2-2-2-2', 80), b'a'),
+                    (9.0, ('TCP', '1-1-1-1', 1112, '2-2-2-2', 80), b'b'),
+                ]
+
+            with patch('split_data.iter_session_payloads', side_effect=fake_iter_session_payloads):
+                processed_root = split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'ustc_multiclass',
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            good_train_bins = sorted((processed_root / 'pcap_data' / 'Train' / 'Good').glob('*.bin'))
+            good_test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Good').glob('*.bin'))
+            bad_bins = sorted((processed_root / 'pcap_data').glob('*/Bad/*.bin'))
+            self.assertEqual(len(good_train_bins), 1)
+            self.assertEqual(len(good_test_bins), 1)
+            self.assertEqual(bad_bins, [])
+
+    def test_split_dataset_same_timestamp_stream_falls_back_to_packet_order(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            capture_path = source_root / 'Geodo.pcap'
+            capture_path.write_bytes(b'x')
+
+            same_ts_stream = [
+                (10.0, ('TCP', '1-1-1-1', 1001, '2-2-2-2', 80), b'a'),
+                (10.0, ('TCP', '1-1-1-1', 1002, '2-2-2-2', 80), b'b'),
+                (10.0, ('TCP', '1-1-1-1', 1003, '2-2-2-2', 80), b'c'),
+                (10.0, ('TCP', '1-1-1-1', 1004, '2-2-2-2', 80), b'd'),
+            ]
+
+            with patch('split_data.iter_session_payloads', return_value=same_ts_stream):
+                processed_root = split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'ustc_multiclass',
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            train_bins = sorted((processed_root / 'pcap_data' / 'Train' / 'Geodo').glob('*.bin'))
+            test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Geodo').glob('*.bin'))
+            self.assertEqual(len(train_bins), 2)
+            self.assertEqual(len(test_bins), 2)
+            self.assertEqual([path.read_bytes() for path in train_bins], [b'a', b'b'])
+            self.assertEqual([path.read_bytes() for path in test_bins], [b'c', b'd'])
+
+    def test_split_dataset_same_label_same_stem_raws_have_unique_bin_paths(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            mta_root = tmp_path / 'SourceData' / 'MTA' / 'Dridex'
+            mfcp_root_1 = tmp_path / 'SourceData' / 'MFCP' / 'FamilyA'
+            mfcp_root_2 = tmp_path / 'SourceData' / 'MFCP' / 'FamilyB'
+            mta_root.mkdir(parents=True)
+            mfcp_root_1.mkdir(parents=True)
+            mfcp_root_2.mkdir(parents=True)
+
+            capture_paths = [
+                mta_root / 'same.pcap',
+                mfcp_root_1 / 'same.pcap',
+                mfcp_root_2 / 'same.pcap',
+            ]
+            for path in capture_paths:
+                path.write_bytes(b'x')
+
+            fake_sessions = {('TCP', '1-1-1-1', 1111, '2-2-2-2', 80): bytearray(b'data')}
+            with patch('split_data.extract_sessions', return_value=fake_sessions):
+                processed_root = split_dataset(
+                    task_name='binary_benign_vs_malicious',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'binary_benign_vs_malicious',
+                    train_ratio=0.67,
+                    seed=7,
+                )
+
+            manifest_path = processed_root / 'metadata' / 'manifest.json'
+            rows = json.loads(manifest_path.read_text(encoding='utf-8'))
+            malicious_rows = [row for row in rows if row['label'] == 'malicious']
+            malicious_bin_paths = [row['bin_path'] for row in malicious_rows]
+            self.assertEqual(len(malicious_rows), 3)
+            self.assertEqual(len(set(malicious_bin_paths)), len(malicious_bin_paths))
+
+    def test_split_dataset_rerun_cleans_previous_outputs(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            geodo_capture = source_root / 'Geodo.pcap'
+            geodo_capture.write_bytes(b'x')
+
+            def fake_iter_session_payloads(path):
+                stem = Path(path).stem
+                if stem == 'Geodo':
+                    return [
+                        (1.0, ('TCP', '1-1-1-1', 1001, '2-2-2-2', 80), b'g1'),
+                        (9.0, ('TCP', '1-1-1-1', 1002, '2-2-2-2', 80), b'g2'),
+                    ]
+                if stem == 'Zeus':
+                    return [
+                        (1.0, ('TCP', '3-3-3-3', 2001, '4-4-4-4', 80), b'z1'),
+                        (9.0, ('TCP', '3-3-3-3', 2002, '4-4-4-4', 80), b'z2'),
+                    ]
+                return []
+
+            processed_root = tmp_path / 'ProcessedData' / 'ustc_multiclass'
+            with patch('split_data.iter_session_payloads', side_effect=fake_iter_session_payloads):
+                split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            geodo_capture.unlink()
+            zeus_capture = source_root / 'Zeus.pcap'
+            zeus_capture.write_bytes(b'x')
+            with patch('split_data.iter_session_payloads', side_effect=fake_iter_session_payloads):
+                split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            old_bins = sorted((processed_root / 'pcap_data').glob('*/Geodo/*.bin'))
+            self.assertEqual(old_bins, [])
+
+    def test_split_dataset_failed_rerun_keeps_previous_outputs(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            capture_path = source_root / 'Geodo.pcap'
+            capture_path.write_bytes(b'x')
+
+            packet_stream = [
+                (1.0, ('TCP', '1-1-1-1', 1001, '2-2-2-2', 80), b'a'),
+                (9.0, ('TCP', '1-1-1-1', 1002, '2-2-2-2', 80), b'b'),
+            ]
+            processed_root = tmp_path / 'ProcessedData' / 'ustc_multiclass'
+
+            with patch('split_data.iter_session_payloads', return_value=packet_stream):
+                split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            before_bins = sorted((processed_root / 'pcap_data').glob('**/*.bin'))
+            before_manifest = (processed_root / 'metadata' / 'manifest.json').read_text(encoding='utf-8')
+            self.assertGreater(len(before_bins), 0)
+
+            with self.assertRaises(KeyError):
+                split_dataset(
+                    task_name='unknown_task',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            after_bins = sorted((processed_root / 'pcap_data').glob('**/*.bin'))
+            after_manifest = (processed_root / 'metadata' / 'manifest.json').read_text(encoding='utf-8')
+            self.assertEqual([str(path) for path in after_bins], [str(path) for path in before_bins])
+            self.assertEqual(after_manifest, before_manifest)
+
+    def test_split_dataset_recovers_interrupted_backup_before_pre_promote_failure(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            capture_path = source_root / 'Geodo.pcap'
+            capture_path.write_bytes(b'x')
+            processed_root = tmp_path / 'ProcessedData' / 'ustc_multiclass'
+
+            packet_stream = [
+                (1.0, ('TCP', '1-1-1-1', 1001, '2-2-2-2', 80), b'a'),
+                (9.0, ('TCP', '1-1-1-1', 1002, '2-2-2-2', 80), b'b'),
+            ]
+            with patch('split_data.iter_session_payloads', return_value=packet_stream):
+                split_dataset(
+                    task_name='ustc_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            original_manifest = (processed_root / 'metadata' / 'manifest.json').read_text(encoding='utf-8')
+            original_bins = sorted((processed_root / 'pcap_data').glob('**/*.bin'))
+            self.assertGreater(len(original_bins), 0)
+
+            os.replace(processed_root / 'pcap_data', processed_root / '.split_data_backup_pcap_data')
+            os.replace(processed_root / 'metadata', processed_root / '.split_data_backup_metadata')
+
+            with self.assertRaises(KeyError):
+                split_dataset(
+                    task_name='unknown_task',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=processed_root,
+                    train_ratio=0.5,
+                    seed=7,
+                )
+
+            restored_manifest = (processed_root / 'metadata' / 'manifest.json').read_text(encoding='utf-8')
+            restored_bins = sorted((processed_root / 'pcap_data').glob('**/*.bin'))
+            self.assertEqual(restored_manifest, original_manifest)
+            self.assertEqual([str(path) for path in restored_bins], [str(path) for path in original_bins])
 
     def test_iter_packets_tolerates_truncated_tail_in_pcap(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:

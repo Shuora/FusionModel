@@ -21,7 +21,7 @@ class TrainingConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     max_len: int = 512
-    num_workers: int = 8
+    num_workers: int = 4
     seed: int = 42
 
     # 模型尺寸
