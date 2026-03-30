@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 /ProcessedData/
 .codex
+/ProcessedData_time_split/
