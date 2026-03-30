@@ -1,6 +1,10 @@
 ## Task
+<<<<<<< Updated upstream
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< Updated upstream
+=======
+>>>>>>> e01b7ed (fix: 容忍 pcap 尾部截断并保留已解析数据包)
 修复 `src/split_data.py` 在读取尾部残缺但主体可用的 `.pcap` 文件时直接报错并跳过整文件的问题。
 
 ## Plan
@@ -13,6 +17,7 @@
 - 不运行 `mvn test`。
 - 只放宽 `.pcap` 尾部截断场景，不吞掉其他真实格式错误。
 - 先写失败测试，再写生产代码。
+<<<<<<< HEAD
 =======
 补充项目级 README 和 AGENTS 文档，完整覆盖数据预处理、四个实验任务的独立训练命令，以及后续 AI 改动时的文档同步要求。
 
@@ -110,3 +115,19 @@
 - [x] GREEN：将 entropy 计算改为 `np.log(..., out=..., where=...)`，避免 padding 位置零值触发运行时 warning。
 >>>>>>> c926dfcf8bb829c579b702d527601a20ba85ca45
 >>>>>>> b23c1ae5f224cc4b17dd1dd42703f3536fdf21d9
+=======
+>>>>>>> e01b7ed (fix: 容忍 pcap 尾部截断并保留已解析数据包)
+=======
+补充项目级 README 和 AGENTS 文档，完整覆盖数据预处理、四个实验任务的独立训练命令，以及后续 AI 改动时的文档同步要求。
+
+## Plan
+1. 读取训练、预处理和任务配置入口，确认实际可执行命令与参数来源。
+2. 按项目目录结构编写 README，覆盖环境、目录、数据流、预处理步骤、四个任务各自的 attention 与 attention_stacking 命令。
+3. 编写 AGENTS.md，约束 AI 在修改代码、脚本、数据流程或命令时同步更新 README 与 AGENTS.md。
+4. 做一次基础校验，确认文档中的脚本名、参数名、任务名与仓库实现一致。
+
+## Constraints
+- 不运行 `mvn test`。
+- 本次以文档更新为主，不改训练逻辑。
+- README 中四个任务必须分别给出独立命令，不能只给合并入口。
+>>>>>>> Stashed changes
