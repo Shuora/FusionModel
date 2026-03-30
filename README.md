@@ -149,203 +149,108 @@ ProcessedData/<task_name>/
 
 ## 从零开始完整命令手册
 
-下面以 `ustc_multiclass` 为例给出一套完整命令。其他任务只需替换 `--task_name` 和对应原始数据目录。
+下面直接给出四个任务各自的完整实验命令。所有命令都从仓库根目录执行，并先激活：
 
-### 第 1 步：准备原始数据
+```bash
+conda activate FusionModel
+```
 
-把原始 `pcap` 或 `pcapng` 文件放到：
+通用说明：
+
+- `--source_root` 统一使用 `/home/shuora/Traffic/FusionModel/SourceData`
+- `--dataset_root` 统一传 `ProcessedData` 的父目录 `/home/shuora/Traffic/FusionModel/ProcessedData`
+- `split_data.py` 的 `--processed_root` 指向具体任务目录 `ProcessedData/<task_name>`
+- 默认训练参数与当前仓库文档保持一致：`batch_size=32`、`num_workers=4`、`prefetch_factor=2`
+
+### 实验 1：二分类 `binary_benign_vs_malicious`
+
+原始数据目录：
+
+```text
+SourceData/ISCX-VPN-NonVPN-2016/
+SourceData/USTC-TFC2016/
+SourceData/MTA/
+SourceData/MFCP/
+```
+
+完整命令：
+
+```bash
+python3 src/split_data.py   --task_name binary_benign_vs_malicious   --source_root /home/shuora/Traffic/FusionModel/SourceData   --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious   --train_ratio 0.8   --seed 42
+
+python3 src/ssl_tls_rgb_image.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious
+
+python3 src/train_fusion_attention.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name binary_benign_vs_malicious   --batch_size 32   --image_size 28   --max_pcap_length 784   --epochs 32   --lr 1e-3   --patience 8   --device auto   --seed 42   --num_workers 4   --pin_memory   --persistent_workers   --prefetch_factor 2   --output_dir /home/shuora/Traffic/FusionModel/src/outputs   --attention_dim 256
+
+python3 src/train_fusion_attention_stacking.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name binary_benign_vs_malicious   --meta_methods xgboost
+
+python3 src/run_all_modes.py   --mode all   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name binary_benign_vs_malicious
+```
+
+### 实验 2：USTC 多分类 `ustc_multiclass`
+
+原始数据目录：
 
 ```text
 SourceData/USTC-TFC2016/
 ```
 
-或对应任务所需的数据集目录。
-
-### 第 2 步：把原始 pcap 切成任务级会话 `.bin`
+完整命令：
 
 ```bash
-python3 src/split_data.py \
-  --task_name ustc_multiclass \
-  --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass \
-  --train_ratio 0.8 \
-  --seed 42
+python3 src/split_data.py   --task_name ustc_multiclass   --source_root /home/shuora/Traffic/FusionModel/SourceData   --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass   --train_ratio 0.8   --seed 42
+
+python3 src/ssl_tls_rgb_image.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass
+
+python3 src/train_fusion_attention.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name ustc_multiclass   --batch_size 32   --image_size 28   --max_pcap_length 784   --epochs 32   --lr 1e-3   --patience 8   --device auto   --seed 42   --num_workers 4   --pin_memory   --persistent_workers   --prefetch_factor 2   --output_dir /home/shuora/Traffic/FusionModel/src/outputs   --attention_dim 256
+
+python3 src/train_fusion_attention_stacking.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name ustc_multiclass   --meta_methods xgboost
+
+python3 src/run_all_modes.py   --mode all   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name ustc_multiclass
 ```
 
-说明：
+### 实验 3：MTA 多分类 `mta_multiclass`
 
-- `--task_name` 必填
-- `--source_root` 默认是仓库根下的 `SourceData`
-- `--processed_root` 不传时会自动写到 `ProcessedData/<task_name>`
-- `--train_ratio` 默认 `0.8`
-- `--seed` 默认 `42`
+原始数据目录：
 
-执行后会生成：
-
-- `ProcessedData/ustc_multiclass/pcap_data/...`
-- `ProcessedData/ustc_multiclass/metadata/manifest.json`
-
-### 第 3 步：把 `.bin` 生成 RGB 图像
-
-```bash
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass
+```text
+SourceData/MTA/
 ```
 
-默认行为：
-
-- 输入目录：`<dataset_root>/pcap_data`
-- 输出目录：`<dataset_root>/image_data`
-
-如果你想显式指定输入输出目录：
+完整命令：
 
 ```bash
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass \
-  --input_dir /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/pcap_data \
-  --output_dir /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data
+python3 src/split_data.py   --task_name mta_multiclass   --source_root /home/shuora/Traffic/FusionModel/SourceData   --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass   --train_ratio 0.8   --seed 42
+
+python3 src/ssl_tls_rgb_image.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass
+
+python3 src/train_fusion_attention.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mta_multiclass   --batch_size 32   --image_size 28   --max_pcap_length 784   --epochs 32   --lr 1e-3   --patience 8   --device auto   --seed 42   --num_workers 4   --pin_memory   --persistent_workers   --prefetch_factor 2   --output_dir /home/shuora/Traffic/FusionModel/src/outputs   --attention_dim 256
+
+python3 src/train_fusion_attention_stacking.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mta_multiclass   --meta_methods xgboost
+
+python3 src/run_all_modes.py   --mode all   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mta_multiclass
 ```
 
-### 第 4 步：运行 attention 融合训练
+### 实验 4：MFCP 多分类 `mfcp_multiclass`
 
-最小命令：
+原始数据目录：
 
-```bash
-python3 src/train_fusion_attention.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass
+```text
+SourceData/MFCP/
 ```
 
-常用完整参数示例：
+完整命令：
 
 ```bash
-python3 src/train_fusion_attention.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass \
-  --batch_size 32 \
-  --image_size 28 \
-  --max_pcap_length 784 \
-  --epochs 32 \
-  --lr 1e-3 \
-  --patience 8 \
-  --device auto \
-  --seed 42 \
-  --num_workers 4 \
-  --pin_memory \
-  --persistent_workers \
-  --prefetch_factor 2 \
-  --output_dir /home/shuora/Traffic/FusionModel/src/outputs \
-  --attention_dim 256
-```
+python3 src/split_data.py   --task_name mfcp_multiclass   --source_root /home/shuora/Traffic/FusionModel/SourceData   --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass   --train_ratio 0.8   --seed 42
 
-### 第 5 步：运行 attention + stacking
+python3 src/ssl_tls_rgb_image.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
 
-```bash
-python3 src/train_fusion_attention_stacking.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass \
-  --meta_methods xgboost
-```
+python3 src/train_fusion_attention.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mfcp_multiclass   --batch_size 32   --image_size 28   --max_pcap_length 784   --epochs 32   --lr 1e-3   --patience 8   --device auto   --seed 42   --num_workers 4   --pin_memory   --persistent_workers   --prefetch_factor 2   --output_dir /home/shuora/Traffic/FusionModel/src/outputs   --attention_dim 256
 
-默认 `meta_methods` 是 `xgboost`。如果后续代码支持，也可以传逗号分隔形式。
+python3 src/train_fusion_attention_stacking.py   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mfcp_multiclass   --meta_methods xgboost
 
-### 第 6 步：统一运行 attention 与 stacking
-
-如果你希望一次跑 attention 和 stacking 两种流程：
-
-```bash
-python3 src/run_all_modes.py \
-  --mode all \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass
-```
-
-仅跑 attention：
-
-```bash
-python3 src/run_all_modes.py \
-  --mode attention \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass
-```
-
-仅跑 stacking：
-
-```bash
-python3 src/run_all_modes.py \
-  --mode attention_stacking \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass
-```
-
-## 各任务示例命令
-
-### 二分类：`binary_benign_vs_malicious`
-
-```bash
-python3 src/split_data.py \
-  --task_name binary_benign_vs_malicious \
-  --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious
-
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious
-
-python3 src/run_all_modes.py \
-  --mode all \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name binary_benign_vs_malicious
-```
-
-### USTC 多分类：`ustc_multiclass`
-
-```bash
-python3 src/split_data.py \
-  --task_name ustc_multiclass \
-  --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass
-
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass
-
-python3 src/run_all_modes.py \
-  --mode all \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name ustc_multiclass
-```
-
-### MTA 多分类：`mta_multiclass`
-
-```bash
-python3 src/split_data.py \
-  --task_name mta_multiclass \
-  --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass
-
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass
-
-python3 src/run_all_modes.py \
-  --mode all \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name mta_multiclass
-```
-
-### MFCP 多分类：`mfcp_multiclass`
-
-```bash
-python3 src/split_data.py \
-  --task_name mfcp_multiclass \
-  --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
-
-python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
-
-python3 src/run_all_modes.py \
-  --mode all \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --task_name mfcp_multiclass
+python3 src/run_all_modes.py   --mode all   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData   --task_name mfcp_multiclass
 ```
 
 ## 常用训练参数说明
