@@ -1497,7 +1497,7 @@ def add_common_args(p):
         help="For grouped CIC dataset, choose one or more top-level groups, e.g. Adware or Adware,Ransomware",
     )
 
-    p.add_argument("--batch_size", type=int, default=128)
+    p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--image_size", type=int, default=28)
     p.add_argument("--max_pcap_length", type=int, default=784)
 
@@ -1509,10 +1509,10 @@ def add_common_args(p):
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     p.add_argument("--seed", type=int, default=42)
 
-    p.add_argument("--num_workers", type=int, default=8)
+    p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--pin_memory", action="store_true")
     p.add_argument("--persistent_workers", action="store_true")
-    p.add_argument("--prefetch_factor", type=int, default=4)
+    p.add_argument("--prefetch_factor", type=int, default=2)
     p.add_argument("--no_amp", action="store_true", help="Disable CUDA mixed precision training")
     p.add_argument("--no_index_cache", action="store_true", help="Disable sample index cache")
     p.add_argument("--rebuild_index_cache", action="store_true", help="Force rebuild sample index cache")
