@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import random
+import shutil
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,7 @@ DEFAULT_SOURCE_ROOT = BASE_DIR.parent / 'SourceData'
 TRAIN_RATIO = 0.8
 SEED = 42
 PCAP_EXTENSIONS = ('.pcap', '.pcapng')
+SPLIT_OUTPUT_NAMES = ('pcap_data', 'metadata')
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,14 @@ class SessionSample:
     dataset_name: str
     session_name: str
     bin_data: bytes
+
+
+@dataclass
+class _SessionAccumulator:
+    train_payload: bytearray
+    test_payload: bytearray
+    seen_train: bool = False
+    seen_test: bool = False
 
 
 def ip_to_str(ip_bytes: bytes) -> str | None:
@@ -131,17 +142,15 @@ def expand_raw_samples_to_sessions(samples: Iterable[RawSample]) -> list[Session
         if not sessions:
             continue
 
-        pcap_base = sample.raw_path.stem
-        for (proto, src_ip, src_port, dst_ip, dst_port), bin_data in sessions.items():
+        for session_key, bin_data in sessions.items():
             if not bin_data:
                 continue
-            session_name = f'{pcap_base}.{proto}_{src_ip}_{src_port}_{dst_ip}_{dst_port}'
             session_items.append(
                 SessionSample(
                     raw_path=sample.raw_path,
                     label=sample.label,
                     dataset_name=sample.dataset_name,
-                    session_name=session_name,
+                    session_name=build_session_name(sample.raw_path, session_key),
                     bin_data=bytes(bin_data),
                 )
             )
@@ -190,15 +199,16 @@ def iter_packets(capture_path: Path):
             yield ts, buf
 
 
-def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, str, int, str, int], bytearray]:
+def iter_session_payloads(
+    capture_path: os.PathLike[str] | str,
+) -> Iterable[tuple[float, tuple[str, str, int, str, int], bytes]]:
     capture_path = Path(capture_path)
-    sessions: dict[tuple[str, str, int, str, int], bytearray] = {}
     try:
         import dpkt
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError('dpkt is required to extract sessions from capture files') from exc
 
-    for _, buf in iter_packets(capture_path):
+    for ts, buf in iter_packets(capture_path):
         try:
             eth = dpkt.ethernet.Ethernet(buf)
         except (dpkt.UnpackError, ValueError):
@@ -222,8 +232,148 @@ def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, st
         if not payload:
             continue
         key = (proto, src_ip, transport.sport, dst_ip, transport.dport)
+        yield ts, key, bytes(payload)
+
+
+def build_raw_capture_token(raw_path: Path) -> str:
+    digest = hashlib.sha1(str(raw_path).encode('utf-8')).hexdigest()[:10]
+    stem = raw_path.stem.replace(' ', '-')
+    return f'{stem}-{digest}'
+
+
+def build_session_name(raw_path: Path, session_key: tuple[str, str, int, str, int]) -> str:
+    proto, src_ip, src_port, dst_ip, dst_port = session_key
+    return f'{build_raw_capture_token(raw_path)}.{proto}_{src_ip}_{src_port}_{dst_ip}_{dst_port}'
+
+
+def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, str, int, str, int], bytearray]:
+    sessions: dict[tuple[str, str, int, str, int], bytearray] = {}
+    for _, key, payload in iter_session_payloads(capture_path):
         sessions.setdefault(key, bytearray()).extend(payload)
     return sessions
+
+
+def _build_packet_order_split_index(packet_count: int, train_ratio: float) -> int | None:
+    if packet_count < 2:
+        return None
+    split_idx = int(packet_count * train_ratio)
+    return max(1, min(split_idx, packet_count - 1))
+
+
+def split_single_capture_by_time(sample: RawSample, train_ratio: float) -> dict[str, list[SessionSample]]:
+    packet_count = 0
+    min_ts: float | None = None
+    max_ts: float | None = None
+    for ts, _, _ in iter_session_payloads(sample.raw_path):
+        packet_count += 1
+        if min_ts is None or ts < min_ts:
+            min_ts = ts
+        if max_ts is None or ts > max_ts:
+            max_ts = ts
+
+    if packet_count == 0:
+        return {'Train': [], 'Test': []}
+
+    assert min_ts is not None and max_ts is not None
+    boundary_ts = min_ts + ((max_ts - min_ts) * train_ratio)
+    split_strategy = 'time-boundary'
+    packet_split_idx: int | None = None
+    if min_ts == max_ts:
+        split_strategy = 'packet-order'
+        packet_split_idx = _build_packet_order_split_index(packet_count, train_ratio)
+        logger.warning(
+            'Singleton capture has identical timestamps; fallback to packet-order split label=%s raw=%s packet_count=%s split_idx=%s',
+            sample.label,
+            sample.raw_path,
+            packet_count,
+            packet_split_idx,
+        )
+    elif not (0.0 < train_ratio < 1.0):
+        split_strategy = 'packet-order'
+        packet_split_idx = _build_packet_order_split_index(packet_count, train_ratio)
+        logger.warning(
+            'Train ratio out of (0,1); fallback to packet-order split label=%s raw=%s train_ratio=%s packet_count=%s split_idx=%s',
+            sample.label,
+            sample.raw_path,
+            train_ratio,
+            packet_count,
+            packet_split_idx,
+        )
+
+    per_session: dict[tuple[str, str, int, str, int], _SessionAccumulator] = {}
+    train_packet_count = 0
+    test_packet_count = 0
+    packet_index = 0
+    for ts, session_key, payload in iter_session_payloads(sample.raw_path):
+        packet_index += 1
+        state = per_session.setdefault(session_key, _SessionAccumulator(bytearray(), bytearray()))
+        if split_strategy == 'packet-order':
+            if packet_split_idx is None:
+                state.seen_train = True
+                state.train_payload.extend(payload)
+                train_packet_count += 1
+                continue
+            is_train = packet_index <= packet_split_idx
+        else:
+            is_train = ts <= boundary_ts
+
+        if is_train:
+            state.seen_train = True
+            state.train_payload.extend(payload)
+            train_packet_count += 1
+        else:
+            state.seen_test = True
+            state.test_payload.extend(payload)
+            test_packet_count += 1
+
+    if split_strategy == 'packet-order' and packet_split_idx is None:
+        logger.warning(
+            'Singleton capture cannot be truly split due to insufficient packets label=%s raw=%s packet_count=%s',
+            sample.label,
+            sample.raw_path,
+            packet_count,
+        )
+
+    split_items: dict[str, list[SessionSample]] = {'Train': [], 'Test': []}
+    dropped_sessions = 0
+    for session_key, state in per_session.items():
+        if state.seen_train and state.seen_test:
+            dropped_sessions += 1
+            continue
+
+        if state.seen_train:
+            split_name = 'Train'
+            payload = bytes(state.train_payload)
+        else:
+            split_name = 'Test'
+            payload = bytes(state.test_payload)
+
+        if not payload:
+            continue
+
+        split_items[split_name].append(
+            SessionSample(
+                raw_path=sample.raw_path,
+                label=sample.label,
+                dataset_name=sample.dataset_name,
+                session_name=build_session_name(sample.raw_path, session_key),
+                bin_data=payload,
+            )
+        )
+
+    logger.info(
+        'Singleton capture split label=%s raw=%s strategy=%s boundary=%s train_packets=%s test_packets=%s train_sessions=%s test_sessions=%s dropped_cross_boundary=%s',
+        sample.label,
+        sample.raw_path,
+        split_strategy,
+        boundary_ts,
+        train_packet_count,
+        test_packet_count,
+        len(split_items['Train']),
+        len(split_items['Test']),
+        dropped_sessions,
+    )
+    return split_items
 
 
 def _write_sessions(samples: Iterable[SessionSample], split_name: str, processed_root: Path) -> list[dict[str, str]]:
@@ -246,6 +396,63 @@ def _write_sessions(samples: Iterable[SessionSample], split_name: str, processed
     return manifest_rows
 
 
+def _remove_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    shutil.rmtree(path)
+
+
+def _recover_interrupted_outputs(processed_root: Path) -> None:
+    for name in SPLIT_OUTPUT_NAMES:
+        backup_path = processed_root / f'.split_data_backup_{name}'
+        final_path = processed_root / name
+        if backup_path.exists() and not final_path.exists():
+            os.replace(backup_path, final_path)
+            logger.warning('Recovered interrupted output for %s from backup', name)
+            continue
+        if backup_path.exists() and final_path.exists():
+            _remove_path(backup_path)
+
+
+def _promote_staged_outputs(processed_root: Path, staging_root: Path) -> None:
+    _recover_interrupted_outputs(processed_root)
+    backup_map: dict[str, Path] = {}
+    promoted_names: list[str] = []
+
+    try:
+        for name in SPLIT_OUTPUT_NAMES:
+            backup_path = processed_root / f'.split_data_backup_{name}'
+            final_path = processed_root / name
+            _remove_path(backup_path)
+
+            if final_path.exists():
+                os.replace(final_path, backup_path)
+                backup_map[name] = backup_path
+
+        for name in SPLIT_OUTPUT_NAMES:
+            staged_path = staging_root / name
+            final_path = processed_root / name
+            if not staged_path.exists():
+                raise FileNotFoundError(f'staged output missing: {staged_path}')
+            os.replace(staged_path, final_path)
+            promoted_names.append(name)
+    except Exception:
+        for name in promoted_names:
+            final_path = processed_root / name
+            _remove_path(final_path)
+
+        for name, backup_path in backup_map.items():
+            if backup_path.exists():
+                os.replace(backup_path, processed_root / name)
+        raise
+    else:
+        for backup_path in backup_map.values():
+            _remove_path(backup_path)
+
+
 def split_dataset(
     task_name: str,
     source_root: Path | None = None,
@@ -256,21 +463,64 @@ def split_dataset(
     source_root = Path(source_root or DEFAULT_SOURCE_ROOT)
     processed_root = Path(processed_root or build_processed_root(BASE_DIR.parent, task_name))
     processed_root.mkdir(parents=True, exist_ok=True)
+    _recover_interrupted_outputs(processed_root)
+    staging_root = processed_root / '.split_data_staging'
+    _remove_path(staging_root)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    (staging_root / 'pcap_data').mkdir(parents=True, exist_ok=True)
 
-    raw_samples = discover_task_inputs(source_root, task_name)
-    logger.info('Discovered %s raw samples for task %s', len(raw_samples), task_name)
-    session_samples = expand_raw_samples_to_sessions(raw_samples)
-    logger.info('Expanded %s session samples for task %s', len(session_samples), task_name)
-    splits = split_task_inputs(session_samples, train_ratio=train_ratio, seed=seed)
+    try:
+        raw_samples = discover_task_inputs(source_root, task_name)
+        logger.info('Discovered %s raw samples for task %s', len(raw_samples), task_name)
+        grouped_by_label: dict[str, list[RawSample]] = {}
+        for sample in raw_samples:
+            grouped_by_label.setdefault(sample.label, []).append(sample)
 
-    manifest_rows: list[dict[str, str]] = []
-    for split_name, split_samples in splits.items():
-        manifest_rows.extend(_write_sessions(split_samples, split_name, processed_root))
+        multi_raw_samples: list[RawSample] = []
+        singleton_raw_samples: list[RawSample] = []
+        for label, label_samples in grouped_by_label.items():
+            if len(label_samples) == 1:
+                singleton_raw_samples.extend(label_samples)
+                logger.info('Label %s has singleton raw capture; using time-blocked split', label)
+                continue
+            multi_raw_samples.extend(label_samples)
+            logger.info('Label %s has %s raw captures; using raw-level split', label, len(label_samples))
 
-    metadata_dir = processed_root / 'metadata'
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, indent=2), encoding='utf-8')
-    return processed_root
+        splits: dict[str, list[SessionSample]] = {'Train': [], 'Test': []}
+
+        if multi_raw_samples:
+            raw_splits = split_task_inputs(multi_raw_samples, train_ratio=train_ratio, seed=seed)
+            for split_name, split_raws in raw_splits.items():
+                split_sessions = expand_raw_samples_to_sessions(split_raws)
+                splits[split_name].extend(split_sessions)
+                logger.info(
+                    'Expanded %s session samples from %s raw captures for split %s',
+                    len(split_sessions),
+                    len(split_raws),
+                    split_name,
+                )
+
+        for sample in singleton_raw_samples:
+            try:
+                singleton_splits = split_single_capture_by_time(sample, train_ratio=train_ratio)
+            except Exception as exc:
+                logger.error('Error reading %s: %s', sample.raw_path, exc)
+                continue
+            splits['Train'].extend(singleton_splits['Train'])
+            splits['Test'].extend(singleton_splits['Test'])
+
+        manifest_rows: list[dict[str, str]] = []
+        for split_name, split_samples in splits.items():
+            manifest_rows.extend(_write_sessions(split_samples, split_name, staging_root))
+
+        metadata_dir = staging_root / 'metadata'
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, indent=2), encoding='utf-8')
+
+        _promote_staged_outputs(processed_root, staging_root)
+        return processed_root
+    finally:
+        _remove_path(staging_root)
 
 
 def build_parser() -> argparse.ArgumentParser:
