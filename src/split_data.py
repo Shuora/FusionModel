@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import socket
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -171,21 +172,62 @@ def split_task_inputs(samples: list[RawSample | SessionSample], train_ratio: flo
     return {'Train': train, 'Test': test}
 
 
+def _iter_pcap_packets(capture_path: Path):
+    with capture_path.open('rb') as fh:
+        global_header = fh.read(24)
+        if len(global_header) < 24:
+            raise ValueError(f'incomplete pcap global header: {capture_path}')
+
+        magic = global_header[:4]
+        if magic == b'\xd4\xc3\xb2\xa1':
+            endian = '<'
+        elif magic == b'\xa1\xb2\xc3\xd4':
+            endian = '>'
+        else:
+            raise ValueError(f'unsupported pcap byte order: {capture_path}')
+
+        while True:
+            header = fh.read(16)
+            if not header:
+                return
+            if len(header) < 16:
+                logger.warning(
+                    'Ignoring truncated pcap tail in %s: got %s bytes, need 16 for packet header',
+                    capture_path,
+                    len(header),
+                )
+                return
+
+            ts_sec, ts_usec, incl_len, _ = struct.unpack(f'{endian}IIII', header)
+            packet = fh.read(incl_len)
+            if len(packet) < incl_len:
+                logger.warning(
+                    'Ignoring truncated pcap tail in %s: got %s bytes, need %s for packet data',
+                    capture_path,
+                    len(packet),
+                    incl_len,
+                )
+                return
+
+            yield ts_sec + ts_usec / 1_000_000, packet
+
+
 def iter_packets(capture_path: Path):
+    suffix = capture_path.suffix.lower()
+    if suffix == '.pcap':
+        yield from _iter_pcap_packets(capture_path)
+        return
+
+    if suffix != '.pcapng':
+        raise ValueError(f'unsupported capture type: {capture_path}')
+
     try:
         import dpkt
     except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError('dpkt is required to parse capture files') from exc
+        raise ModuleNotFoundError('dpkt is required to parse pcapng capture files') from exc
 
     with capture_path.open('rb') as fh:
-        suffix = capture_path.suffix.lower()
-        if suffix == '.pcap':
-            reader = dpkt.pcap.Reader(fh)
-        elif suffix == '.pcapng':
-            reader = dpkt.pcapng.Reader(fh)
-        else:
-            raise ValueError(f'unsupported capture type: {capture_path}')
-
+        reader = dpkt.pcapng.Reader(fh)
         for ts, buf in reader:
             yield ts, buf
 

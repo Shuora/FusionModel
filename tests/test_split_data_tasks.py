@@ -1,4 +1,5 @@
 import sys
+import struct
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from split_data import (
     build_processed_root,
     discover_task_inputs,
     expand_raw_samples_to_sessions,
+    iter_packets,
     split_dataset,
     split_task_inputs,
 )
@@ -137,6 +139,21 @@ class SplitDataTaskTests(unittest.TestCase):
             test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Geodo').glob('*.bin'))
             self.assertEqual(len(train_bins), 2)
             self.assertEqual(len(test_bins), 2)
+
+    def test_iter_packets_tolerates_truncated_tail_in_pcap(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            capture_path = tmp_path / 'tail-truncated.pcap'
+            packet = b'\x00' * 60
+            capture_path.write_bytes(
+                struct.pack('<IHHIIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+                + struct.pack('<IIII', 1, 2, len(packet), len(packet))
+                + packet
+                + b'\x00\x00'
+            )
+
+            packets = list(iter_packets(capture_path))
+
+        self.assertEqual(packets, [(1.000002, packet)])
 
 
 class DummySample:
