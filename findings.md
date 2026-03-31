@@ -1,7 +1,8 @@
 ## Findings
 
-- `src/split_data.py` 当前的 `iter_packets()` 直接把 `dpkt.pcap.Reader` 的异常向上抛出，导致单个尾部不完整的 `.pcap` 会被整文件跳过。
-- 对用户提供的 `Cobalt.pcap` 手工解析后确认：文件主体可连续读出 `1471709` 个 packet，最后在偏移 `149958654` 处只剩 `2` 字节，不足一个 `16` 字节 packet header。
-- 当前需求不是忽略所有坏包，而是把“尾部残缺 EOF”视为可恢复情况，保留已成功读取的数据包。
-- 最小修复边界是：`.pcap` 改用顺序字节解析并在 EOF 尾部残缺时记录 warning 后停止；`.pcapng` 继续依赖 `dpkt.pcapng.Reader`，不改变现有行为。
-- 为避免格式兼容面缩窄，`.pcap` 顺序解析需要同时支持 microsecond 与 nanosecond 两类常见 magic bytes。
+- `src/fusion_common.py` 里有两处默认路径原本仍指向 `src/outputs`：`setup_logging()` 默认日志目录、`add_common_args()` 的 `--output_dir` 默认值。
+- `src/run_all_modes.py` 只是透传 `fusion_common.py` 生成的 `output_dir`，本次无需单独修改。
+- `README.md` 的四个实验命令和“训练输出”章节原本写成 `src/outputs/<task_name>/...`，已同步改为根目录 `outputs/<task_name>/...`。
+- `tests/test_fusion_output_artifacts.py` 原先不覆盖“默认路径在仓库根目录”的行为，本次新增了默认 `output_dir` 与默认日志目录的回归测试。
+- `AGENTS.md` 原先存在未解决的 merge conflict 标记；本次已合并有效约束并补充默认输出目录说明。
+- 本机测试环境存在 `PYTHONPATH=/mnt/c/Users/11098/.py-user/lib/python3.12/site-packages` 污染；运行 conda 环境下的验证命令时，需要显式 `unset PYTHONPATH PYTHONHOME PYTHONUSERBASE` 并设置 `PYTHONNOUSERSITE=1`。

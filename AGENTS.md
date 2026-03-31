@@ -1,6 +1,5 @@
 # AGENTS.md
 
-<<<<<<< HEAD
 本文件约束在 `/home/shuora/Traffic/FusionModel` 内工作的 AI agent。
 
 ## Communication
@@ -8,17 +7,24 @@
 - 默认使用中文沟通。
 - 英文只用于 technical terms、code、command、path、identifier。
 
+## Environment
+
+- 在运行项目命令前，先激活 conda 环境：`conda activate FusionModel`。
+- 若在非交互 shell 中运行，需要先 `source /home/shuora/miniconda3/etc/profile.d/conda.sh` 再执行 `conda activate FusionModel`。
+- 文档和命令示例默认使用 `python3`。
+- 从仓库根目录 `/home/shuora/Traffic/FusionModel` 运行项目命令。
+- 如果在 WSL 中执行命令，使用原生 Linux 命令，不要改用 PowerShell 或 `pwsh`。
+
 ## Working Rules
 
 - 开始复杂任务前，先检查并维护 `task_plan.md`、`findings.md`、`progress.md`。
 - 对于复杂任务，优先拆分子任务并并行处理。
 - 需要修改代码时，优先遵守项目既有 git/worktree 规范。
 - 不要运行 `mvn test`。
-- 如果在 WSL 中执行命令，使用原生 Linux 命令，不要改用 PowerShell 或 `pwsh`。
 
 ## Mandatory Documentation Sync
 
-只要本仓库发生以下任一变化，AI 在同一任务中必须同步更新 `README.md` 和必要时更新本 `AGENTS.md`：
+只要本仓库发生以下任一变化，AI 在同一任务中必须同步更新 `README.md`，并在需要时更新本 `AGENTS.md`：
 
 - 新增、删除或重命名训练脚本
 - 新增、删除或重命名预处理脚本
@@ -50,12 +56,41 @@
 
 如果 AI 发现 `README.md` 或 `AGENTS.md` 与仓库当前实现不一致，应优先修正文档，再结束任务。
 
+## Documentation Sync
+
+- 如果修改了 README、usage instructions、environment instructions、workflow documents 或其他仓库对外说明，需要同时检查 `AGENTS.md` 是否也要同步。
+- 如果修改了项目行为、命令流程、环境假设、输出路径或任务约定，必须同步更新 `README.md` 和 `AGENTS.md`。
+
+## Project Notes
+
+- 本仓库当前文档和训练流程聚焦于 V4 `MobileViT + CharBERT` attention fusion workflow。
+- 支持的 `task_name`：
+  - `binary_benign_vs_malicious`
+  - `ustc_multiclass`
+  - `mta_multiclass`
+  - `mfcp_multiclass`
+- 标准数据流：
+  - `SourceData/<dataset>`
+  - `ProcessedData/<task>/pcap_data/{Train,Test}`
+  - `ProcessedData/<task>/image_data/{Train,Test}`
+  - 训练入口：`src/train_fusion_attention.py`、`src/train_fusion_attention_stacking.py`、`src/run_all_modes.py`
+- 默认训练输出目录位于仓库根目录：`outputs/`
+- 默认训练运行参数应在代码和文档间保持一致：
+  - `batch_size=32`
+  - `num_workers=4`
+  - `prefetch_factor=2`
+
 ## Command Writing Rules
 
 - README 中涉及实验运行时，必须给出从仓库根目录可直接执行的命令。
 - 涉及四个实验任务时，必须分别列出独立命令，不能只提供一个合并命令替代。
 - 命令里的路径、脚本名、参数名必须与仓库当前实现一致。
 - 如果默认参数容易误导，README 中必须显式写出推荐参数。
+- 如果 `tools/` 下的历史 helper script 含硬编码路径，不要把它们当成标准跨平台命令对外展示，除非先修正它们。
+
+## Constraints
+
+- 不要运行 `mvn test`。
 
 ## Completion Checklist
 
@@ -67,48 +102,3 @@
 4. `task_plan.md`、`findings.md`、`progress.md` 是否已同步更新。
 
 未完成以上检查，不应宣称任务完成。
-=======
-## Communication
-
-- Prefer Chinese for communication.
-- English may be used for technical terms, code, commands, and identifiers.
-
-## Environment
-
-- Before running project commands, activate the conda environment:
-
-```bash
-conda activate FusionModel
-```
-
-- When writing documentation or command examples for this repository, use `python3` in commands.
-- Run commands from the repository root: `/home/shuora/Traffic/FusionModel`.
-
-## Documentation Sync
-
-- If you modify README, usage instructions, environment instructions, workflow documents, or other repository-facing guidance, you must also review and update `AGENTS.md` when needed so agent instructions stay consistent with the docs.
-- If you modify project behavior, command flow, environment assumptions, output paths, or task conventions, sync those changes to both `README.md` and `AGENTS.md`.
-
-## Project Notes
-
-- This repository currently documents and runs the V4 `MobileViT + CharBERT` attention fusion workflow.
-- Supported `task_name` values are:
-  - `binary_benign_vs_malicious`
-  - `ustc_multiclass`
-  - `mta_multiclass`
-  - `mfcp_multiclass`
-- Standard data flow:
-  - `SourceData/<dataset>`
-  - `ProcessedData/<task>/pcap_data/{Train,Test}`
-  - `ProcessedData/<task>/image_data/{Train,Test}`
-  - training via `src/train_fusion_attention.py`, `src/train_fusion_attention_stacking.py`, or `src/run_all_modes.py`
-- Default training runtime parameters should stay aligned across code and docs:
-  - `batch_size=32`
-  - `num_workers=4`
-  - `prefetch_factor=2`
-
-## Constraints
-
-- Do not run `mvn test`.
-- If historical helper scripts under `tools/` contain hardcoded paths, do not present them as standard cross-platform commands without updating them first.
->>>>>>> b23c1ae5f224cc4b17dd1dd42703f3536fdf21d9
