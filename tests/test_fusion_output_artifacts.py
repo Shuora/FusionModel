@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -31,6 +32,52 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertEqual(log_path.parent, ROOT / "outputs" / "logs")
         self.assertTrue(log_path.exists())
         log_path.unlink(missing_ok=True)
+
+    def test_training_loader_drops_tail_batch_but_eval_loader_keeps_it(self) -> None:
+        class FakeFusionDataset:
+            def __init__(self, *args, **kwargs) -> None:
+                self.classes = ["a", "b"]
+                self.class_counts = [17, 16]
+                self.targets = [0] * 17 + [1] * 16
+
+            def __len__(self) -> int:
+                return 33
+
+            def __getitem__(self, index: int):
+                return index
+
+        class FakeDataLoader:
+            def __init__(self, dataset, **kwargs) -> None:
+                self.dataset = dataset
+                self.drop_last = kwargs.get("drop_last", False)
+                self.batch_size = kwargs.get("batch_size")
+                self.class_counts = None
+                self.classes = None
+
+        fake_transforms = mock.Mock()
+        fake_transforms.Compose.return_value = object()
+        fake_transforms.Resize.side_effect = lambda size: ("resize", size)
+        fake_transforms.ToTensor.return_value = "to_tensor"
+        fake_transforms.Lambda.side_effect = lambda fn: ("lambda", fn)
+
+        with mock.patch.object(fc, "FusionDataset", FakeFusionDataset), mock.patch.object(fc, "transforms", fake_transforms), mock.patch.object(fc, "DataLoader", FakeDataLoader):
+            train_loader, _ = fc.load_fusion_data(
+                image_dir="/tmp/image_train",
+                pcap_dir="/tmp/pcap_train",
+                batch_size=32,
+                num_workers=0,
+                is_train=True,
+            )
+            eval_loader, _ = fc.load_fusion_data(
+                image_dir="/tmp/image_eval",
+                pcap_dir="/tmp/pcap_eval",
+                batch_size=32,
+                num_workers=0,
+                is_train=False,
+            )
+
+        self.assertTrue(train_loader.drop_last)
+        self.assertFalse(eval_loader.drop_last)
 
     def test_export_metrics_artifacts_writes_json_and_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
