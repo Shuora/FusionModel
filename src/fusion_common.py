@@ -810,7 +810,13 @@ def load_fusion_data(
             rebuild_index_cache=rebuild_index_cache,
         )
 
-    dl_kwargs = dict(batch_size=batch_size, shuffle=bool(is_train), num_workers=int(num_workers), pin_memory=bool(pin_memory))
+    dl_kwargs = dict(
+        batch_size=batch_size,
+        shuffle=bool(is_train),
+        num_workers=int(num_workers),
+        pin_memory=bool(pin_memory),
+        drop_last=bool(is_train),
+    )
     if int(num_workers) > 0:
         dl_kwargs["persistent_workers"] = bool(persistent_workers)
         dl_kwargs["prefetch_factor"] = int(prefetch_factor)
