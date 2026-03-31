@@ -77,6 +77,9 @@ except ModuleNotFoundError:
 logger = logging.getLogger(__name__)
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs"
+
 
 def resolve_charbert_src() -> str:
     return str(Path(__file__).resolve().parent / 'CharBERT' / 'src')
@@ -113,7 +116,7 @@ def _make_grad_scaler(device: torch.device, enabled: bool):
 
 
 def setup_logging(log_file: Optional[Union[str, os.PathLike]] = None, *, level: int = logging.INFO, force: bool = False) -> Path:
-    logs_dir = Path(__file__).resolve().parent / "outputs" / "logs"
+    logs_dir = DEFAULT_OUTPUT_ROOT / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     if log_file is None:
@@ -1634,7 +1637,7 @@ def add_common_args(p):
     p.add_argument("--grad_clip_norm", type=float, default=0.0)
     p.add_argument("--val_every", type=int, default=1)
 
-    p.add_argument("--output_dir", default=str(Path(__file__).resolve().parent / "outputs"))
+    p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--attention_dim", type=int, default=256)
     return p
 

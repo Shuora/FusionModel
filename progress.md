@@ -1,10 +1,10 @@
 ## Progress
 
-- 2026-03-30: 读取 `using-superpowers`、`systematic-debugging`、`test-driven-development`、`using-git-worktrees` 技能，并按仓库约束在项目内创建 `.worktrees/codex-pcap-tail-tolerance`。
-- 2026-03-30: 复核 `split_data.py` 的异常路径，确认 `expand_raw_samples_to_sessions()` 会在读取异常时跳过整个 `pcap`。
-- 2026-03-30: 对 `SourceData/MFCP/Cobalt/Cobalt.pcap` 手工解析，确认文件主体正常，仅文件尾部剩余 `2` 个字节导致下一条 packet header 不完整。
-- 2026-03-30: 在 worktree 中运行 `python3 -m unittest tests.test_split_data_tasks`，当前基线通过，准备补回归测试。
-- 2026-03-30: 新增 `test_iter_packets_tolerates_truncated_tail_in_pcap`，先运行单测得到失败，确认当前 `.pcap` 读取路径无法处理该场景。
-- 2026-03-30: 将 `.pcap` 读取改为内建顺序解析，并在尾部 packet header/data 不完整时保留前序数据包、记录 warning 后返回。
-- 2026-03-30: 补充 nanosecond `pcap` magic 支持与对应回归测试，避免本次修复缩窄原有 `.pcap` 兼容范围。
-- 2026-03-30: 重新运行 `python3 -m unittest tests.test_split_data_tasks.SplitDataTaskTests.test_iter_packets_tolerates_truncated_tail_in_pcap` 与 `python3 -m unittest tests.test_split_data_tasks`，结果通过。
+- 2026-03-31: 读取 `using-superpowers`、`brainstorming`、`writing-plans`、`test-driven-development`、`using-git-worktrees`、`verification-before-completion` 技能，确认本次任务边界为“只修改默认输出根目录，不迁移历史产物”。
+- 2026-03-31: 检查仓库输出路径实现，确认 `src/fusion_common.py` 是本次代码修改核心，`README.md` 需要同步把 `src/outputs` 改为根目录 `outputs`。
+- 2026-03-31: 使用并行子代理复核影响面，确认 `tests/test_fusion_output_artifacts.py` 适合补默认路径测试，`src/run_all_modes.py` 无需改动。
+- 2026-03-31: 在 `.worktrees/codex-output-root` 创建隔离 worktree，并确认 `.worktrees` 已被 git ignore。
+- 2026-03-31: 先为默认 `output_dir` 与默认日志目录补回归测试，再运行红灯验证，确认当前行为仍指向 `src/outputs`。
+- 2026-03-31: 在 `src/fusion_common.py` 引入共享的 `DEFAULT_OUTPUT_ROOT`，将默认输出与默认日志目录统一迁移到仓库根目录 `outputs/`。
+- 2026-03-31: 同步更新 `README.md` 的训练输出路径说明，并修复 `AGENTS.md` 的 merge conflict，保留仓库当前有效约束。
+- 2026-03-31: 发现 conda 环境测试会被 Windows 用户 site-packages 污染；后续验证命令统一显式清理相关 Python 环境变量。

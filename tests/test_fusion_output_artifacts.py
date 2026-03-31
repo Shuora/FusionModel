@@ -1,5 +1,7 @@
+import argparse
 import csv
 import json
+import logging
 import sys
 import tempfile
 import unittest
@@ -14,6 +16,22 @@ import fusion_common as fc
 
 
 class FusionOutputArtifactsTests(unittest.TestCase):
+    def test_default_output_dir_points_to_repo_root_outputs(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+
+        args = parser.parse_args([])
+
+        self.assertEqual(Path(args.output_dir), ROOT / "outputs")
+
+    def test_default_log_dir_points_to_repo_root_outputs_logs(self) -> None:
+        log_path = fc.setup_logging(force=True)
+        logging.shutdown()
+
+        self.assertEqual(log_path.parent, ROOT / "outputs" / "logs")
+        self.assertTrue(log_path.exists())
+        log_path.unlink(missing_ok=True)
+
     def test_export_metrics_artifacts_writes_json_and_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "run_a"
