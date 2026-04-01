@@ -2,11 +2,16 @@ import argparse
 import csv
 import json
 import logging
+import math
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -17,6 +22,104 @@ import fusion_common as fc
 
 
 class FusionOutputArtifactsTests(unittest.TestCase):
+    def test_non_finite_train_batch_loss_is_skipped(self) -> None:
+        class TinyFusionDataset(Dataset):
+            def __len__(self) -> int:
+                return 4
+
+            def __getitem__(self, index: int):
+                image = torch.tensor([float(index % 2)], dtype=torch.float32)
+                pcap = torch.tensor([float((index + 1) % 2)], dtype=torch.float32)
+                label = torch.tensor(index % 2, dtype=torch.long)
+                return image, pcap, label
+
+        class NaNFirstBatchModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fc = nn.Linear(2, 2)
+                self.calls = 0
+
+            def forward(self, images, pcap_data):
+                self.calls += 1
+                x = torch.cat([images.float(), pcap_data.float()], dim=1)
+                logits = self.fc(x)
+                if self.calls == 1:
+                    return logits * float("nan")
+                return logits
+
+        train_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        val_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        model = NaNFirstBatchModel()
+
+        with self.assertLogs(fc.logger, level="WARNING") as log_ctx:
+            _, history = fc.train_fusion_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=1,
+                learning_rate=1e-3,
+                device=torch.device("cpu"),
+                patience=2,
+                use_amp=False,
+                early_stop_metric="val_loss",
+                early_stop_mode="auto",
+                val_every=1,
+            )
+
+        self.assertTrue(any("训练损失无效（NaN/Inf），跳过该 batch" in m for m in log_ctx.output))
+        self.assertEqual(model.calls, 4)
+        self.assertTrue(math.isfinite(history["train_loss"][0]))
+
+    def test_non_finite_val_loss_advances_early_stopping_and_stops(self) -> None:
+        class TinyFusionDataset(Dataset):
+            def __len__(self) -> int:
+                return 4
+
+            def __getitem__(self, index: int):
+                image = torch.tensor([float(index % 2)], dtype=torch.float32)
+                pcap = torch.tensor([float((index + 1) % 2)], dtype=torch.float32)
+                label = torch.tensor(index % 2, dtype=torch.long)
+                return image, pcap, label
+
+        class TinyFusionModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fc = nn.Linear(2, 2)
+
+            def forward(self, images, pcap_data):
+                x = torch.cat([images.float(), pcap_data.float()], dim=1)
+                return self.fc(x)
+
+        train_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        val_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        model = TinyFusionModel()
+
+        with mock.patch.object(
+            fc,
+            "evaluate_epoch",
+            side_effect=[
+                (0.5, 0.5, 0.5, [0, 1], [0, 1]),
+                (float("nan"), 0.5, 0.5, [0, 1], [0, 1]),
+                (float("nan"), 0.5, 0.5, [0, 1], [0, 1]),
+            ],
+        ):
+            _, history = fc.train_fusion_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=3,
+                learning_rate=1e-3,
+                device=torch.device("cpu"),
+                patience=1,
+                use_amp=False,
+                early_stop_metric="val_loss",
+                early_stop_mode="auto",
+                val_every=1,
+            )
+
+        self.assertEqual(len(history["train_loss"]), 2)
+        self.assertTrue(math.isnan(history["val_loss"][1]))
+
     def test_default_output_dir_points_to_repo_root_outputs(self) -> None:
         parser = argparse.ArgumentParser()
         fc.add_common_args(parser)
@@ -141,6 +244,18 @@ class FusionOutputArtifactsTests(unittest.TestCase):
             self.assertEqual(paths_b["metrics_curve"].name, "metrics_curve.png")
             self.assertEqual(paths_a["metrics_curve"].read_text(encoding="utf-8"), "attention")
             self.assertEqual(paths_b["metrics_curve"].read_text(encoding="utf-8"), "stacking")
+
+
+    def test_early_stopping_default_patience_is_8(self) -> None:
+        stopper = fc.EarlyStopping()
+        self.assertEqual(stopper.patience, 8)
+
+    def test_resolve_early_stop_mode_rejects_mismatch(self) -> None:
+        with self.assertRaises(ValueError):
+            fc._resolve_early_stop_mode("val_f1", "min")
+
+        self.assertEqual(fc._resolve_early_stop_mode("val_loss", "auto"), "min")
+        self.assertEqual(fc._resolve_early_stop_mode("val_f1", "auto"), "max")
 
     def test_load_pyplot_headless_uses_agg_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

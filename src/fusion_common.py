@@ -398,7 +398,7 @@ class EarlyStopping:
 
     def __init__(
         self,
-        patience: int = 7,
+        patience: int = 8,
         min_delta: float = 0.0,
         restore_best_weights: bool = True,
         mode: str = "min",
@@ -434,6 +434,34 @@ class EarlyStopping:
                 self.early_stop = True
                 if self.restore_best_weights and self.best_weights is not None:
                     model.load_state_dict(self.best_weights)
+
+
+def _resolve_early_stop_mode(early_stop_metric: str, early_stop_mode: str) -> str:
+    metric_to_mode = {
+        "val_loss": "min",
+        "val_acc": "max",
+        "val_f1": "max",
+    }
+    if early_stop_metric not in metric_to_mode:
+        raise ValueError(f"Unsupported early_stop_metric: {early_stop_metric}")
+
+    expected_mode = metric_to_mode[early_stop_metric]
+    if early_stop_mode == "auto":
+        return expected_mode
+    if early_stop_mode != expected_mode:
+        raise ValueError(
+            f"early_stop_mode={early_stop_mode} 与 early_stop_metric={early_stop_metric} 不一致，"
+            f"请使用 '{expected_mode}' 或 'auto'"
+        )
+    return early_stop_mode
+
+
+def _select_monitor_value(early_stop_metric: str, val_loss: float, val_acc: float, val_f1: float) -> float:
+    if early_stop_metric == "val_acc":
+        return float(val_acc)
+    if early_stop_metric == "val_f1":
+        return float(val_f1)
+    return float(val_loss)
 
 
 def convert_grayscale_to_rgb(x: torch.Tensor) -> torch.Tensor:
@@ -1064,7 +1092,7 @@ def train_fusion_model(
     num_epochs: int,
     learning_rate: float,
     device: torch.device,
-    patience: int = 7,
+    patience: int = 8,
     use_amp: bool = True,
     class_balance: str = "none",
     loss_type: str = "ce",
@@ -1125,9 +1153,7 @@ def train_fusion_model(
         criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=float(max(label_smoothing, 0.0)))
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=float(max(weight_decay, 0.0)))
     scaler = _make_grad_scaler(device, use_amp)
-    mode = early_stop_mode
-    if mode == "auto":
-        mode = "min" if early_stop_metric == "val_loss" else "max"
+    mode = _resolve_early_stop_mode(early_stop_metric, early_stop_mode)
     early_stopping = EarlyStopping(patience=patience, min_delta=0.001, mode=mode)
 
     scheduler = None
@@ -1165,7 +1191,7 @@ def train_fusion_model(
         train_preds = []
 
         train_progress = tqdm(train_loader, desc=f"训练 Epoch {epoch + 1}")
-        for images, pcap_data, labels in train_progress:
+        for batch_idx, (images, pcap_data, labels) in enumerate(train_progress):
             images = images.to(device, non_blocking=non_blocking)
             pcap_data = pcap_data.to(device, non_blocking=non_blocking)
             labels = labels.to(device, non_blocking=non_blocking)
@@ -1176,6 +1202,14 @@ def train_fusion_model(
                 if isinstance(outputs, (tuple, list)):
                     outputs = outputs[0]
                 loss = criterion(outputs, labels)
+            if not torch.isfinite(loss):
+                logger.warning(
+                    "训练损失无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
+                    epoch + 1,
+                    batch_idx + 1,
+                    len(train_loader),
+                )
+                continue
             if use_amp:
                 scaler.scale(loss).backward()
                 if grad_clip_norm and grad_clip_norm > 0:
@@ -1228,19 +1262,31 @@ def train_fusion_model(
                 val_f1,
             )
 
-            if early_stop_metric == "val_acc":
-                monitor_value = val_acc
-            elif early_stop_metric == "val_f1":
-                monitor_value = val_f1
-            else:
-                monitor_value = val_loss
+            monitor_value = _select_monitor_value(early_stop_metric, val_loss, val_acc, val_f1)
+            monitor_is_finite = math.isfinite(monitor_value)
 
-            early_stopping(float(monitor_value), model)
-            logger.info("早停计数器: %s/%s", early_stopping.counter, early_stopping.patience)
+            if monitor_is_finite:
+                early_stopping(monitor_value, model)
+                logger.info("早停计数器: %s/%s", early_stopping.counter, early_stopping.patience)
+            else:
+                logger.warning(
+                    "跳过本轮早停更新：%s=%.6f 不是有限值（可能是 NaN/Inf）",
+                    early_stop_metric,
+                    monitor_value,
+                )
+                early_stopping.counter += 1
+                logger.info("早停计数器: %s/%s (无效监控值按未改善处理)", early_stopping.counter, early_stopping.patience)
+                if early_stopping.counter >= early_stopping.patience:
+                    early_stopping.early_stop = True
+                    if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
+                        model.load_state_dict(early_stopping.best_weights)
 
             if scheduler is not None:
                 if lr_scheduler_mode == "reduce":
-                    scheduler.step(float(monitor_value))
+                    if monitor_is_finite:
+                        scheduler.step(monitor_value)
+                    else:
+                        logger.warning("跳过 ReduceLROnPlateau 更新：监控指标无效")
                 else:
                     scheduler.step()
             logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
