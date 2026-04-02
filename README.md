@@ -230,8 +230,11 @@ python3 src/train_fusion_attention.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -244,8 +247,11 @@ python3 src/train_fusion_attention_stacking.py \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention_stacking \
   --meta_methods xgboost \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -259,8 +265,11 @@ python3 src/train_fusion_attention.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -273,8 +282,11 @@ python3 src/train_fusion_attention_stacking.py \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking \
   --meta_methods xgboost \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -287,9 +299,12 @@ python3 src/train_fusion_attention.py \
   --task_name mta_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention \
-  --batch_size 64 \
-  --epochs 30 \
+  --batch_size 32 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -302,8 +317,11 @@ python3 src/train_fusion_attention_stacking.py \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_stacking \
   --meta_methods xgboost \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -317,8 +335,11 @@ python3 src/train_fusion_attention.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -331,8 +352,11 @@ python3 src/train_fusion_attention_stacking.py \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention_stacking \
   --meta_methods xgboost \
   --batch_size 32 \
-  --epochs 30 \
+  --epochs 32 \
+  --patience 4 \
   --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
   --device auto
 ```
 
@@ -372,7 +396,6 @@ python3 src/train_fusion_attention_stacking.py \
 --min_lr
 --grad_clip_norm
 --val_every
---max_consecutive_invalid_batches
 --output_dir
 --attention_dim
 ```
@@ -385,18 +408,17 @@ python3 src/train_fusion_attention_stacking.py \
 
 早停相关建议（`fusion_common.py` 当前默认行为）：
 
-- `--patience` 默认 `8`。
-- 训练稳定性相关默认值：`--weight_decay 1e-4`、`--lr_scheduler reduce`、`--lr_patience 2`、`--grad_clip_norm 1.0`。
+- `--patience` 默认 `4`。
 - `--early_stop_mode auto` 会按指标自动选择方向：`val_loss -> min`，`val_acc/val_f1 -> max`。
 - 若手动设置 `--early_stop_mode`，必须与 `--early_stop_metric` 方向一致；不一致会直接报错，避免错误早停。
 - 若验证监控值出现 `NaN/Inf`，会按“未改善”推进早停计数，达到 `patience` 后停止并恢复最佳权重。
-- 若训练 batch 的 `loss` 或梯度出现 `NaN/Inf`，该 batch 会被跳过（不更新参数），并记录告警日志。
-- `--max_consecutive_invalid_batches` 默认 `128`；当连续无效 batch 达到阈值时，会 fail-fast 终止训练并恢复最佳权重。
-- 当 `--task_name` 为 `mta_multiclass` 或 `mfcp_multiclass` 且未显式覆盖时，默认启用不均衡友好配置：
-  - `--class_balance weighted_sampler_loss`
-  - `--loss_type focal --focal_gamma 1.5 --label_smoothing 0.03`
-  - `--early_stop_metric val_f1 --early_stop_mode max`
+- 若训练 batch 的 `loss` 出现 `NaN/Inf`，该 batch 会被跳过（不反向传播、不更新参数），并记录告警日志。
 
+`epochs` 与 `lr` 的建议搭配（当前模型为从头训练的 `MobileViTConfig + CharBERT`，优化器为 `AdamW`）：
+
+- 稳妥起点：`--epochs 32 --patience 4 --lr 1e-3 --batch_size 32 --num_workers 4 --prefetch_factor 2`（与代码默认一致）。
+- 若验证集波动较大或后期发散：优先把 `--lr` 降到 `5e-4` 或 `3e-4`，`--epochs` 可保持 `32`。
+- 若收敛偏慢且验证指标仍持续提升：可把 `--epochs` 提到 `40~60`，同时建议启用 `--lr_scheduler reduce`。
 
 ## 必须显式传入的关键参数
 
@@ -438,7 +460,6 @@ outputs/<task_name>/attention_stacking/
 常见输出包括：
 
 - 训练日志
-- `metrics.json`（含 `run_status`、`stop_reason`、`health` 健康统计）
 - 指标曲线图
 - 混淆矩阵图
 - attention 诊断图
@@ -456,8 +477,6 @@ python3 src/run_all_modes.py --mode all ...
 
 - 用户要求四个实验必须给出独立命令，不能只给一个合并入口
 - 实际排查和复现实验时，分开运行 `attention` 与 `attention_stacking` 更清晰
-
-补充：`run_all_modes.py` 当前会在每个子模式启动前重新应用 `--seed`，减少 attention 与 stacking 顺序运行带来的随机状态漂移。
 
 ## 基础自检
 

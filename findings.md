@@ -15,8 +15,12 @@
 - 2026-03-31 EarlyStopping: 旧实现在监控值为 NaN/Inf 时会累加 early-stop 计数并喂给 ReduceLROnPlateau；现改为跳过该轮并记录 warning。
 - 2026-04-01 NaN早停: `src/fusion_common.py` 在 `monitor_is_finite=False` 时原先仅 warning 并跳过 early-stop 更新；这会让计数器停滞，导致 `patience` 失效并持续训练至 `num_epochs`。
 - 2026-04-01 NaN训练防护: 训练循环此前对 batch-level 非有限 loss 缺少保护；现新增 finite-check，NaN/Inf batch 直接跳过，避免无效梯度污染参数。
-- 2026-04-02 稳定性默认值: `add_common_args()` 默认值已改为更稳健组合：`weight_decay=1e-4`、`lr_scheduler=reduce`、`lr_patience=2`、`grad_clip_norm=1.0`，并新增 `max_consecutive_invalid_batches=128`。
-- 2026-04-02 数值 fail-fast: `train_fusion_model()` 现在除 loss 外还会检查梯度与参数有限性；当连续无效 batch 达到阈值时立即停止训练、恢复最佳权重，并将 run 标记为 `failed`。
-- 2026-04-02 训练健康统计: `history` 新增 `health` 字段（`run_status/stop_reason/invalid_*_batches/processed_train_batches/skipped_train_batches`），并写入 attention 与 stacking 的 `metrics.json` 顶层字段。
-- 2026-04-02 任务默认策略: 对 `mta_multiclass` 和 `mfcp_multiclass`，在未显式传参时自动启用 `weighted_sampler_loss + focal + val_f1(max)` 组合，减少默认配置下少数类被忽略的问题。
-- 2026-04-02 all模式复现性: `run_all_modes.py` 在 attention 与 attention_stacking 启动前都会重新 `set_seed(args.seed)`，避免前序模式改变随机状态导致后序模式不可比。
+- 2026-04-01 训练记录审计: `outputs/` 共有 11 个 run 目录，其中仅 5 个完整产出（含 `done attention|done stacking` 与 `metrics.json`），其余 6 个 run 仅启动到 `Epoch 1~8` 即终止，无异常栈信息，形态上更接近人为重启/中断。
+- 2026-04-01 训练记录审计: `binary_benign_vs_malicious/attention_dim256_20260401_021405` 在第 9 轮开始出现 `train_loss/val_loss=nan`，后续持续到第 30 轮，最终评估塌缩为单类预测（acc=0.4000, macro_f1=0.2857，恶意类召回=0）。
+- 2026-04-01 训练记录审计: `mta_multiclass` 在 attention 与 attention_stacking 两次完成 run 中都出现极小类完全失效（Dridex support=6, recall=0），accuracy 高但 macro_f1 明显偏低（0.5943/0.4779），存在“被大类掩盖”的风险。
+- 2026-04-02 全量训练日志审计: 最新 8 个 run 全部完成，但 `binary_benign_vs_malicious/attention_stacking_20260402_013619` 与 `mta_multiclass/attention_stacking_20260402_062100` 在后半程出现连续 `NaN/Inf batch`；前者从 epoch 7 batch 1267/15900 开始，累计 30513 个 batch 被跳过，后者从 epoch 21 batch 940/4305 开始，累计 3366 个 batch 被跳过。
+- 2026-04-02 全量训练日志审计: 当前默认训练配置仍是 `lr=1e-3`、`weight_decay=0`、`grad_clip_norm=0`、`lr_scheduler=none`、`early_stop_metric=val_loss`；这两次崩坏都在该配置下发生，attention-only run 未复现，形态更像数值稳定性被随机状态触发，而不是固定脏数据样本。
+- 2026-04-02 全量训练日志审计: `run_all_modes.py --mode all` 只在入口通过 `build_common_kwargs()` 调一次 `set_seed(args.seed)`；随后 attention 与 attention_stacking 在同一进程顺序执行，stacking 并不是从同样随机初始状态起跑，削弱了模式间可比性与复现性。
+- 2026-04-02 全量训练日志审计: `mta_multiclass` 仍是本轮最弱任务。attention `macro_f1=0.5511`，stacking base `0.5724`，xgboost `0.6105`；但 `Dridex` 召回仍为 `0.0000 -> 0.0224`，说明主要瓶颈仍是严重类别不均衡与少数类学习不足，而不是 stacking 元学习器本身。
+- 2026-04-02 全量训练日志审计: `mfcp_multiclass` 无 NaN，但 attention / stacking base 提升很小（0.7756 -> 0.7769），主要弱类是 `Ursnif`（recall≈0.509），xgboost 后整体 `macro_f1=0.7867`，说明堆叠收益主要来自后端分类器而非 base fusion 明显增强。
+- 2026-04-02 全量训练日志审计: `ustc_multiclass` 是当前最稳定任务，attention `macro_f1=0.9719`，xgboost `0.9757`；但 attention 在 epoch 15 出现 `val_loss=0.9455` 的孤立尖峰，而同时 `val_acc/val_f1` 仍约 `0.969`，说明仅盯 `val_loss` 对高置信多分类任务并不稳健。

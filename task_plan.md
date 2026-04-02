@@ -41,15 +41,20 @@
 - [x] 运行测试验证并回报结果。
 - [x] 增加训练 batch 非有限 loss 保护与回归测试，并通过验证。
 
-## Task (2026-04-02 全量训练改进项 1-5 落地)
-根据最新全量训练日志审计结果，实施 5 项改进：
-1) 稳定性默认参数；
-2) 梯度/参数有限性保护与 fail-fast；
-3) `run_all_modes` 子模式重置 seed；
-4) `mta/mfcp` 任务默认不均衡策略；
-5) `metrics.json` 增加训练健康字段。
+## Task (2026-04-01 训练记录审计)
+检查 `outputs/` 下所有训练记录，识别异常训练、无效产物和可疑指标。
 
 ## Plan
-1. 先补回归测试（默认参数、任务默认策略、seed 重置、fail-fast、metrics 健康字段）并确认红灯。
-2. 修改 `src/fusion_common.py` / `src/run_all_modes.py` 完整实现 1-5。
-3. 运行目标单测验证行为，并同步 README、findings、progress。
+1. 枚举全部 run 目录并按“完成/未完成”分类。
+2. 对已完成 run 提取 `metrics.json` 与 `train.log` 的关键指标，识别崩坏点（NaN、单类塌缩、极端类不平衡影响）。
+3. 对未完成 run 对齐启动参数与终止位置，区分人为中断与程序异常。
+4. 输出问题清单与可执行建议，同步 findings/progress。
+
+## Task (2026-04-02 全量训练日志审计)
+审计 2026-04-01 ~ 2026-04-02 最新 8 个 attention / attention_stacking run，识别数值稳定性问题、任务级短板和可执行改进项。
+
+## Plan
+1. 汇总四个任务的 attention 与 attention_stacking `metrics.json` / `epoch_metrics.csv` / `train.log` 关键指标。
+2. 对异常 run 做根因归类：数值爆炸、早停触发、类别不均衡、accuracy 与 macro_f1 偏离。
+3. 对照训练入口与公共训练逻辑，确认是否存在可复现性或配置层面的系统性问题。
+4. 输出按优先级排序的改进建议，并同步 findings/progress。

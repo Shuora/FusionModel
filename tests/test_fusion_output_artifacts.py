@@ -451,9 +451,9 @@ class FusionOutputArtifactsTests(unittest.TestCase):
             self.assertEqual(paths_b["metrics_curve"].read_text(encoding="utf-8"), "stacking")
 
 
-    def test_early_stopping_default_patience_is_8(self) -> None:
+    def test_early_stopping_default_patience_is_4(self) -> None:
         stopper = fc.EarlyStopping()
-        self.assertEqual(stopper.patience, 8)
+        self.assertEqual(stopper.patience, 4)
 
     def test_resolve_early_stop_mode_rejects_mismatch(self) -> None:
         with self.assertRaises(ValueError):
