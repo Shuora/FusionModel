@@ -20,9 +20,10 @@
 - 2026-04-01: 在 `tests/test_fusion_output_artifacts.py` 新增 NaN 场景回归测试，验证不会在 NaN 后继续长时间训练。
 - 2026-04-01: 在 `train_fusion_model` 训练 batch 增加 `torch.isfinite(loss)` 检查，NaN/Inf batch 跳过并记录 warning。
 - 2026-04-01: 新增回归测试 `test_non_finite_train_batch_loss_is_skipped` 并通过全量 `tests.test_fusion_output_artifacts` 验证。
-- 2026-04-02: 在隔离 worktree `codex/train-stability-allfix` 中按 TDD 落地 5 项改造，先新增失败测试覆盖默认参数、任务默认策略、run_all_modes 重置 seed、fail-fast、metrics 健康字段。
-- 2026-04-02: 修改 `src/fusion_common.py`：新增梯度/参数有限性检查、连续无效 batch fail-fast、有效样本分母统计、health 结构化记录，并将健康字段输出到 `metrics.json`。
-- 2026-04-02: 修改 `src/fusion_common.py` 参数层：默认启用 `weight_decay=1e-4`、`lr_scheduler=reduce`、`lr_patience=2`、`grad_clip_norm=1.0`，新增 `max_consecutive_invalid_batches=128`。
-- 2026-04-02: 增加 `mta/mfcp` 任务级默认策略（仅在未显式传参时生效）：`weighted_sampler_loss + focal + val_f1(max)`。
-- 2026-04-02: 修改 `src/run_all_modes.py`：attention 与 attention_stacking 各自启动前都 `set_seed(args.seed)`。
-- 2026-04-02: 同步更新 `README.md` 的参数与输出说明，并通过 `python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_run_all_modes` 验证。
+- 2026-04-01: 完成训练记录全量盘点，确认 `outputs/` 下 11 个 run 中 5 个完整、6 个中断，并对每个中断 run 提取了 batch_size 与终止 epoch。
+- 2026-04-01: 复核二分类 run `attention_dim256_20260401_021405`，确认第 9 轮后 NaN 连续传播且最终单类塌缩，属于无效训练产物。
+- 2026-04-01: 复核 mta/mfcp 完整 run 的最终报告，识别到 `mta_multiclass` 在极小类上的系统性召回缺失，accuracy 与 macro_f1 口径分离明显。
+- 2026-04-02: 盘点最新全量训练的 8 个 run，确认四个任务的 attention / attention_stacking 均已完整产出到 `outputs/<task>/<mode>/<run_name>/`。
+- 2026-04-02: 提取全部 `metrics.json` / `epoch_metrics.csv` / `train.log` 关键指标，确认 `binary` 与 `mta` 的 stacking run 在后半程分别出现 30513 / 3366 个连续 `NaN/Inf batch`，最终由 early stop 恢复 best weights 后收尾。
+- 2026-04-02: 对照 `src/fusion_common.py` 与 `src/run_all_modes.py`，确认当前默认配置缺少梯度裁剪和学习率调度，且 `--mode all` 只在整次进程开始时设 seed，一次 attention 完成后不会为 stacking 重新设 seed。
+- 2026-04-02: 完成任务级结论归纳：`ustc` 当前表现最好且稳定；`binary` 指标高但 stacking 训练过程不稳定；`mfcp` 主要短板在 `Ursnif`；`mta` 仍受少数类 `Dridex` 完全失效拖累。

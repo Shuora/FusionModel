@@ -398,7 +398,7 @@ class EarlyStopping:
 
     def __init__(
         self,
-        patience: int = 8,
+        patience: int = 4,
         min_delta: float = 0.0,
         restore_best_weights: bool = True,
         mode: str = "min",
@@ -1110,7 +1110,7 @@ def train_fusion_model(
     num_epochs: int,
     learning_rate: float,
     device: torch.device,
-    patience: int = 8,
+    patience: int = 4,
     use_amp: bool = True,
     class_balance: str = "none",
     loss_type: str = "ce",
@@ -1785,7 +1785,7 @@ def add_common_args(p):
 
     p.add_argument("--epochs", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--patience", type=int, default=8)
+    p.add_argument("--patience", type=int, default=4)
     p.add_argument("--preset", choices=["none", "cic_balanced"], default="none")
 
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
