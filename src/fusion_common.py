@@ -464,6 +464,24 @@ def _select_monitor_value(early_stop_metric: str, val_loss: float, val_acc: floa
     return float(val_loss)
 
 
+def _has_non_finite_gradients(model: nn.Module) -> bool:
+    for p in model.parameters():
+        if p.grad is not None and not torch.isfinite(p.grad).all():
+            return True
+    return False
+
+
+def _has_non_finite_parameters(model: nn.Module) -> bool:
+    for p in model.parameters():
+        if not torch.isfinite(p).all():
+            return True
+    return False
+
+
+def _should_log_invalid_batch(counter: int) -> bool:
+    return counter <= 20 or (counter % 200 == 0)
+
+
 def convert_grayscale_to_rgb(x: torch.Tensor) -> torch.Tensor:
     """
     将单通道灰度图转换为三通道RGB图
@@ -1097,16 +1115,17 @@ def train_fusion_model(
     class_balance: str = "none",
     loss_type: str = "ce",
     focal_gamma: float = 2.0,
-    weight_decay: float = 0.0,
+    weight_decay: float = 1e-4,
     label_smoothing: float = 0.0,
     early_stop_metric: str = "val_loss",
     early_stop_mode: str = "auto",
-    lr_scheduler_mode: str = "none",
-    lr_patience: int = 3,
+    lr_scheduler_mode: str = "reduce",
+    lr_patience: int = 2,
     lr_factor: float = 0.5,
     min_lr: float = 1e-6,
-    grad_clip_norm: float = 0.0,
+    grad_clip_norm: float = 1.0,
     val_every: int = 1,
+    max_consecutive_invalid_batches: int = 128,
 ):
     logger.info("开始训练融合模型")
     logger.info(
@@ -1123,6 +1142,7 @@ def train_fusion_model(
         lr_scheduler_mode,
         val_every,
     )
+    logger.info("训练保护 - grad_clip_norm: %.3f, max_consecutive_invalid_batches: %s", grad_clip_norm, max_consecutive_invalid_batches)
     logger.info(
         "DataLoader参数 - train_batches: %s, val_batches: %s, batch_size: %s, num_workers: %s, pin_memory: %s",
         len(train_loader),
@@ -1180,6 +1200,17 @@ def train_fusion_model(
         "val_acc": [],
         "val_f1": [],
     }
+    health = {
+        "run_status": "ok",
+        "stop_reason": "completed",
+        "invalid_loss_batches": 0,
+        "invalid_grad_batches": 0,
+        "invalid_param_events": 0,
+        "processed_train_batches": 0,
+        "skipped_train_batches": 0,
+    }
+    max_consecutive_invalid_batches = max(int(max_consecutive_invalid_batches), 1)
+    stop_training_now = False
 
     for epoch in range(num_epochs):
         logger.info("Epoch %s/%s", epoch + 1, num_epochs)
@@ -1189,6 +1220,9 @@ def train_fusion_model(
         train_corrects = 0
         train_labels = []
         train_preds = []
+        processed_train_samples = 0
+        consecutive_invalid_batches = 0
+        invalid_stop_reason = ""
 
         train_progress = tqdm(train_loader, desc=f"训练 Epoch {epoch + 1}")
         for batch_idx, (images, pcap_data, labels) in enumerate(train_progress):
@@ -1203,25 +1237,100 @@ def train_fusion_model(
                     outputs = outputs[0]
                 loss = criterion(outputs, labels)
             if not torch.isfinite(loss):
-                logger.warning(
-                    "训练损失无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
-                    epoch + 1,
-                    batch_idx + 1,
-                    len(train_loader),
-                )
+                health["invalid_loss_batches"] += 1
+                health["skipped_train_batches"] += 1
+                consecutive_invalid_batches += 1
+                if _should_log_invalid_batch(health["invalid_loss_batches"]):
+                    logger.warning(
+                        "训练损失无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
+                        epoch + 1,
+                        batch_idx + 1,
+                        len(train_loader),
+                    )
+                if consecutive_invalid_batches >= max_consecutive_invalid_batches:
+                    invalid_stop_reason = f"consecutive_invalid_batches(loss)>={max_consecutive_invalid_batches}"
+                    logger.error(
+                        "连续无效 batch 达到阈值，终止训练: epoch=%s batch=%s/%s reason=%s",
+                        epoch + 1,
+                        batch_idx + 1,
+                        len(train_loader),
+                        invalid_stop_reason,
+                    )
+                    stop_training_now = True
+                    break
                 continue
             if use_amp:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 if grad_clip_norm and grad_clip_norm > 0:
-                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
+                if _has_non_finite_gradients(model):
+                    health["invalid_grad_batches"] += 1
+                    health["skipped_train_batches"] += 1
+                    consecutive_invalid_batches += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    scaler.update()
+                    if _should_log_invalid_batch(health["invalid_grad_batches"]):
+                        logger.warning(
+                            "梯度无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
+                            epoch + 1,
+                            batch_idx + 1,
+                            len(train_loader),
+                        )
+                    if consecutive_invalid_batches >= max_consecutive_invalid_batches:
+                        invalid_stop_reason = f"consecutive_invalid_batches(grad)>={max_consecutive_invalid_batches}"
+                        logger.error(
+                            "连续无效 batch 达到阈值，终止训练: epoch=%s batch=%s/%s reason=%s",
+                            epoch + 1,
+                            batch_idx + 1,
+                            len(train_loader),
+                            invalid_stop_reason,
+                        )
+                        stop_training_now = True
+                        break
+                    continue
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
                 if grad_clip_norm and grad_clip_norm > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
+                if _has_non_finite_gradients(model):
+                    health["invalid_grad_batches"] += 1
+                    health["skipped_train_batches"] += 1
+                    consecutive_invalid_batches += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    if _should_log_invalid_batch(health["invalid_grad_batches"]):
+                        logger.warning(
+                            "梯度无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
+                            epoch + 1,
+                            batch_idx + 1,
+                            len(train_loader),
+                        )
+                    if consecutive_invalid_batches >= max_consecutive_invalid_batches:
+                        invalid_stop_reason = f"consecutive_invalid_batches(grad)>={max_consecutive_invalid_batches}"
+                        logger.error(
+                            "连续无效 batch 达到阈值，终止训练: epoch=%s batch=%s/%s reason=%s",
+                            epoch + 1,
+                            batch_idx + 1,
+                            len(train_loader),
+                            invalid_stop_reason,
+                        )
+                        stop_training_now = True
+                        break
+                    continue
                 optimizer.step()
+            if _has_non_finite_parameters(model):
+                health["invalid_param_events"] += 1
+                invalid_stop_reason = "non_finite_parameters_after_step"
+                logger.error(
+                    "检测到模型参数出现 NaN/Inf，终止训练: epoch=%s batch=%s/%s",
+                    epoch + 1,
+                    batch_idx + 1,
+                    len(train_loader),
+                )
+                stop_training_now = True
+                break
 
             train_loss += loss.item() * images.size(0)
             _, predicted = torch.max(outputs.data, 1)
@@ -1229,15 +1338,20 @@ def train_fusion_model(
             train_corrects += (predicted == labels).sum().item()
             train_labels.extend(labels.cpu().numpy())
             train_preds.extend(predicted.cpu().numpy())
+            processed_train_samples += labels.size(0)
+            health["processed_train_batches"] += 1
+            consecutive_invalid_batches = 0
 
             acc = 100.0 * train_corrects / max(train_total, 1)
             train_progress.set_postfix({"Loss": f"{loss.item():.4f}", "Acc": f"{acc:.2f}%"})
 
-        epoch_train_loss = train_loss / max(len(train_loader.dataset), 1)
+        epoch_train_loss = train_loss / processed_train_samples if processed_train_samples > 0 else float("nan")
         epoch_train_acc = accuracy_score(train_labels, train_preds) if train_labels else 0.0
         epoch_train_f1 = f1_score(train_labels, train_preds, average="macro") if train_labels else 0.0
 
-        run_validation = ((epoch + 1) % max(int(val_every), 1) == 0) or ((epoch + 1) == num_epochs)
+        run_validation = (not stop_training_now) and (
+            ((epoch + 1) % max(int(val_every), 1) == 0) or ((epoch + 1) == num_epochs)
+        )
         if run_validation:
             val_loss, val_acc, val_f1, _, _ = evaluate_epoch(model, val_loader, criterion, device, use_amp=use_amp)
         else:
@@ -1249,6 +1363,15 @@ def train_fusion_model(
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
         history["val_f1"].append(val_f1)
+
+        if stop_training_now:
+            health["run_status"] = "failed"
+            health["stop_reason"] = invalid_stop_reason or "invalid_training_state"
+            if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
+                model.load_state_dict(early_stopping.best_weights)
+                logger.warning("检测到训练异常，已恢复最佳权重并提前停止训练。")
+            logger.error("训练失败保护触发，在第 %s 轮停止。reason=%s", epoch + 1, health["stop_reason"])
+            break
 
         if run_validation:
             logger.info(
@@ -1292,6 +1415,7 @@ def train_fusion_model(
             logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
             if early_stopping.early_stop:
+                health["stop_reason"] = "early_stop"
                 logger.info("早停机制触发，在第 %s 轮后停止训练", epoch + 1)
                 break
         else:
@@ -1307,6 +1431,10 @@ def train_fusion_model(
                 scheduler.step()
                 logger.info("当前学习率: %.8f", optimizer.param_groups[0]["lr"])
 
+    if health["run_status"] != "failed":
+        has_invalid = (health["invalid_loss_batches"] + health["invalid_grad_batches"] + health["invalid_param_events"]) > 0
+        health["run_status"] = "degraded" if has_invalid else "ok"
+    history["health"] = health
     logger.info("融合模型训练完成")
     return model, history
 
@@ -1678,16 +1806,17 @@ def add_common_args(p):
     )
     p.add_argument("--loss_type", choices=["ce", "focal"], default="ce")
     p.add_argument("--focal_gamma", type=float, default=2.0)
-    p.add_argument("--weight_decay", type=float, default=0.0)
+    p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--label_smoothing", type=float, default=0.0)
     p.add_argument("--early_stop_metric", choices=["val_loss", "val_acc", "val_f1"], default="val_loss")
     p.add_argument("--early_stop_mode", choices=["auto", "min", "max"], default="auto")
-    p.add_argument("--lr_scheduler", choices=["none", "reduce", "cosine"], default="none")
-    p.add_argument("--lr_patience", type=int, default=3)
+    p.add_argument("--lr_scheduler", choices=["none", "reduce", "cosine"], default="reduce")
+    p.add_argument("--lr_patience", type=int, default=2)
     p.add_argument("--lr_factor", type=float, default=0.5)
     p.add_argument("--min_lr", type=float, default=1e-6)
-    p.add_argument("--grad_clip_norm", type=float, default=0.0)
+    p.add_argument("--grad_clip_norm", type=float, default=1.0)
     p.add_argument("--val_every", type=int, default=1)
+    p.add_argument("--max_consecutive_invalid_batches", type=int, default=128)
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--attention_dim", type=int, default=256)
@@ -1733,6 +1862,28 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
                 setattr(args, flag[2:], value)
 
 
+def _apply_task_defaults(args) -> None:
+    task_name = str(getattr(args, "task_name", "") or "").strip().lower()
+    if task_name not in {"mta_multiclass", "mfcp_multiclass"}:
+        return
+
+    task_values = {
+        "--class_balance": "weighted_sampler_loss",
+        "--loss_type": "focal",
+        "--focal_gamma": 1.5,
+        "--weight_decay": 1e-4,
+        "--label_smoothing": 0.03,
+        "--early_stop_metric": "val_f1",
+        "--early_stop_mode": "max",
+        "--lr_scheduler": "reduce",
+        "--lr_patience": 2,
+        "--grad_clip_norm": 1.0,
+    }
+    for flag, value in task_values.items():
+        if not _arg_explicitly_set(flag):
+            setattr(args, flag[2:], value)
+
+
 def build_common_kwargs(args):
     device = device_from_arg(args.device)
     set_seed(args.seed)
@@ -1757,6 +1908,7 @@ def build_common_kwargs(args):
             args.dataset_name or None,
         )
     _apply_preset_defaults(args, resolved_dataset_name)
+    _apply_task_defaults(args)
     logger.info("Using dataset: %s (root=%s)", resolved_dataset_name, args.dataset_root)
     print(f"[Data] dataset={resolved_dataset_name}")
     print(f"[Data] dataset_root={args.dataset_root}")
@@ -1801,6 +1953,7 @@ def build_common_kwargs(args):
         min_lr=args.min_lr,
         grad_clip_norm=args.grad_clip_norm,
         val_every=args.val_every,
+        max_consecutive_invalid_batches=args.max_consecutive_invalid_batches,
         selected_groups=parse_csv_values(args.cic_group) if args.cic_group else None,
     )
 
@@ -1837,16 +1990,17 @@ def run_fusion_experiment(
     class_balance: str = "none",
     loss_type: str = "ce",
     focal_gamma: float = 2.0,
-    weight_decay: float = 0.0,
+    weight_decay: float = 1e-4,
     label_smoothing: float = 0.0,
     early_stop_metric: str = "val_loss",
     early_stop_mode: str = "auto",
-    lr_scheduler_mode: str = "none",
-    lr_patience: int = 3,
+    lr_scheduler_mode: str = "reduce",
+    lr_patience: int = 2,
     lr_factor: float = 0.5,
     min_lr: float = 1e-6,
-    grad_clip_norm: float = 0.0,
+    grad_clip_norm: float = 1.0,
     val_every: int = 1,
+    max_consecutive_invalid_batches: int = 128,
     selected_groups: Optional[List[str]] = None,
 ) -> None:
     ensure_output_dirs(output_dir)
@@ -1919,6 +2073,7 @@ def run_fusion_experiment(
         min_lr=min_lr,
         grad_clip_norm=grad_clip_norm,
         val_every=val_every,
+        max_consecutive_invalid_batches=max_consecutive_invalid_batches,
     )
 
     attention_curve_path: Optional[Path] = None
@@ -1977,6 +2132,9 @@ def run_fusion_experiment(
         "output_root": str(output_dir),
         "classes": train_classes,
         "history": history,
+        "run_status": history.get("health", {}).get("run_status", "ok"),
+        "stop_reason": history.get("health", {}).get("stop_reason", "completed"),
+        "health": history.get("health", {}),
         "eval": {
             "loss": eval_result["loss"],
             "acc": eval_result["acc"],
@@ -2034,16 +2192,17 @@ def run_stacking_experiment(
     class_balance: str = "none",
     loss_type: str = "ce",
     focal_gamma: float = 2.0,
-    weight_decay: float = 0.0,
+    weight_decay: float = 1e-4,
     label_smoothing: float = 0.0,
     early_stop_metric: str = "val_loss",
     early_stop_mode: str = "auto",
-    lr_scheduler_mode: str = "none",
-    lr_patience: int = 3,
+    lr_scheduler_mode: str = "reduce",
+    lr_patience: int = 2,
     lr_factor: float = 0.5,
     min_lr: float = 1e-6,
-    grad_clip_norm: float = 0.0,
+    grad_clip_norm: float = 1.0,
     val_every: int = 1,
+    max_consecutive_invalid_batches: int = 128,
     selected_groups: Optional[List[str]] = None,
 ) -> None:
     ensure_output_dirs(output_dir)
@@ -2118,6 +2277,7 @@ def run_stacking_experiment(
         min_lr=min_lr,
         grad_clip_norm=grad_clip_norm,
         val_every=val_every,
+        max_consecutive_invalid_batches=max_consecutive_invalid_batches,
     )
 
     attention_curve_path: Optional[Path] = None
@@ -2239,6 +2399,9 @@ def run_stacking_experiment(
         "output_root": str(output_dir),
         "classes": train_classes,
         "history": history,
+        "run_status": history.get("health", {}).get("run_status", "ok"),
+        "stop_reason": history.get("health", {}).get("stop_reason", "completed"),
+        "health": history.get("health", {}),
         "base_eval": {
             "loss": base_eval["loss"],
             "acc": base_eval["acc"],

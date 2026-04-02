@@ -136,6 +136,79 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertTrue(log_path.exists())
         log_path.unlink(missing_ok=True)
 
+    def test_default_stability_guard_params_are_enabled(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args([])
+
+        self.assertAlmostEqual(args.weight_decay, 1e-4)
+        self.assertEqual(args.lr_scheduler, "reduce")
+        self.assertEqual(args.lr_patience, 2)
+        self.assertAlmostEqual(args.grad_clip_norm, 1.0)
+
+    def test_task_specific_defaults_for_mta_enable_balanced_training(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args(["--task_name", "mta_multiclass"])
+
+        with mock.patch.object(
+            fc,
+            "resolve_task_dataset_dirs",
+            return_value=("train_img", "train_pcap", "test_img", "test_pcap", "mta_multiclass"),
+        ):
+            kwargs = fc.build_common_kwargs(args)
+
+        self.assertEqual(kwargs["class_balance"], "weighted_sampler_loss")
+        self.assertEqual(kwargs["loss_type"], "focal")
+        self.assertAlmostEqual(kwargs["focal_gamma"], 1.5)
+        self.assertAlmostEqual(kwargs["label_smoothing"], 0.03)
+        self.assertEqual(kwargs["early_stop_metric"], "val_f1")
+        self.assertEqual(kwargs["early_stop_mode"], "max")
+
+    def test_task_specific_defaults_do_not_override_explicit_args(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args(
+            [
+                "--task_name",
+                "mta_multiclass",
+                "--class_balance",
+                "none",
+                "--loss_type",
+                "ce",
+                "--early_stop_metric",
+                "val_loss",
+                "--early_stop_mode",
+                "auto",
+            ]
+        )
+
+        with mock.patch.object(
+            fc,
+            "resolve_task_dataset_dirs",
+            return_value=("train_img", "train_pcap", "test_img", "test_pcap", "mta_multiclass"),
+        ), mock.patch.object(
+            sys,
+            "argv",
+            [
+                "train.py",
+                "--class_balance",
+                "none",
+                "--loss_type",
+                "ce",
+                "--early_stop_metric",
+                "val_loss",
+                "--early_stop_mode",
+                "auto",
+            ],
+        ):
+            kwargs = fc.build_common_kwargs(args)
+
+        self.assertEqual(kwargs["class_balance"], "none")
+        self.assertEqual(kwargs["loss_type"], "ce")
+        self.assertEqual(kwargs["early_stop_metric"], "val_loss")
+        self.assertEqual(kwargs["early_stop_mode"], "auto")
+
     def test_training_loader_drops_tail_batch_but_eval_loader_keeps_it(self) -> None:
         class FakeFusionDataset:
             def __init__(self, *args, **kwargs) -> None:
@@ -182,6 +255,52 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertTrue(train_loader.drop_last)
         self.assertFalse(eval_loader.drop_last)
 
+    def test_consecutive_non_finite_batches_fail_fast(self) -> None:
+        class TinyFusionDataset(Dataset):
+            def __len__(self) -> int:
+                return 8
+
+            def __getitem__(self, index: int):
+                image = torch.tensor([float(index % 2)], dtype=torch.float32)
+                pcap = torch.tensor([float((index + 1) % 2)], dtype=torch.float32)
+                label = torch.tensor(index % 2, dtype=torch.long)
+                return image, pcap, label
+
+        class AlwaysNaNModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fc = nn.Linear(2, 2)
+
+            def forward(self, images, pcap_data):
+                x = torch.cat([images.float(), pcap_data.float()], dim=1)
+                logits = self.fc(x)
+                return logits * float("nan")
+
+        train_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        val_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        model = AlwaysNaNModel()
+
+        _, history = fc.train_fusion_model(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            num_epochs=5,
+            learning_rate=1e-3,
+            device=torch.device("cpu"),
+            patience=8,
+            use_amp=False,
+            early_stop_metric="val_loss",
+            early_stop_mode="auto",
+            val_every=1,
+            max_consecutive_invalid_batches=2,
+        )
+
+        health = history["health"]
+        self.assertEqual(health["run_status"], "failed")
+        self.assertIn("consecutive_invalid_batches", health["stop_reason"])
+        self.assertGreaterEqual(health["invalid_loss_batches"], 2)
+        self.assertLessEqual(len(history["train_loss"]), 1)
+
     def test_export_metrics_artifacts_writes_json_and_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "run_a"
@@ -222,6 +341,92 @@ class FusionOutputArtifactsTests(unittest.TestCase):
             self.assertEqual(rows[0]["epoch"], "1")
             self.assertEqual(rows[1]["train_loss"], "0.5")
             self.assertEqual(rows[1]["val_f1"], "0.5")
+
+    def test_run_metrics_json_contains_health_fields(self) -> None:
+        class FakeLoader:
+            def __init__(self) -> None:
+                self.dataset = [0, 1]
+                self.batch_size = 2
+                self.num_workers = 0
+                self.pin_memory = False
+
+            def __len__(self) -> int:
+                return 1
+
+        fake_loader = FakeLoader()
+        classes = ["a", "b"]
+
+        fake_history = {
+            "train_loss": [0.4],
+            "train_acc": [0.6],
+            "train_f1": [0.55],
+            "val_loss": [0.5],
+            "val_acc": [0.58],
+            "val_f1": [0.56],
+            "health": {
+                "run_status": "degraded",
+                "stop_reason": "early_stop",
+                "invalid_loss_batches": 3,
+                "invalid_grad_batches": 0,
+                "invalid_param_events": 0,
+                "processed_train_batches": 1,
+                "skipped_train_batches": 3,
+            },
+        }
+
+        fake_eval = {
+            "loss": 0.5,
+            "acc": 0.58,
+            "macro_f1": 0.56,
+            "report": "",
+            "cm": [[1, 0], [0, 1]],
+            "per_class_f1": [0.5, 0.6],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir) / "outputs"
+            model = nn.Linear(2, 2)
+            with mock.patch.object(
+                fc,
+                "load_fusion_data",
+                side_effect=[(fake_loader, classes), (fake_loader, classes)],
+            ), mock.patch.object(fc, "initialize_fusion_model", return_value=model), mock.patch.object(
+                fc, "train_fusion_model", return_value=(model, fake_history)
+            ), mock.patch.object(fc, "evaluate_full", return_value=fake_eval), mock.patch.object(
+                fc, "collect_attention_diagnostics", return_value=None
+            ), mock.patch.object(
+                fc, "plot_training_curves", return_value=None
+            ), mock.patch.object(
+                fc, "plot_confusion", return_value=None
+            ), mock.patch.object(
+                fc, "save_report_md", return_value=None
+            ):
+                fc.run_fusion_experiment(
+                    fusion_mode="attention",
+                    train_image_dir="/tmp/train_img",
+                    train_pcap_dir="/tmp/train_pcap",
+                    test_image_dir="/tmp/test_img",
+                    test_pcap_dir="/tmp/test_pcap",
+                    batch_size=2,
+                    image_size=28,
+                    max_pcap_length=16,
+                    epochs=1,
+                    lr=1e-3,
+                    patience=1,
+                    device=torch.device("cpu"),
+                    output_dir=output_root,
+                    num_workers=0,
+                    pin_memory=False,
+                    persistent_workers=False,
+                    prefetch_factor=2,
+                    use_amp=False,
+                )
+
+            metrics_path = next(output_root.glob("*/metrics.json"))
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["run_status"], "degraded")
+            self.assertEqual(payload["stop_reason"], "early_stop")
+            self.assertEqual(payload["health"]["invalid_loss_batches"], 3)
 
     def test_run_directory_isolation_prevents_fixed_filename_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
