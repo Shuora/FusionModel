@@ -16,7 +16,14 @@ def _ensure_local_imports() -> None:
 
 _ensure_local_imports()
 
-from fusion_common import add_common_args, build_common_kwargs, ensure_output_dirs, run_fusion_experiment, run_stacking_experiment
+from fusion_common import (
+    add_common_args,
+    build_common_kwargs,
+    ensure_output_dirs,
+    run_fusion_experiment,
+    run_stacking_experiment,
+    set_seed,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,9 +48,11 @@ def main() -> int:
 
     start = time.time()
     if args.mode in ('attention', 'all'):
+        set_seed(args.seed)
         run_fusion_experiment(fusion_mode='attention', **kwargs)
 
     if args.mode in ('attention_stacking', 'all'):
+        set_seed(args.seed)
         run_stacking_experiment(
             base_fusion_mode='attention',
             meta_methods=['xgboost'],

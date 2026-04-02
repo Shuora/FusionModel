@@ -40,3 +40,16 @@
 - [ ] 运行测试验证并回报结果。
 - [x] 运行测试验证并回报结果。
 - [x] 增加训练 batch 非有限 loss 保护与回归测试，并通过验证。
+
+## Task (2026-04-02 全量训练改进项 1-5 落地)
+根据最新全量训练日志审计结果，实施 5 项改进：
+1) 稳定性默认参数；
+2) 梯度/参数有限性保护与 fail-fast；
+3) `run_all_modes` 子模式重置 seed；
+4) `mta/mfcp` 任务默认不均衡策略；
+5) `metrics.json` 增加训练健康字段。
+
+## Plan
+1. 先补回归测试（默认参数、任务默认策略、seed 重置、fail-fast、metrics 健康字段）并确认红灯。
+2. 修改 `src/fusion_common.py` / `src/run_all_modes.py` 完整实现 1-5。
+3. 运行目标单测验证行为，并同步 README、findings、progress。

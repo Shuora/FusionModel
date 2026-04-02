@@ -15,3 +15,8 @@
 - 2026-03-31 EarlyStopping: 旧实现在监控值为 NaN/Inf 时会累加 early-stop 计数并喂给 ReduceLROnPlateau；现改为跳过该轮并记录 warning。
 - 2026-04-01 NaN早停: `src/fusion_common.py` 在 `monitor_is_finite=False` 时原先仅 warning 并跳过 early-stop 更新；这会让计数器停滞，导致 `patience` 失效并持续训练至 `num_epochs`。
 - 2026-04-01 NaN训练防护: 训练循环此前对 batch-level 非有限 loss 缺少保护；现新增 finite-check，NaN/Inf batch 直接跳过，避免无效梯度污染参数。
+- 2026-04-02 稳定性默认值: `add_common_args()` 默认值已改为更稳健组合：`weight_decay=1e-4`、`lr_scheduler=reduce`、`lr_patience=2`、`grad_clip_norm=1.0`，并新增 `max_consecutive_invalid_batches=128`。
+- 2026-04-02 数值 fail-fast: `train_fusion_model()` 现在除 loss 外还会检查梯度与参数有限性；当连续无效 batch 达到阈值时立即停止训练、恢复最佳权重，并将 run 标记为 `failed`。
+- 2026-04-02 训练健康统计: `history` 新增 `health` 字段（`run_status/stop_reason/invalid_*_batches/processed_train_batches/skipped_train_batches`），并写入 attention 与 stacking 的 `metrics.json` 顶层字段。
+- 2026-04-02 任务默认策略: 对 `mta_multiclass` 和 `mfcp_multiclass`，在未显式传参时自动启用 `weighted_sampler_loss + focal + val_f1(max)` 组合，减少默认配置下少数类被忽略的问题。
+- 2026-04-02 all模式复现性: `run_all_modes.py` 在 attention 与 attention_stacking 启动前都会重新 `set_seed(args.seed)`，避免前序模式改变随机状态导致后序模式不可比。
