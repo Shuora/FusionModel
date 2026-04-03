@@ -58,3 +58,24 @@
 2. 对异常 run 做根因归类：数值爆炸、早停触发、类别不均衡、accuracy 与 macro_f1 偏离。
 3. 对照训练入口与公共训练逻辑，确认是否存在可复现性或配置层面的系统性问题。
 4. 输出按优先级排序的改进建议，并同步 findings/progress。
+
+## Task (2026-04-03 多分类 stacking 全量优化)
+针对 `mta_multiclass` 与 `mfcp_multiclass` 的弱表现，改造 attention stacking 流程，落地 OOF 元学习、元特征扩展、class-weighted XGBoost、多模型 soft-voting 与任务定向校正。
+
+## Plan
+1. 在 worktree 中先补失败测试，覆盖新逻辑核心函数（OOF、soft-voting、class gain、0/4 校正）。
+2. 改造 `src/fusion_common.py`：
+   - 增加元特征扩展（text/image/fusion 概率 + entropy + margin + agreement）；
+   - 增加 OOF stacking 训练/评估路径；
+   - 增加 class-weighted XGBoost；
+   - 增加多 meta learner 的加权 soft-voting；
+   - 增加 `mta` 类别阈值增益调优与 `mfcp` 0/4 二分类校正头。
+3. 更新训练入口参数透传与 README 使用说明（涉及运行参数/流程变化）。
+4. 运行目标测试并记录结果，同步更新 findings/progress。
+
+## Task Status
+- [x] 新增失败测试并确认红灯。
+- [x] 实现 OOF stacking、元特征扩展、class-weighted meta learner、soft-voting。
+- [x] 实现 `mta` 类增益调优与 `mfcp` 0/4 二分类校正头。
+- [x] 更新 README 与过程文档。
+- [x] 最终验证并输出结果摘要。

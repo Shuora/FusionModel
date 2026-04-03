@@ -5,7 +5,7 @@
 本项目用于加密流量分类实验，当前主流程围绕以下两个融合实验展开：
 
 - `attention`：`MobileViT + CharBERT` 的 attention 融合
-- `attention_stacking`：在 `attention` 融合基础上再接 `XGBoost stacking`
+- `attention_stacking`：在 `attention` 融合基础上做 OOF stacking（支持多个 meta learner、soft-voting、任务定向校正）
 
 当前仓库支持四个独立实验任务：
 
@@ -218,6 +218,8 @@ python3 src/ssl_tls_rgb_image.py \
 - `src/train_fusion_attention.py`
 - `src/train_fusion_attention_stacking.py`
 
+提示：`attention_stacking` 若希望触发多模型 soft-voting，请把 `--meta_methods` 设为至少两个方法（例如 `xgboost,lightgbm,catboost`，前提是环境已安装对应库）。
+
 下面按四个任务分别给出独立命令，不使用合并命令。
 
 ### 实验一：`binary_benign_vs_malicious`
@@ -406,6 +408,14 @@ python3 src/train_fusion_attention_stacking.py \
 --meta_methods
 ```
 
+`attention_stacking` 当前默认行为（无需额外参数）：
+
+- 元特征包含 `text/image/fusion` 三分支概率，并自动拼接 entropy、margin、分支一致性特征。
+- 对每个 meta learner 自动执行 5-fold OOF 训练以减少元学习器过拟合。
+- 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
+- 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
+- 对 `mta_multiclass` 自动做少数类 gain 调优；对 `mfcp_multiclass` 自动做 `0/4` 二分类校正。
+
 早停相关建议（`fusion_common.py` 当前默认行为）：
 
 - `--patience` 默认 `4`。
@@ -463,7 +473,9 @@ outputs/<task_name>/attention_stacking/
 - 指标曲线图
 - 混淆矩阵图
 - attention 诊断图
-- stacking 结果图
+- stacking 结果图（各 meta learner）
+- `soft_voting` 报告与混淆矩阵（当至少 2 个 meta learner 可用时）
+- `metrics.json` 中记录每个 meta learner 的 `oof_acc/oof_macro_f1` 与后处理参数
 
 ## 不推荐作为主命令的合并入口
 
@@ -489,6 +501,7 @@ python3 -m unittest tests.test_fusion_task_resolution
 python3 -m unittest tests.test_ssl_tls_rgb_image
 python3 -m unittest tests.test_task_config
 python3 -m unittest tests.test_run_all_modes
+python3 -m unittest tests.test_stacking_improvements
 ```
 
 注意：按项目约束，不运行 `mvn test`。
