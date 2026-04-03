@@ -13,9 +13,10 @@ import os
 import re
 import sys
 import copy
+from itertools import product
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union, Iterable, List, Tuple
+from typing import Optional, Union, Iterable, List, Tuple, Dict, Callable, Any
 
 import numpy as np
 from PIL import Image
@@ -56,6 +57,11 @@ except ModuleNotFoundError:
     class ConfusionMatrixDisplay:  # type: ignore[override]
         def __init__(self, *args, **kwargs):
             _missing_sklearn()
+
+try:
+    from sklearn.model_selection import StratifiedKFold
+except ModuleNotFoundError:
+    StratifiedKFold = None
 
 try:
     from torchvision import transforms
@@ -1661,16 +1667,297 @@ def collect_attention_diagnostics(
         return None
 
 
+def _normalize_probs(arr: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    out = np.asarray(arr, dtype=np.float64)
+    if out.ndim != 2:
+        raise ValueError(f"Expected 2D probabilities, got shape={out.shape}")
+    out = np.clip(out, 0.0, None)
+    denom = np.clip(out.sum(axis=1, keepdims=True), eps, None)
+    return out / denom
+
+
+def _entropy_features(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    return -np.sum(probs * np.log(np.clip(probs, eps, None)), axis=1, keepdims=True)
+
+
+def _margin_features(probs: np.ndarray) -> np.ndarray:
+    if probs.shape[1] < 2:
+        return np.zeros((probs.shape[0], 1), dtype=np.float64)
+    sorted_probs = np.sort(probs, axis=1)
+    return (sorted_probs[:, -1] - sorted_probs[:, -2]).reshape(-1, 1)
+
+
+def build_meta_features_from_probs(
+    text_probs: np.ndarray,
+    image_probs: np.ndarray,
+    *,
+    fusion_probs: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    text_probs = _normalize_probs(text_probs)
+    image_probs = _normalize_probs(image_probs)
+    if fusion_probs is None:
+        fusion_probs = (text_probs + image_probs) / 2.0
+    fusion_probs = _normalize_probs(fusion_probs)
+
+    text_pred = np.argmax(text_probs, axis=1)
+    image_pred = np.argmax(image_probs, axis=1)
+    fusion_pred = np.argmax(fusion_probs, axis=1)
+
+    agreement = np.stack(
+        [
+            (text_pred == image_pred).astype(np.float64),
+            (text_pred == fusion_pred).astype(np.float64),
+            (image_pred == fusion_pred).astype(np.float64),
+        ],
+        axis=1,
+    )
+
+    meta_features = np.concatenate(
+        [
+            text_probs,
+            image_probs,
+            fusion_probs,
+            _entropy_features(text_probs),
+            _entropy_features(image_probs),
+            _entropy_features(fusion_probs),
+            _margin_features(text_probs),
+            _margin_features(image_probs),
+            _margin_features(fusion_probs),
+            agreement,
+        ],
+        axis=1,
+    )
+    return meta_features.astype(np.float32, copy=False)
+
+
+def build_inverse_frequency_sample_weights(labels: np.ndarray) -> np.ndarray:
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if labels.size == 0:
+        return np.array([], dtype=np.float64)
+    classes, counts = np.unique(labels, return_counts=True)
+    class_weights = {
+        int(c): (float(labels.size) / float(max(1, len(classes)) * max(1, cnt)))
+        for c, cnt in zip(classes.tolist(), counts.tolist())
+    }
+    weights = np.asarray([class_weights[int(y)] for y in labels.tolist()], dtype=np.float64)
+    mean_w = float(np.mean(weights)) if weights.size else 1.0
+    if mean_w > 0:
+        weights = weights / mean_w
+    return weights
+
+
+def weighted_soft_voting(prob_list: List[np.ndarray], weights: Optional[List[float]] = None) -> Tuple[np.ndarray, np.ndarray]:
+    if not prob_list:
+        raise ValueError("prob_list is empty")
+    probs = [_normalize_probs(p) for p in prob_list]
+    n_samples = probs[0].shape[0]
+    n_classes = probs[0].shape[1]
+    for p in probs:
+        if p.shape != (n_samples, n_classes):
+            raise ValueError("All probability arrays must share the same shape")
+
+    if weights is None:
+        weights_arr = np.ones(len(probs), dtype=np.float64)
+    else:
+        weights_arr = np.asarray(weights, dtype=np.float64)
+        if weights_arr.shape[0] != len(probs):
+            raise ValueError("weights length mismatch")
+    weights_arr = np.clip(weights_arr, 1e-12, None)
+    weights_arr = weights_arr / np.sum(weights_arr)
+
+    voted = np.zeros((n_samples, n_classes), dtype=np.float64)
+    for p, w in zip(probs, weights_arr.tolist()):
+        voted += p * float(w)
+    voted = _normalize_probs(voted)
+    preds = np.argmax(voted, axis=1).astype(np.int64)
+    return voted, preds
+
+
+def apply_class_gains(probs: np.ndarray, class_gains: Dict[int, float]) -> np.ndarray:
+    tuned = np.asarray(probs, dtype=np.float64).copy()
+    if tuned.ndim != 2:
+        raise ValueError(f"Expected 2D probs, got shape={tuned.shape}")
+    for cls, gain in class_gains.items():
+        if 0 <= int(cls) < tuned.shape[1]:
+            tuned[:, int(cls)] *= float(max(gain, 1e-6))
+    return _normalize_probs(tuned)
+
+
+def tune_class_gains(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    target_classes: List[int],
+    gain_grid: Optional[List[float]] = None,
+) -> Dict[int, float]:
+    probs = _normalize_probs(probs)
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if labels.size == 0 or probs.shape[0] != labels.shape[0]:
+        return {}
+    target_classes = [int(c) for c in target_classes if 0 <= int(c) < probs.shape[1]]
+    if not target_classes:
+        return {}
+    if gain_grid is None:
+        gain_grid = [1.0, 1.1, 1.25, 1.5, 1.8, 2.0]
+    gain_grid = [float(g) for g in gain_grid if float(g) > 0]
+    if not gain_grid:
+        return {}
+
+    base_preds = np.argmax(probs, axis=1)
+    best_f1 = f1_score(labels, base_preds, average="macro")
+    best_map = {c: 1.0 for c in target_classes}
+    grid = list(product(gain_grid, repeat=len(target_classes)))
+    for gains in grid:
+        gains_map = {c: g for c, g in zip(target_classes, gains)}
+        tuned = apply_class_gains(probs, gains_map)
+        preds = np.argmax(tuned, axis=1)
+        score = f1_score(labels, preds, average="macro")
+        if score > best_f1:
+            best_f1 = score
+            best_map = gains_map
+    return best_map
+
+
+def fit_binary_centroid_head(features: np.ndarray, labels: np.ndarray, *, class_a: int, class_b: int) -> Optional[Dict[str, Any]]:
+    features = np.asarray(features, dtype=np.float64)
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    mask = (labels == int(class_a)) | (labels == int(class_b))
+    if features.ndim != 2 or labels.size != features.shape[0] or int(mask.sum()) < 2:
+        return None
+    xa = features[labels == int(class_a)]
+    xb = features[labels == int(class_b)]
+    if xa.shape[0] == 0 or xb.shape[0] == 0:
+        return None
+    pair = np.concatenate([xa, xb], axis=0)
+    var = np.var(pair, axis=0) + 1e-6
+    return {
+        "class_a": int(class_a),
+        "class_b": int(class_b),
+        "centroid_a": np.mean(xa, axis=0),
+        "centroid_b": np.mean(xb, axis=0),
+        "var": var,
+    }
+
+
+def apply_binary_correction_for_pair(
+    *,
+    preds: np.ndarray,
+    probs: np.ndarray,
+    features: np.ndarray,
+    head: Optional[Dict[str, Any]],
+    class_a: int,
+    class_b: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    preds = np.asarray(preds, dtype=np.int64).copy()
+    probs = _normalize_probs(probs)
+    features = np.asarray(features, dtype=np.float64)
+    if head is None:
+        return preds, probs
+    if probs.shape[0] != preds.shape[0] or features.shape[0] != preds.shape[0]:
+        raise ValueError("preds/probs/features length mismatch")
+
+    ca = int(class_a)
+    cb = int(class_b)
+    if ca < 0 or cb < 0 or ca >= probs.shape[1] or cb >= probs.shape[1]:
+        return preds, probs
+
+    mask = (preds == ca) | (preds == cb)
+    if not np.any(mask):
+        return preds, probs
+
+    x = features[mask]
+    var = np.asarray(head["var"], dtype=np.float64)
+    da = np.sum(((x - np.asarray(head["centroid_a"])) ** 2) / var, axis=1)
+    db = np.sum(((x - np.asarray(head["centroid_b"])) ** 2) / var, axis=1)
+
+    score_a = np.exp(-0.5 * da)
+    score_b = np.exp(-0.5 * db)
+    pair_sum = np.clip(score_a + score_b, 1e-12, None)
+    pa = score_a / pair_sum
+    pb = score_b / pair_sum
+
+    corrected_probs = probs.copy()
+    pair_mass = np.clip(corrected_probs[mask, ca] + corrected_probs[mask, cb], 1e-6, 1.0)
+    corrected_probs[mask, ca] = pair_mass * pa
+    corrected_probs[mask, cb] = pair_mass * pb
+    corrected_probs = _normalize_probs(corrected_probs)
+
+    corrected_preds = preds.copy()
+    corrected_preds[mask] = np.where(pa >= pb, ca, cb)
+    return corrected_preds, corrected_probs
+
+
+def compute_oof_predictions(
+    *,
+    features: np.ndarray,
+    labels: np.ndarray,
+    n_splits: int,
+    seed: int,
+    fit_predict_fn: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
+    on_fold: Optional[Callable[[int, np.ndarray, np.ndarray], None]] = None,
+) -> np.ndarray:
+    x = np.asarray(features, dtype=np.float64)
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if x.ndim != 2 or y.shape[0] != x.shape[0]:
+        raise ValueError("features/labels shape mismatch")
+    if x.shape[0] == 0:
+        return np.zeros((0, 0), dtype=np.float64)
+
+    if StratifiedKFold is None:
+        return _normalize_probs(fit_predict_fn(x, y, x))
+
+    _, counts = np.unique(y, return_counts=True)
+    max_valid_splits = int(np.min(counts)) if counts.size else 1
+    if max_valid_splits < 2:
+        return _normalize_probs(fit_predict_fn(x, y, x))
+    use_splits = min(int(n_splits), max_valid_splits)
+
+    skf = StratifiedKFold(n_splits=use_splits, shuffle=True, random_state=int(seed))
+    oof_probs = None
+    covered = np.zeros(x.shape[0], dtype=bool)
+    for fold_id, (train_idx, valid_idx) in enumerate(skf.split(x, y)):
+        fold_probs = _normalize_probs(fit_predict_fn(x[train_idx], y[train_idx], x[valid_idx]))
+        if oof_probs is None:
+            oof_probs = np.zeros((x.shape[0], fold_probs.shape[1]), dtype=np.float64)
+        if fold_probs.shape[1] != oof_probs.shape[1]:
+            raise ValueError("inconsistent class dimension across folds")
+        oof_probs[valid_idx] = fold_probs
+        covered[valid_idx] = True
+        if on_fold is not None:
+            on_fold(fold_id, train_idx, valid_idx)
+    if oof_probs is None:
+        return np.zeros((x.shape[0], 0), dtype=np.float64)
+    if not np.all(covered):
+        raise RuntimeError("OOF split coverage is incomplete")
+    return _normalize_probs(oof_probs)
+
+
+def _predict_with_meta_model(meta_model, features: np.ndarray, *, num_classes: int) -> Tuple[np.ndarray, np.ndarray]:
+    features = np.asarray(features, dtype=np.float64)
+    if hasattr(meta_model, "predict_proba"):
+        probs = _normalize_probs(np.asarray(meta_model.predict_proba(features), dtype=np.float64))
+        preds = np.argmax(probs, axis=1).astype(np.int64)
+        return preds, probs
+    preds = np.asarray(meta_model.predict(features), dtype=np.int64).reshape(-1)
+    probs = np.zeros((preds.shape[0], num_classes), dtype=np.float64)
+    valid = (preds >= 0) & (preds < num_classes)
+    probs[np.arange(preds.shape[0])[valid], preds[valid]] = 1.0
+    return preds, _normalize_probs(probs)
+
+
 def generate_meta_features(
     text_model: nn.Module,
     mobilevit_model: nn.Module,
     data_loader: DataLoader,
     device: torch.device,
     *,
+    fusion_model: Optional[nn.Module] = None,
     use_softmax: bool = True,
 ):
     text_model.eval()
     mobilevit_model.eval()
+    if fusion_model is not None:
+        fusion_model.eval()
     meta_features = []
     meta_labels = []
     non_blocking = bool(device.type == "cuda")
@@ -1682,20 +1969,29 @@ def generate_meta_features(
             text_logits = text_model(pcap_data)
             if isinstance(text_logits, (tuple, list)):
                 text_logits = text_logits[0]
-            if use_softmax:
-                text_out = torch.softmax(text_logits, dim=1).cpu().numpy()
-            else:
-                text_out = text_logits.cpu().numpy()
+            text_out = torch.softmax(text_logits, dim=1).cpu().numpy() if use_softmax else text_logits.cpu().numpy()
 
             mobilevit_logits = mobilevit_model(images)
             if hasattr(mobilevit_logits, "logits"):
                 mobilevit_logits = mobilevit_logits.logits
-            if use_softmax:
-                img_out = torch.softmax(mobilevit_logits, dim=1).cpu().numpy()
-            else:
-                img_out = mobilevit_logits.cpu().numpy()
+            img_out = (
+                torch.softmax(mobilevit_logits, dim=1).cpu().numpy()
+                if use_softmax
+                else mobilevit_logits.cpu().numpy()
+            )
 
-            meta_features.append(np.concatenate([text_out, img_out], axis=1))
+            fusion_out = None
+            if fusion_model is not None:
+                fusion_logits = fusion_model(images, pcap_data)
+                if isinstance(fusion_logits, (tuple, list)):
+                    fusion_logits = fusion_logits[0]
+                fusion_out = (
+                    torch.softmax(fusion_logits, dim=1).cpu().numpy()
+                    if use_softmax
+                    else fusion_logits.cpu().numpy()
+                )
+
+            meta_features.append(build_meta_features_from_probs(text_out, img_out, fusion_probs=fusion_out))
             meta_labels.append(labels.cpu().numpy())
 
     if meta_features:
@@ -1703,33 +1999,57 @@ def generate_meta_features(
     return np.array([]), np.array([])
 
 
-def train_xgboost(meta_features: np.ndarray, meta_labels: np.ndarray):
+def train_xgboost(
+    meta_features: np.ndarray,
+    meta_labels: np.ndarray,
+    *,
+    sample_weight: Optional[np.ndarray] = None,
+):
     try:
         import xgboost as xgb
     except ImportError as e:
         raise ImportError("xgboost 未安装") from e
 
+    n_classes = int(len(np.unique(meta_labels)))
     clf = xgb.XGBClassifier(
-        n_estimators=100,
-        max_depth=4,
-        learning_rate=0.1,
-        use_label_encoder=False,
+        n_estimators=350,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.9,
+        colsample_bytree=0.85,
+        min_child_weight=2.0,
+        reg_lambda=1.0,
+        objective="multi:softprob",
+        num_class=max(2, n_classes),
         eval_metric="mlogloss",
+        random_state=42,
     )
-    clf.fit(meta_features, meta_labels)
+    fit_kwargs = {}
+    if sample_weight is not None and len(sample_weight) == len(meta_labels):
+        fit_kwargs["sample_weight"] = sample_weight
+    clf.fit(meta_features, meta_labels, **fit_kwargs)
     return clf
 
 
-def train_meta_learner(meta_features: np.ndarray, meta_labels: np.ndarray, method: str = "xgboost"):
+def train_meta_learner(
+    meta_features: np.ndarray,
+    meta_labels: np.ndarray,
+    method: str = "xgboost",
+    *,
+    sample_weight: Optional[np.ndarray] = None,
+):
     if method == "xgboost":
-        return train_xgboost(meta_features, meta_labels)
+        return train_xgboost(meta_features, meta_labels, sample_weight=sample_weight)
     if method == "lightgbm":
         try:
             import lightgbm as lgb
         except ImportError as e:
             raise ImportError("lightgbm 未安装") from e
         clf = lgb.LGBMClassifier(n_estimators=200, num_leaves=63, learning_rate=0.05)
-        clf.fit(meta_features, meta_labels)
+        fit_kwargs = {}
+        if sample_weight is not None and len(sample_weight) == len(meta_labels):
+            fit_kwargs["sample_weight"] = sample_weight
+        clf.fit(meta_features, meta_labels, **fit_kwargs)
         return clf
     if method == "catboost":
         try:
@@ -1737,7 +2057,10 @@ def train_meta_learner(meta_features: np.ndarray, meta_labels: np.ndarray, metho
         except ImportError as e:
             raise ImportError("catboost 未安装") from e
         clf = CatBoostClassifier(iterations=300, depth=6, learning_rate=0.05, verbose=0)
-        clf.fit(meta_features, meta_labels)
+        fit_kwargs = {}
+        if sample_weight is not None and len(sample_weight) == len(meta_labels):
+            fit_kwargs["sample_weight"] = sample_weight
+        clf.fit(meta_features, meta_labels, **fit_kwargs)
         return clf
     if method == "mlp":
         from sklearn.neural_network import MLPClassifier
@@ -2316,13 +2639,59 @@ def run_stacking_experiment(
     )
     log_saved(run_logger, report_path, "report")
 
-    meta_features, meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, train_loader, device)
-    test_meta_features, test_meta_labels = generate_meta_features(model.text_encoder, model.mobilevit, test_loader, device)
+    meta_features, meta_labels = generate_meta_features(
+        model.text_encoder,
+        model.mobilevit,
+        train_loader,
+        device,
+        fusion_model=model,
+    )
+    test_meta_features, test_meta_labels = generate_meta_features(
+        model.text_encoder,
+        model.mobilevit,
+        test_loader,
+        device,
+        fusion_model=model,
+    )
+    sample_weights = build_inverse_frequency_sample_weights(meta_labels)
+    class_count = len(train_classes)
+    class_names_lower = [str(c).strip().lower() for c in train_classes]
+    is_mta_task = class_names_lower == ["dridex", "emotet", "hancitor", "qakbot", "trickbot", "ursnif"]
+    is_mfcp_task = class_names_lower == ["artemis", "dridex", "pua", "trickbot", "ursnif"]
 
     method_results = []
+    successful_method_probs: List[np.ndarray] = []
+    successful_oof_probs: List[np.ndarray] = []
+    successful_method_weights: List[float] = []
     for method in methods:
         try:
-            meta_model = train_meta_learner(meta_features, meta_labels, method=method)
+            def _fit_predict(train_x: np.ndarray, train_y: np.ndarray, valid_x: np.ndarray) -> np.ndarray:
+                fold_weights = build_inverse_frequency_sample_weights(train_y)
+                fold_model = train_meta_learner(
+                    train_x,
+                    train_y,
+                    method=method,
+                    sample_weight=fold_weights,
+                )
+                _, fold_probs = _predict_with_meta_model(fold_model, valid_x, num_classes=class_count)
+                return fold_probs
+
+            oof_probs = compute_oof_predictions(
+                features=meta_features,
+                labels=meta_labels,
+                n_splits=5,
+                seed=42,
+                fit_predict_fn=_fit_predict,
+            )
+            oof_preds = np.argmax(oof_probs, axis=1)
+            oof_acc = accuracy_score(meta_labels, oof_preds) if len(meta_labels) else 0.0
+            oof_macro_f1 = f1_score(meta_labels, oof_preds, average="macro") if len(meta_labels) else 0.0
+            meta_model = train_meta_learner(
+                meta_features,
+                meta_labels,
+                method=method,
+                sample_weight=sample_weights,
+            )
         except ImportError as e:
             run_logger.warning("跳过 %s: %s", method, e)
             method_results.append({"method": method, "skipped": True, "reason": str(e)})
@@ -2332,7 +2701,25 @@ def run_stacking_experiment(
             method_results.append({"method": method, "failed": True, "reason": str(e)})
             continue
 
-        preds = meta_model.predict(test_meta_features)
+        preds, pred_probs = _predict_with_meta_model(meta_model, test_meta_features, num_classes=class_count)
+        postprocess: Dict[str, Any] = {}
+        if is_mta_task and len(oof_probs):
+            gains = tune_class_gains(labels=meta_labels, probs=oof_probs, target_classes=[0, 1])
+            pred_probs = apply_class_gains(pred_probs, gains)
+            preds = np.argmax(pred_probs, axis=1).astype(np.int64)
+            postprocess["mta_class_gains"] = {str(k): float(v) for k, v in gains.items()}
+        if is_mfcp_task and len(meta_labels):
+            head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+            preds, pred_probs = apply_binary_correction_for_pair(
+                preds=preds,
+                probs=pred_probs,
+                features=test_meta_features,
+                head=head,
+                class_a=0,
+                class_b=4,
+            )
+            postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
+
         acc = accuracy_score(test_meta_labels, preds) if len(test_meta_labels) else 0.0
         macro_f1 = f1_score(test_meta_labels, preds, average="macro") if len(test_meta_labels) else 0.0
         report = classification_report(test_meta_labels, preds, digits=4) if len(test_meta_labels) else ""
@@ -2377,11 +2764,93 @@ def run_stacking_experiment(
                 "method": method,
                 "acc": acc,
                 "macro_f1": macro_f1,
+                "oof_acc": oof_acc,
+                "oof_macro_f1": oof_macro_f1,
                 "report": report,
                 "confusion_matrix": cm,
                 "confusion_matrix_path": method_cm_path.name,
                 "report_path": method_report_path.name,
                 "meta_model_path": meta_model_path.name if meta_model_path else None,
+                "postprocess": postprocess,
+            }
+        )
+        successful_method_probs.append(pred_probs)
+        successful_oof_probs.append(oof_probs)
+        successful_method_weights.append(float(max(oof_macro_f1, 1e-6)))
+
+    if len(successful_method_probs) >= 2:
+        vote_probs, vote_preds = weighted_soft_voting(successful_method_probs, successful_method_weights)
+        vote_postprocess: Dict[str, Any] = {
+            "weights": [float(w) for w in successful_method_weights],
+            "members": [m for m in methods if any(r.get("method") == m and not r.get("skipped") and not r.get("failed") for r in method_results)],
+        }
+        if len(successful_oof_probs) >= 2:
+            oof_vote_probs, oof_vote_preds = weighted_soft_voting(successful_oof_probs, successful_method_weights)
+            oof_vote_acc = accuracy_score(meta_labels, oof_vote_preds) if len(meta_labels) else 0.0
+            oof_vote_macro_f1 = f1_score(meta_labels, oof_vote_preds, average="macro") if len(meta_labels) else 0.0
+        else:
+            oof_vote_probs = np.zeros((0, 0), dtype=np.float64)
+            oof_vote_acc = 0.0
+            oof_vote_macro_f1 = 0.0
+
+        if is_mta_task and len(oof_vote_probs):
+            vote_gains = tune_class_gains(labels=meta_labels, probs=oof_vote_probs, target_classes=[0, 1])
+            vote_probs = apply_class_gains(vote_probs, vote_gains)
+            vote_preds = np.argmax(vote_probs, axis=1).astype(np.int64)
+            vote_postprocess["mta_class_gains"] = {str(k): float(v) for k, v in vote_gains.items()}
+        if is_mfcp_task and len(meta_labels):
+            vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+            vote_preds, vote_probs = apply_binary_correction_for_pair(
+                preds=vote_preds,
+                probs=vote_probs,
+                features=test_meta_features,
+                head=vote_head,
+                class_a=0,
+                class_b=4,
+            )
+            vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
+
+        vote_acc = accuracy_score(test_meta_labels, vote_preds) if len(test_meta_labels) else 0.0
+        vote_macro_f1 = f1_score(test_meta_labels, vote_preds, average="macro") if len(test_meta_labels) else 0.0
+        vote_report = classification_report(test_meta_labels, vote_preds, digits=4) if len(test_meta_labels) else ""
+        vote_cm = confusion_matrix(test_meta_labels, vote_preds) if len(test_meta_labels) else np.zeros((0, 0), dtype=int)
+        vote_tag = f"{ensemble_tag}_soft_voting"
+
+        run_logger.info("[%s] acc=%.4f macro_f1=%.4f", vote_tag, vote_acc, vote_macro_f1)
+        if vote_report:
+            run_logger.info("[%s] 分类报告:\n%s", vote_tag, vote_report)
+        run_logger.info("[%s] 混淆矩阵:\n%s", vote_tag, vote_cm)
+
+        vote_cm_path = run_dir / "confusion_matrix_soft_voting.png"
+        plot_confusion(vote_cm, train_classes, vote_cm_path, f"Confusion Matrix - {vote_tag}")
+        log_saved(run_logger, vote_cm_path, "confusion_matrix_soft_voting")
+
+        vote_report_path = run_dir / "report_soft_voting.md"
+        save_report_md(
+            vote_report_path,
+            title=f"融合方式: {base_fusion_mode}+stacking (soft_voting)",
+            acc=vote_acc,
+            macro_f1=vote_macro_f1,
+            report=vote_report,
+            cm=vote_cm,
+            confusion_image=vote_cm_path.name,
+            curve_image=curve_path.name,
+        )
+        log_saved(run_logger, vote_report_path, "report_soft_voting")
+
+        method_results.append(
+            {
+                "method": "soft_voting",
+                "acc": vote_acc,
+                "macro_f1": vote_macro_f1,
+                "oof_acc": oof_vote_acc,
+                "oof_macro_f1": oof_vote_macro_f1,
+                "report": vote_report,
+                "confusion_matrix": vote_cm,
+                "confusion_matrix_path": vote_cm_path.name,
+                "report_path": vote_report_path.name,
+                "meta_model_path": None,
+                "postprocess": vote_postprocess,
             }
         )
 

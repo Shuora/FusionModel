@@ -24,3 +24,10 @@
 - 2026-04-02 全量训练日志审计: `mta_multiclass` 仍是本轮最弱任务。attention `macro_f1=0.5511`，stacking base `0.5724`，xgboost `0.6105`；但 `Dridex` 召回仍为 `0.0000 -> 0.0224`，说明主要瓶颈仍是严重类别不均衡与少数类学习不足，而不是 stacking 元学习器本身。
 - 2026-04-02 全量训练日志审计: `mfcp_multiclass` 无 NaN，但 attention / stacking base 提升很小（0.7756 -> 0.7769），主要弱类是 `Ursnif`（recall≈0.509），xgboost 后整体 `macro_f1=0.7867`，说明堆叠收益主要来自后端分类器而非 base fusion 明显增强。
 - 2026-04-02 全量训练日志审计: `ustc_multiclass` 是当前最稳定任务，attention `macro_f1=0.9719`，xgboost `0.9757`；但 attention 在 epoch 15 出现 `val_loss=0.9455` 的孤立尖峰，而同时 `val_acc/val_f1` 仍约 `0.969`，说明仅盯 `val_loss` 对高置信多分类任务并不稳健。
+
+- 2026-04-03 stacking 实现复核: 当前 `run_stacking_experiment` 用训练集元特征直接训练 meta learner，再在测试集评估；无 OOF 机制，存在元学习器过拟合风险。
+- 2026-04-03 stacking 实现复核: 当前元特征仅由 `text_prob + image_prob` 构成，缺少 fusion 分支输出和不确定性统计特征（entropy、margin、分支一致性）。
+- 2026-04-03 stacking 实现复核: XGBoost 目前未使用类别权重，且仅单模型报告；尚未做多元学习器融合与任务定向后处理。
+- 2026-04-03 stacking 改造结果: 已新增 OOF 训练与 OOF 指标落盘（`oof_acc` / `oof_macro_f1`），并在多 meta learner 可用时自动生成 `soft_voting` 结果。
+- 2026-04-03 stacking 改造结果: 元特征已扩展为 `text/image/fusion` 概率 + entropy + margin + 分支一致性；对应纯函数已补单测覆盖。
+- 2026-04-03 stacking 改造结果: `xgboost/lightgbm/catboost` 训练路径已接入 class-balanced sample weight；`mta` 增加类增益调优，`mfcp` 增加 `0/4` 二分类校正头。

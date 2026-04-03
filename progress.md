@@ -27,3 +27,11 @@
 - 2026-04-02: 提取全部 `metrics.json` / `epoch_metrics.csv` / `train.log` 关键指标，确认 `binary` 与 `mta` 的 stacking run 在后半程分别出现 30513 / 3366 个连续 `NaN/Inf batch`，最终由 early stop 恢复 best weights 后收尾。
 - 2026-04-02: 对照 `src/fusion_common.py` 与 `src/run_all_modes.py`，确认当前默认配置缺少梯度裁剪和学习率调度，且 `--mode all` 只在整次进程开始时设 seed，一次 attention 完成后不会为 stacking 重新设 seed。
 - 2026-04-02: 完成任务级结论归纳：`ustc` 当前表现最好且稳定；`binary` 指标高但 stacking 训练过程不稳定；`mfcp` 主要短板在 `Ursnif`；`mta` 仍受少数类 `Dridex` 完全失效拖累。
+
+- 2026-04-03: 用户确认“集成学习优化全部落地”；已在 `.worktrees/codex-stacking-improvements` 创建隔离分支 `codex/stacking-improvements`。
+- 2026-04-03: 完成基线验证 `pytest -q tests/test_attention_entrypoints.py`（2 passed），准备进入 stacking 改造的 TDD 阶段。
+- 2026-04-03: 已明确本轮改造范围：OOF stacking、元特征扩展、class-weighted XGBoost、多模型 soft-voting、mta/mfcp 任务定向校正。
+- 2026-04-03: 新增失败测试 `tests/test_stacking_improvements.py`（初始 6 failed），覆盖 OOF、soft-voting、class gain、pair correction 等核心能力。
+- 2026-04-03: 完成 `src/fusion_common.py` 改造：新增 stacking 纯函数工具集、OOF 训练流程、扩展元特征、加权软投票、任务定向后处理与 OOF 指标落盘。
+- 2026-04-03: 新测试已转绿（`tests/test_stacking_improvements.py` 6 passed），并通过相关回归测试（`test_attention_entrypoints/test_run_all_modes/test_fusion_output_artifacts` 共 21 passed）。
+- 2026-04-03: 已同步更新 README 的 stacking 行为与输出说明，补充 soft-voting 与 OOF 指标文档。
