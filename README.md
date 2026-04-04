@@ -183,7 +183,8 @@ python3 src/ssl_tls_rgb_image.py \
 python3 src/split_data.py \
   --task_name mta_multiclass \
   --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass \
+  --distribution_profile paper_mvtba
 ```
 
 #### Step 2. 生成 RGB 图像
@@ -201,7 +202,8 @@ python3 src/ssl_tls_rgb_image.py \
 python3 src/split_data.py \
   --task_name mfcp_multiclass \
   --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass \
+  --distribution_profile paper_mvtba
 ```
 
 #### Step 2. 生成 RGB 图像
@@ -444,6 +446,7 @@ python3 src/train_fusion_attention_stacking.py \
   - `--task_name`
   - `--source_root`
   - `--processed_root`
+  - `--distribution_profile`（可选；`paper_mvtba` 仅对 `mta_multiclass`/`mfcp_multiclass` 启用论文固定样本分布。若某类可提取 session 不足，将对该类有放回补齐并写入唯一后缀）
 - `ssl_tls_rgb_image.py`：
   - `--dataset_root`
 

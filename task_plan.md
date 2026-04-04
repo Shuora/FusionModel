@@ -122,3 +122,20 @@
 2. 在 `src/fusion_common.py` 新增 pair 专用打分/校准/阈值函数，并扩展 `tune_binary_correction_alpha_for_pair` 支持 `objective=\"pair_f1\"`。
 3. 仅在 `mfcp` 分支接入新后处理链路（method 与 soft-voting 两条路径保持一致），记录新的 postprocess 参数。
 4. 运行相关回归测试并同步 README、findings、progress。
+
+## Task (2026-04-04 对齐论文 MTA/MFCP 训练分布)
+将 `mta_multiclass` 与 `mfcp_multiclass` 的预处理样本类别与 Train/Test 数量对齐到论文 MVTBA Table 2/3，USTC 不调整。
+
+## Plan
+1. 在隔离 worktree 中以 TDD 先新增 `paper_mvtba` 分布模式失败测试（固定目标计数、缺类报错）。
+2. 修改 `src/split_data.py`：增加 `--distribution_profile paper_mvtba`，仅对 `mta_multiclass`/`mfcp_multiclass` 启用固定抽样。
+3. 运行 `tests.test_split_data_tasks` 验证通过。
+4. 重建 `ProcessedData/mta_multiclass` 与 `ProcessedData/mfcp_multiclass`，并统计校验。
+5. 同步更新 README、findings、progress。
+
+## Task Status (2026-04-04 对齐论文 MTA/MFCP 训练分布)
+- [x] 新增失败测试并确认红灯。
+- [x] 实现 `paper_mvtba` 分布模式与 CLI 参数。
+- [x] 相关测试转绿。
+- [x] 重建 MTA/MFCP 处理数据并校验计数。
+- [x] 同步更新 README。

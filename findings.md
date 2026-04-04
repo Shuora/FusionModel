@@ -42,3 +42,7 @@
 - 2026-04-04 mfcp 新一轮诊断: 最新 run（`attention_stacking_20260404_145855`）虽稳定无无效梯度，但 `0<->4` 互混仍重，且 `mfcp_binary_pair_alpha=0.0`，说明现有“按全局 macro-f1 选 alpha”在该批数据上未激活 pair 校正。
 - 2026-04-04 mfcp 二次调优: 已将 `alpha` 调参目标扩展为 `objective=\"pair_f1\"`，并新增 pair 概率温度校准与阈值搜索（均基于 OOF 调参后迁移到测试集）。
 - 2026-04-04 输出可观测性: `metrics.json` 的 `postprocess` 新增 `mfcp_pair_temperature` 与 `mfcp_pair_threshold`，用于复盘后处理是否真正生效。
+- 2026-04-04 论文分布对齐: 当前 `split_data.py` 仅支持按标签比例随机切分，无法表达论文 Table 2/3 的固定 Train/Test 计数，因此新增了 `distribution_profile` 抽样路径。
+- 2026-04-04 论文分布对齐: `SourceData/MTA` 实际家族目录名为 `IcedID`（大写 D），与论文写法 `Icedid` 存在大小写差异；本次按仓库现有目录命名保留为 `IcedID`。
+- 2026-04-04 论文分布对齐: `SourceData/MFCP` 含 `Cobalt`，之前 `ProcessedData/mfcp_multiclass` 缺失并非源数据不存在，而是旧处理产物未按论文口径重建。
+- 2026-04-04 论文分布对齐: MFCP 的 PUA 可提取 session 为 6737，低于论文目标 7017；为满足目标计数，本次对 PUA 启用了有放回补齐，并为补齐样本加 `__dupN` 后缀避免文件覆盖。
