@@ -49,3 +49,8 @@
 - 2026-04-04: 完成 `mfcp` 后处理增强：新增 `tune_binary_correction_alpha_for_pair`，基于 OOF macro-F1 自动选择 `alpha` 并用于测试集 `0/4` 二分类校正。
 - 2026-04-04: 新增单测覆盖 `alpha=0` 恒等性与 `alpha` 调参不劣于基线场景，等待回归测试执行结果。
 - 2026-04-04: 回归测试通过：`pytest -q tests/test_stacking_improvements.py tests/test_fusion_output_artifacts.py`（24 passed）。
+- 2026-04-04: 根据你“效果不理想”反馈，在 `.worktrees/codex-mfcp-postprocess-tuning` 启动二次优化，目标聚焦 `mfcp` 的 `0/4` 混淆问题。
+- 2026-04-04: 已按 TDD 新增失败测试（2 failed），覆盖 `pair_f1` 目标与 pair 校准/阈值搜索链路。
+- 2026-04-04: 已在 `fusion_common.py` 实现 `score_pair_f1`、`tune/apply_pair_temperature`、`tune/apply_pair_threshold`，并扩展 `tune_binary_correction_alpha_for_pair(objective=...)`。
+- 2026-04-04: 已接入 `mfcp` method 与 soft-voting 后处理链路，新增 `mfcp_pair_temperature/mfcp_pair_threshold` 落盘字段。
+- 2026-04-04: 新增测试转绿，目标回归 `pytest -q tests/test_stacking_improvements.py -k 'pair_f1_objective or pair_calibration'`（2 passed）。

@@ -39,3 +39,6 @@
 - 2026-04-04 mta/mfcp 现状审计: 仓库已实现 `mta` 类增益调优与 `mfcp` `0/4` 二分类校正，但 `mta` 目标类硬编码为 `[0,1]`，对类顺序/映射有隐式依赖。
 - 2026-04-04 mta 增强: 已改为按 `meta_labels` 样本数自动选择最少的两个类别做 gain 调优，仅在 `mta_multiclass` 触发。
 - 2026-04-04 mfcp 增强: 已新增 OOF 驱动的 `alpha` 自动调参（`0~1`）用于控制 `0/4` 二分类校正强度，避免固定强校正导致过修正；仅在 `mfcp_multiclass` 触发。
+- 2026-04-04 mfcp 新一轮诊断: 最新 run（`attention_stacking_20260404_145855`）虽稳定无无效梯度，但 `0<->4` 互混仍重，且 `mfcp_binary_pair_alpha=0.0`，说明现有“按全局 macro-f1 选 alpha”在该批数据上未激活 pair 校正。
+- 2026-04-04 mfcp 二次调优: 已将 `alpha` 调参目标扩展为 `objective=\"pair_f1\"`，并新增 pair 概率温度校准与阈值搜索（均基于 OOF 调参后迁移到测试集）。
+- 2026-04-04 输出可观测性: `metrics.json` 的 `postprocess` 新增 `mfcp_pair_temperature` 与 `mfcp_pair_threshold`，用于复盘后处理是否真正生效。
