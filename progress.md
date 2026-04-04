@@ -35,3 +35,12 @@
 - 2026-04-03: 完成 `src/fusion_common.py` 改造：新增 stacking 纯函数工具集、OOF 训练流程、扩展元特征、加权软投票、任务定向后处理与 OOF 指标落盘。
 - 2026-04-03: 新测试已转绿（`tests/test_stacking_improvements.py` 6 passed），并通过相关回归测试（`test_attention_entrypoints/test_run_all_modes/test_fusion_output_artifacts` 共 21 passed）。
 - 2026-04-03: 已同步更新 README 的 stacking 行为与输出说明，补充 soft-voting 与 OOF 指标文档。
+
+- 2026-04-04: 新建隔离 worktree `.worktrees/codex-fix-invalid-grad`（branch: `codex/fix-invalid-grad`），用于修复“梯度无效”问题，避免干扰主工作区。
+- 2026-04-04: 已完成根因定位：AMP 路径把 scaler overflow 当作无效梯度事件统计与告警；准备先补回归测试，再最小改动修复。
+- 2026-04-04: 已按 TDD 新增失败测试 `test_amp_overflow_is_not_counted_as_invalid_grad_batch`，红灯确认当前逻辑会将 AMP 场景误计入 `invalid_grad_batches`。
+- 2026-04-04: 已完成最小修复：删除 AMP 分支中的手动无效梯度判定与跳过分支，改由 `GradScaler` 自适应处理 overflow。
+- 2026-04-04: 验证通过：
+  - `pytest -q tests/test_fusion_output_artifacts.py -k amp_overflow_is_not_counted_as_invalid_grad_batch`（1 passed）
+  - `pytest -q tests/test_fusion_output_artifacts.py`（16 passed）
+  - `pytest -q tests/test_attention_entrypoints.py tests/test_run_all_modes.py`（6 passed）

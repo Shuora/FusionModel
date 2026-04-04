@@ -1270,31 +1270,6 @@ def train_fusion_model(
                 scaler.unscale_(optimizer)
                 if grad_clip_norm and grad_clip_norm > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
-                if _has_non_finite_gradients(model):
-                    health["invalid_grad_batches"] += 1
-                    health["skipped_train_batches"] += 1
-                    consecutive_invalid_batches += 1
-                    optimizer.zero_grad(set_to_none=True)
-                    scaler.update()
-                    if _should_log_invalid_batch(health["invalid_grad_batches"]):
-                        logger.warning(
-                            "梯度无效（NaN/Inf），跳过该 batch: epoch=%s batch=%s/%s",
-                            epoch + 1,
-                            batch_idx + 1,
-                            len(train_loader),
-                        )
-                    if consecutive_invalid_batches >= max_consecutive_invalid_batches:
-                        invalid_stop_reason = f"consecutive_invalid_batches(grad)>={max_consecutive_invalid_batches}"
-                        logger.error(
-                            "连续无效 batch 达到阈值，终止训练: epoch=%s batch=%s/%s reason=%s",
-                            epoch + 1,
-                            batch_idx + 1,
-                            len(train_loader),
-                            invalid_stop_reason,
-                        )
-                        stop_training_now = True
-                        break
-                    continue
                 scaler.step(optimizer)
                 scaler.update()
             else:
