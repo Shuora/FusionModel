@@ -31,3 +31,8 @@
 - 2026-04-03 stacking 改造结果: 已新增 OOF 训练与 OOF 指标落盘（`oof_acc` / `oof_macro_f1`），并在多 meta learner 可用时自动生成 `soft_voting` 结果。
 - 2026-04-03 stacking 改造结果: 元特征已扩展为 `text/image/fusion` 概率 + entropy + margin + 分支一致性；对应纯函数已补单测覆盖。
 - 2026-04-03 stacking 改造结果: `xgboost/lightgbm/catboost` 训练路径已接入 class-balanced sample weight；`mta` 增加类增益调优，`mfcp` 增加 `0/4` 二分类校正头。
+
+- 2026-04-04 梯度无效排查: 训练日志显示 `attention_stacking` 在 `epoch=1,batch=1/2` 即出现“梯度无效（NaN/Inf）”，且主要发生在 `AMP + weighted_sampler_loss + focal` 组合下。
+- 2026-04-04 梯度无效排查: 当前 AMP 分支在 `scaler.unscale_` 后自行扫描梯度并将非有限梯度计入 `invalid_grad_batches`，会把 `GradScaler` 可恢复的 overflow 也记为“梯度无效”并触发跳过告警。
+- 2026-04-04 梯度无效修复: 已移除 AMP 路径中的 `_has_non_finite_gradients` 强制跳过逻辑，改为交给 `GradScaler.step/update` 统一处理 overflow；CPU/非AMP 路径的梯度有限值保护保持不变。
+- 2026-04-04 回归验证: 新增测试 `test_amp_overflow_is_not_counted_as_invalid_grad_batch`，确保 AMP overflow 不再记为 `invalid_grad_batches` 且 `scaler.step()` 会被调用。

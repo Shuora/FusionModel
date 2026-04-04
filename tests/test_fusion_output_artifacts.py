@@ -6,6 +6,7 @@ import math
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,88 @@ import fusion_common as fc
 
 
 class FusionOutputArtifactsTests(unittest.TestCase):
+    def test_amp_overflow_is_not_counted_as_invalid_grad_batch(self) -> None:
+        class TinyFusionDataset(Dataset):
+            def __len__(self) -> int:
+                return 2
+
+            def __getitem__(self, index: int):
+                image = torch.tensor([float(index % 2)], dtype=torch.float32)
+                pcap = torch.tensor([float((index + 1) % 2)], dtype=torch.float32)
+                label = torch.tensor(index % 2, dtype=torch.long)
+                return image, pcap, label
+
+        class TinyFusionModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fc = nn.Linear(2, 2)
+
+            def forward(self, images, pcap_data):
+                x = torch.cat([images.float(), pcap_data.float()], dim=1)
+                return self.fc(x)
+
+        class _ScaledLoss:
+            def __init__(self, loss: torch.Tensor) -> None:
+                self.loss = loss
+
+            def backward(self) -> None:
+                self.loss.backward()
+
+        class FakeGradScaler:
+            def __init__(self) -> None:
+                self.step_called = 0
+
+            def scale(self, loss: torch.Tensor):
+                return _ScaledLoss(loss)
+
+            def unscale_(self, optimizer) -> None:
+                return None
+
+            def step(self, optimizer) -> None:
+                self.step_called += 1
+
+            def update(self) -> None:
+                return None
+
+        class FakeCudaDevice:
+            type = "cuda"
+
+        train_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        val_loader = DataLoader(TinyFusionDataset(), batch_size=2, shuffle=False, num_workers=0)
+        model = TinyFusionModel()
+        scaler = FakeGradScaler()
+
+        with mock.patch.object(fc, "_autocast_ctx", return_value=nullcontext()), mock.patch.object(
+            fc, "_make_grad_scaler", return_value=scaler
+        ), mock.patch.object(
+            fc, "_has_non_finite_gradients", return_value=True
+        ), mock.patch.object(
+            fc, "_has_non_finite_parameters", return_value=False
+        ), mock.patch.object(
+            fc, "evaluate_epoch", return_value=(0.5, 0.5, 0.5, [0, 1], [0, 1])
+        ), mock.patch.object(
+            torch.Tensor, "to", lambda self, *args, **kwargs: self
+        ), mock.patch.object(
+            nn.Module, "to", lambda self, *args, **kwargs: self
+        ):
+            _, history = fc.train_fusion_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=1,
+                learning_rate=1e-3,
+                device=FakeCudaDevice(),
+                patience=2,
+                use_amp=True,
+                early_stop_metric="val_loss",
+                early_stop_mode="auto",
+                val_every=1,
+                max_consecutive_invalid_batches=128,
+            )
+
+        self.assertEqual(history["health"]["invalid_grad_batches"], 0)
+        self.assertEqual(scaler.step_called, 1)
+
     def test_non_finite_train_batch_loss_is_skipped(self) -> None:
         class TinyFusionDataset(Dataset):
             def __len__(self) -> int:

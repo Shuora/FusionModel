@@ -79,3 +79,19 @@
 - [x] 实现 `mta` 类增益调优与 `mfcp` 0/4 二分类校正头。
 - [x] 更新 README 与过程文档。
 - [x] 最终验证并输出结果摘要。
+
+## Task (2026-04-04 修复“梯度无效”误告警/误跳过)
+修复 attention/attention_stacking 在 AMP 训练下频繁出现“梯度无效（NaN/Inf）”并跳过 batch 的问题，恢复与早期版本一致的稳定训练行为。
+
+## Plan
+1. 复核 `train.log` 与训练循环，确认“梯度无效”主要出现在 AMP 分支且从首批次即可触发。
+2. 先新增回归测试：模拟 AMP scaler overflow，验证不应计入 `invalid_grad_batches`（避免把可恢复 overflow 误判成梯度损坏）。
+3. 最小改动 `src/fusion_common.py`：AMP 路径交由 `GradScaler.step/update` 处理 overflow，不再走“梯度无效”硬跳过分支；保留非 AMP 的有限值梯度保护。
+4. 运行相关测试并同步更新 findings/progress；若行为文档受影响则同步 README。
+
+## Task Status (2026-04-04 梯度无效修复)
+- [x] 完成日志与代码链路复核，确认 root cause 在 AMP 分支误判 overflow。
+- [x] 已新增失败测试并验证红灯。
+- [x] 已完成最小代码修复（仅 AMP 分支）。
+- [x] 已运行相关回归测试并通过。
+- [x] 已同步更新 findings/progress 文档。
