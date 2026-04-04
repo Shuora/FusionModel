@@ -1822,6 +1822,7 @@ def apply_binary_correction_for_pair(
     head: Optional[Dict[str, Any]],
     class_a: int,
     class_b: int,
+    alpha: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     preds = np.asarray(preds, dtype=np.int64).copy()
     probs = _normalize_probs(probs)
@@ -1853,13 +1854,65 @@ def apply_binary_correction_for_pair(
 
     corrected_probs = probs.copy()
     pair_mass = np.clip(corrected_probs[mask, ca] + corrected_probs[mask, cb], 1e-6, 1.0)
-    corrected_probs[mask, ca] = pair_mass * pa
-    corrected_probs[mask, cb] = pair_mass * pb
+    alpha = float(np.clip(alpha, 0.0, 1.0))
+    target_pa = pair_mass * pa
+    target_pb = pair_mass * pb
+    corrected_probs[mask, ca] = ((1.0 - alpha) * corrected_probs[mask, ca]) + (alpha * target_pa)
+    corrected_probs[mask, cb] = ((1.0 - alpha) * corrected_probs[mask, cb]) + (alpha * target_pb)
     corrected_probs = _normalize_probs(corrected_probs)
 
     corrected_preds = preds.copy()
-    corrected_preds[mask] = np.where(pa >= pb, ca, cb)
+    pa_corr = corrected_probs[mask, ca]
+    pb_corr = corrected_probs[mask, cb]
+    corrected_preds[mask] = np.where(
+        pa_corr > pb_corr,
+        ca,
+        np.where(pa_corr < pb_corr, cb, corrected_preds[mask]),
+    )
     return corrected_preds, corrected_probs
+
+
+def tune_binary_correction_alpha_for_pair(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    features: np.ndarray,
+    head: Optional[Dict[str, Any]],
+    class_a: int,
+    class_b: int,
+    alpha_grid: Optional[List[float]] = None,
+) -> float:
+    if head is None:
+        return 0.0
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    probs = _normalize_probs(probs)
+    features = np.asarray(features, dtype=np.float64)
+    if labels.size == 0 or probs.shape[0] != labels.size or features.shape[0] != labels.size:
+        return 0.0
+    if alpha_grid is None:
+        alpha_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+    alpha_grid = [float(a) for a in alpha_grid if np.isfinite(a)]
+    if not alpha_grid:
+        return 0.0
+
+    base_preds = np.argmax(probs, axis=1).astype(np.int64)
+    best_alpha = 0.0
+    best_score = f1_score(labels, base_preds, average="macro")
+    for alpha in alpha_grid:
+        preds, _ = apply_binary_correction_for_pair(
+            preds=base_preds,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=class_a,
+            class_b=class_b,
+            alpha=alpha,
+        )
+        score = f1_score(labels, preds, average="macro")
+        if score > best_score:
+            best_score = score
+            best_alpha = float(np.clip(alpha, 0.0, 1.0))
+    return best_alpha
 
 
 def compute_oof_predictions(
@@ -2633,6 +2686,11 @@ def run_stacking_experiment(
     class_names_lower = [str(c).strip().lower() for c in train_classes]
     is_mta_task = class_names_lower == ["dridex", "emotet", "hancitor", "qakbot", "trickbot", "ursnif"]
     is_mfcp_task = class_names_lower == ["artemis", "dridex", "pua", "trickbot", "ursnif"]
+    mta_gain_target_classes: List[int] = []
+    if is_mta_task and len(meta_labels):
+        mta_classes, mta_counts = np.unique(meta_labels, return_counts=True)
+        order = np.argsort(mta_counts)
+        mta_gain_target_classes = [int(c) for c in mta_classes[order][: min(2, len(mta_classes))].tolist()]
 
     method_results = []
     successful_method_probs: List[np.ndarray] = []
@@ -2679,12 +2737,20 @@ def run_stacking_experiment(
         preds, pred_probs = _predict_with_meta_model(meta_model, test_meta_features, num_classes=class_count)
         postprocess: Dict[str, Any] = {}
         if is_mta_task and len(oof_probs):
-            gains = tune_class_gains(labels=meta_labels, probs=oof_probs, target_classes=[0, 1])
+            gains = tune_class_gains(labels=meta_labels, probs=oof_probs, target_classes=mta_gain_target_classes)
             pred_probs = apply_class_gains(pred_probs, gains)
             preds = np.argmax(pred_probs, axis=1).astype(np.int64)
             postprocess["mta_class_gains"] = {str(k): float(v) for k, v in gains.items()}
         if is_mfcp_task and len(meta_labels):
             head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+            pair_alpha = tune_binary_correction_alpha_for_pair(
+                labels=meta_labels,
+                probs=oof_probs,
+                features=meta_features,
+                head=head,
+                class_a=0,
+                class_b=4,
+            )
             preds, pred_probs = apply_binary_correction_for_pair(
                 preds=preds,
                 probs=pred_probs,
@@ -2692,8 +2758,10 @@ def run_stacking_experiment(
                 head=head,
                 class_a=0,
                 class_b=4,
+                alpha=pair_alpha,
             )
             postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
+            postprocess["mfcp_binary_pair_alpha"] = float(pair_alpha)
 
         acc = accuracy_score(test_meta_labels, preds) if len(test_meta_labels) else 0.0
         macro_f1 = f1_score(test_meta_labels, preds, average="macro") if len(test_meta_labels) else 0.0
@@ -2769,12 +2837,20 @@ def run_stacking_experiment(
             oof_vote_macro_f1 = 0.0
 
         if is_mta_task and len(oof_vote_probs):
-            vote_gains = tune_class_gains(labels=meta_labels, probs=oof_vote_probs, target_classes=[0, 1])
+            vote_gains = tune_class_gains(labels=meta_labels, probs=oof_vote_probs, target_classes=mta_gain_target_classes)
             vote_probs = apply_class_gains(vote_probs, vote_gains)
             vote_preds = np.argmax(vote_probs, axis=1).astype(np.int64)
             vote_postprocess["mta_class_gains"] = {str(k): float(v) for k, v in vote_gains.items()}
         if is_mfcp_task and len(meta_labels):
             vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+            vote_pair_alpha = tune_binary_correction_alpha_for_pair(
+                labels=meta_labels,
+                probs=oof_vote_probs,
+                features=meta_features,
+                head=vote_head,
+                class_a=0,
+                class_b=4,
+            ) if len(oof_vote_probs) else 0.0
             vote_preds, vote_probs = apply_binary_correction_for_pair(
                 preds=vote_preds,
                 probs=vote_probs,
@@ -2782,8 +2858,10 @@ def run_stacking_experiment(
                 head=vote_head,
                 class_a=0,
                 class_b=4,
+                alpha=vote_pair_alpha,
             )
             vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
+            vote_postprocess["mfcp_binary_pair_alpha"] = float(vote_pair_alpha)
 
         vote_acc = accuracy_score(test_meta_labels, vote_preds) if len(test_meta_labels) else 0.0
         vote_macro_f1 = f1_score(test_meta_labels, vote_preds, average="macro") if len(test_meta_labels) else 0.0
