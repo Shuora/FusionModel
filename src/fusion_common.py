@@ -1880,6 +1880,7 @@ def tune_binary_correction_alpha_for_pair(
     head: Optional[Dict[str, Any]],
     class_a: int,
     class_b: int,
+    objective: str = "macro_f1",
     alpha_grid: Optional[List[float]] = None,
 ) -> float:
     if head is None:
@@ -1897,7 +1898,10 @@ def tune_binary_correction_alpha_for_pair(
 
     base_preds = np.argmax(probs, axis=1).astype(np.int64)
     best_alpha = 0.0
-    best_score = f1_score(labels, base_preds, average="macro")
+    if objective == "pair_f1":
+        best_score = score_pair_f1(labels, base_preds, class_a=class_a, class_b=class_b)
+    else:
+        best_score = f1_score(labels, base_preds, average="macro")
     for alpha in alpha_grid:
         preds, _ = apply_binary_correction_for_pair(
             preds=base_preds,
@@ -1908,11 +1912,143 @@ def tune_binary_correction_alpha_for_pair(
             class_b=class_b,
             alpha=alpha,
         )
-        score = f1_score(labels, preds, average="macro")
+        if objective == "pair_f1":
+            score = score_pair_f1(labels, preds, class_a=class_a, class_b=class_b)
+        else:
+            score = f1_score(labels, preds, average="macro")
         if score > best_score:
             best_score = score
             best_alpha = float(np.clip(alpha, 0.0, 1.0))
     return best_alpha
+
+
+def score_pair_f1(labels: np.ndarray, preds: np.ndarray, *, class_a: int, class_b: int) -> float:
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    preds = np.asarray(preds, dtype=np.int64).reshape(-1)
+    if labels.size == 0 or preds.size != labels.size:
+        return 0.0
+    mask = (labels == int(class_a)) | (labels == int(class_b))
+    if not np.any(mask):
+        return 0.0
+    y_true = np.where(labels[mask] == int(class_a), 0, 1)
+    y_pred = np.where(preds[mask] == int(class_a), 0, np.where(preds[mask] == int(class_b), 1, 2))
+    return float(f1_score(y_true, y_pred, labels=[0, 1], average="macro"))
+
+
+def apply_pair_temperature(
+    *,
+    probs: np.ndarray,
+    class_a: int,
+    class_b: int,
+    temperature: float,
+) -> np.ndarray:
+    calibrated = _normalize_probs(probs).copy()
+    ca = int(class_a)
+    cb = int(class_b)
+    if ca < 0 or cb < 0 or ca >= calibrated.shape[1] or cb >= calibrated.shape[1]:
+        return calibrated
+    t = float(max(temperature, 1e-6))
+    pair_mass = calibrated[:, ca] + calibrated[:, cb]
+    pair_mask = pair_mass > 1e-12
+    if not np.any(pair_mask):
+        return calibrated
+    pair_a = calibrated[pair_mask, ca] / np.clip(pair_mass[pair_mask], 1e-12, None)
+    pair_b = calibrated[pair_mask, cb] / np.clip(pair_mass[pair_mask], 1e-12, None)
+    logits = np.stack([np.log(np.clip(pair_a, 1e-12, None)), np.log(np.clip(pair_b, 1e-12, None))], axis=1) / t
+    logits = logits - np.max(logits, axis=1, keepdims=True)
+    scaled = np.exp(logits)
+    scaled = scaled / np.clip(scaled.sum(axis=1, keepdims=True), 1e-12, None)
+    calibrated[pair_mask, ca] = pair_mass[pair_mask] * scaled[:, 0]
+    calibrated[pair_mask, cb] = pair_mass[pair_mask] * scaled[:, 1]
+    return _normalize_probs(calibrated)
+
+
+def tune_pair_temperature(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    class_a: int,
+    class_b: int,
+    temperature_grid: Optional[List[float]] = None,
+) -> float:
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    probs = _normalize_probs(probs)
+    if labels.size == 0 or probs.shape[0] != labels.size:
+        return 1.0
+    mask = (labels == int(class_a)) | (labels == int(class_b))
+    if int(mask.sum()) < 2:
+        return 1.0
+    y_true = np.where(labels[mask] == int(class_a), 0, 1)
+    if temperature_grid is None:
+        temperature_grid = [0.7, 0.85, 1.0, 1.15, 1.3, 1.6]
+    candidates = [float(t) for t in temperature_grid if np.isfinite(t) and float(t) > 0]
+    if not candidates:
+        return 1.0
+
+    best_t = 1.0
+    best_nll = float("inf")
+    for t in candidates:
+        calibrated = apply_pair_temperature(probs=probs, class_a=class_a, class_b=class_b, temperature=t)
+        pair = calibrated[mask][:, [int(class_a), int(class_b)]]
+        pair = pair / np.clip(pair.sum(axis=1, keepdims=True), 1e-12, None)
+        nll = -float(np.mean(np.log(np.clip(pair[np.arange(pair.shape[0]), y_true], 1e-12, None))))
+        if nll < best_nll:
+            best_nll = nll
+            best_t = t
+    return best_t
+
+
+def apply_pair_threshold(
+    *,
+    preds: np.ndarray,
+    probs: np.ndarray,
+    class_a: int,
+    class_b: int,
+    threshold: float,
+) -> np.ndarray:
+    out = np.asarray(preds, dtype=np.int64).copy()
+    probs = _normalize_probs(probs)
+    ca = int(class_a)
+    cb = int(class_b)
+    if ca < 0 or cb < 0 or ca >= probs.shape[1] or cb >= probs.shape[1]:
+        return out
+    thr = float(np.clip(threshold, 0.0, 1.0))
+    mask = (out == ca) | (out == cb)
+    if not np.any(mask):
+        return out
+    pair_mass = np.clip(probs[mask, ca] + probs[mask, cb], 1e-12, None)
+    ratio_a = probs[mask, ca] / pair_mass
+    out[mask] = np.where(ratio_a >= thr, ca, cb)
+    return out
+
+
+def tune_pair_threshold(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    class_a: int,
+    class_b: int,
+    threshold_grid: Optional[List[float]] = None,
+) -> float:
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    probs = _normalize_probs(probs)
+    if labels.size == 0 or probs.shape[0] != labels.size:
+        return 0.5
+    if threshold_grid is None:
+        threshold_grid = [0.3, 0.4, 0.5, 0.6, 0.7]
+    candidates = [float(t) for t in threshold_grid if np.isfinite(t)]
+    if not candidates:
+        return 0.5
+    base_preds = np.argmax(probs, axis=1).astype(np.int64)
+    best_thr = 0.5
+    best_score = score_pair_f1(labels, base_preds, class_a=class_a, class_b=class_b)
+    for thr in candidates:
+        preds = apply_pair_threshold(preds=base_preds, probs=probs, class_a=class_a, class_b=class_b, threshold=thr)
+        score = score_pair_f1(labels, preds, class_a=class_a, class_b=class_b)
+        if score > best_score:
+            best_score = score
+            best_thr = float(np.clip(thr, 0.0, 1.0))
+    return best_thr
 
 
 def compute_oof_predictions(
@@ -2735,6 +2871,7 @@ def run_stacking_experiment(
             continue
 
         preds, pred_probs = _predict_with_meta_model(meta_model, test_meta_features, num_classes=class_count)
+        method_oof_probs_for_vote = oof_probs
         postprocess: Dict[str, Any] = {}
         if is_mta_task and len(oof_probs):
             gains = tune_class_gains(labels=meta_labels, probs=oof_probs, target_classes=mta_gain_target_classes)
@@ -2750,7 +2887,48 @@ def run_stacking_experiment(
                 head=head,
                 class_a=0,
                 class_b=4,
+                objective="pair_f1",
             )
+            oof_pair_probs = oof_probs
+            if len(oof_probs):
+                oof_pair_preds, oof_pair_probs = apply_binary_correction_for_pair(
+                    preds=np.argmax(oof_probs, axis=1).astype(np.int64),
+                    probs=oof_probs,
+                    features=meta_features,
+                    head=head,
+                    class_a=0,
+                    class_b=4,
+                    alpha=pair_alpha,
+                )
+                pair_temperature = tune_pair_temperature(
+                    labels=meta_labels,
+                    probs=oof_pair_probs,
+                    class_a=0,
+                    class_b=4,
+                )
+                oof_pair_probs = apply_pair_temperature(
+                    probs=oof_pair_probs,
+                    class_a=0,
+                    class_b=4,
+                    temperature=pair_temperature,
+                )
+                pair_threshold = tune_pair_threshold(
+                    labels=meta_labels,
+                    probs=oof_pair_probs,
+                    class_a=0,
+                    class_b=4,
+                )
+                oof_pair_preds = apply_pair_threshold(
+                    preds=oof_pair_preds,
+                    probs=oof_pair_probs,
+                    class_a=0,
+                    class_b=4,
+                    threshold=pair_threshold,
+                )
+                method_oof_probs_for_vote = oof_pair_probs
+            else:
+                pair_temperature = 1.0
+                pair_threshold = 0.5
             preds, pred_probs = apply_binary_correction_for_pair(
                 preds=preds,
                 probs=pred_probs,
@@ -2760,8 +2938,23 @@ def run_stacking_experiment(
                 class_b=4,
                 alpha=pair_alpha,
             )
+            pred_probs = apply_pair_temperature(
+                probs=pred_probs,
+                class_a=0,
+                class_b=4,
+                temperature=pair_temperature,
+            )
+            preds = apply_pair_threshold(
+                preds=np.argmax(pred_probs, axis=1).astype(np.int64),
+                probs=pred_probs,
+                class_a=0,
+                class_b=4,
+                threshold=pair_threshold,
+            )
             postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
             postprocess["mfcp_binary_pair_alpha"] = float(pair_alpha)
+            postprocess["mfcp_pair_temperature"] = float(pair_temperature)
+            postprocess["mfcp_pair_threshold"] = float(pair_threshold)
 
         acc = accuracy_score(test_meta_labels, preds) if len(test_meta_labels) else 0.0
         macro_f1 = f1_score(test_meta_labels, preds, average="macro") if len(test_meta_labels) else 0.0
@@ -2818,7 +3011,7 @@ def run_stacking_experiment(
             }
         )
         successful_method_probs.append(pred_probs)
-        successful_oof_probs.append(oof_probs)
+        successful_oof_probs.append(method_oof_probs_for_vote)
         successful_method_weights.append(float(max(oof_macro_f1, 1e-6)))
 
     if len(successful_method_probs) >= 2:
@@ -2850,7 +3043,47 @@ def run_stacking_experiment(
                 head=vote_head,
                 class_a=0,
                 class_b=4,
+                objective="pair_f1",
             ) if len(oof_vote_probs) else 0.0
+            if len(oof_vote_probs):
+                oof_vote_preds = np.argmax(oof_vote_probs, axis=1).astype(np.int64)
+                oof_vote_preds, oof_vote_probs = apply_binary_correction_for_pair(
+                    preds=oof_vote_preds,
+                    probs=oof_vote_probs,
+                    features=meta_features,
+                    head=vote_head,
+                    class_a=0,
+                    class_b=4,
+                    alpha=vote_pair_alpha,
+                )
+                vote_pair_temperature = tune_pair_temperature(
+                    labels=meta_labels,
+                    probs=oof_vote_probs,
+                    class_a=0,
+                    class_b=4,
+                )
+                oof_vote_probs = apply_pair_temperature(
+                    probs=oof_vote_probs,
+                    class_a=0,
+                    class_b=4,
+                    temperature=vote_pair_temperature,
+                )
+                vote_pair_threshold = tune_pair_threshold(
+                    labels=meta_labels,
+                    probs=oof_vote_probs,
+                    class_a=0,
+                    class_b=4,
+                )
+                oof_vote_preds = apply_pair_threshold(
+                    preds=oof_vote_preds,
+                    probs=oof_vote_probs,
+                    class_a=0,
+                    class_b=4,
+                    threshold=vote_pair_threshold,
+                )
+            else:
+                vote_pair_temperature = 1.0
+                vote_pair_threshold = 0.5
             vote_preds, vote_probs = apply_binary_correction_for_pair(
                 preds=vote_preds,
                 probs=vote_probs,
@@ -2860,8 +3093,23 @@ def run_stacking_experiment(
                 class_b=4,
                 alpha=vote_pair_alpha,
             )
+            vote_probs = apply_pair_temperature(
+                probs=vote_probs,
+                class_a=0,
+                class_b=4,
+                temperature=vote_pair_temperature,
+            )
+            vote_preds = apply_pair_threshold(
+                preds=np.argmax(vote_probs, axis=1).astype(np.int64),
+                probs=vote_probs,
+                class_a=0,
+                class_b=4,
+                threshold=vote_pair_threshold,
+            )
             vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
             vote_postprocess["mfcp_binary_pair_alpha"] = float(vote_pair_alpha)
+            vote_postprocess["mfcp_pair_temperature"] = float(vote_pair_temperature)
+            vote_postprocess["mfcp_pair_threshold"] = float(vote_pair_threshold)
 
         vote_acc = accuracy_score(test_meta_labels, vote_preds) if len(test_meta_labels) else 0.0
         vote_macro_f1 = f1_score(test_meta_labels, vote_preds, average="macro") if len(test_meta_labels) else 0.0

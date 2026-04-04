@@ -113,3 +113,12 @@
 - [x] 已完成 mfcp 二分类校正 `alpha` 自适应（仅 mfcp 生效）。
 - [x] 运行目标测试并记录结果。
 - [x] 同步更新 findings/progress/README。
+
+## Task (2026-04-04 mfcp 后处理二次调优)
+针对你反馈“效果仍不理想”，继续优化 `mfcp_multiclass` stacking 后处理：在 `0/4` pair 校正上引入 pair-f1 导向目标、概率温度校准与阈值搜索，优先压制 `0<->4` 混淆。
+
+## Plan
+1. 先在 `tests/test_stacking_improvements.py` 增加失败测试，覆盖 `pair_f1` 目标、概率校准和阈值搜索行为。
+2. 在 `src/fusion_common.py` 新增 pair 专用打分/校准/阈值函数，并扩展 `tune_binary_correction_alpha_for_pair` 支持 `objective=\"pair_f1\"`。
+3. 仅在 `mfcp` 分支接入新后处理链路（method 与 soft-voting 两条路径保持一致），记录新的 postprocess 参数。
+4. 运行相关回归测试并同步 README、findings、progress。

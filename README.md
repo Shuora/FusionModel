@@ -414,7 +414,7 @@ python3 src/train_fusion_attention_stacking.py \
 - 对每个 meta learner 自动执行 5-fold OOF 训练以减少元学习器过拟合。
 - 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
 - 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
-- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优；对 `mfcp_multiclass` 自动做 `0/4` 二分类校正，并用 OOF 自动选择校正强度 `alpha`（`0~1`）。
+- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优；对 `mfcp_multiclass` 自动做 `0/4` 二分类后处理链路：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
 
 早停相关建议（`fusion_common.py` 当前默认行为）：
 

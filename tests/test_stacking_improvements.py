@@ -210,6 +210,105 @@ class StackingImprovementTests(unittest.TestCase):
             fc.f1_score(labels, base_preds, average="macro"),
         )
 
+    def test_tune_binary_pair_alpha_supports_pair_f1_objective(self) -> None:
+        labels = np.array([0, 0, 0, 4, 4, 4, 2, 2], dtype=np.int64)
+        features = np.array(
+            [
+                [0.10, 0.10],
+                [0.12, 0.08],
+                [0.14, 0.10],
+                [0.90, 0.92],
+                [0.88, 0.95],
+                [0.86, 0.89],
+                [0.40, 0.60],
+                [0.45, 0.55],
+            ],
+            dtype=np.float64,
+        )
+        probs = np.array(
+            [
+                [0.40, 0.0, 0.6, 0.0, 0.0],
+                [0.45, 0.0, 0.55, 0.0, 0.0],
+                [0.35, 0.0, 0.65, 0.0, 0.0],
+                [0.0, 0.0, 0.5, 0.0, 0.5],
+                [0.0, 0.0, 0.55, 0.0, 0.45],
+                [0.0, 0.0, 0.52, 0.0, 0.48],
+                [0.05, 0.0, 0.92, 0.0, 0.03],
+                [0.08, 0.0, 0.89, 0.0, 0.03],
+            ],
+            dtype=np.float64,
+        )
+        head = fc.fit_binary_centroid_head(features, labels, class_a=0, class_b=4)
+        alpha = fc.tune_binary_correction_alpha_for_pair(
+            labels=labels,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=0,
+            class_b=4,
+            objective="pair_f1",
+            alpha_grid=[0.0, 0.25, 0.5, 0.75, 1.0],
+        )
+        base_preds = np.argmax(probs, axis=1)
+        tuned_preds, _ = fc.apply_binary_correction_for_pair(
+            preds=base_preds,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=0,
+            class_b=4,
+            alpha=alpha,
+        )
+        self.assertGreaterEqual(
+            fc.score_pair_f1(labels, tuned_preds, class_a=0, class_b=4),
+            fc.score_pair_f1(labels, base_preds, class_a=0, class_b=4),
+        )
+
+    def test_pair_calibration_and_threshold_not_worse_than_baseline(self) -> None:
+        labels = np.array([0, 0, 4, 4, 2, 2], dtype=np.int64)
+        probs = np.array(
+            [
+                [0.35, 0.0, 0.55, 0.0, 0.10],
+                [0.45, 0.0, 0.45, 0.0, 0.10],
+                [0.12, 0.0, 0.58, 0.0, 0.30],
+                [0.08, 0.0, 0.62, 0.0, 0.30],
+                [0.05, 0.0, 0.90, 0.0, 0.05],
+                [0.10, 0.0, 0.80, 0.0, 0.10],
+            ],
+            dtype=np.float64,
+        )
+        base_preds = np.argmax(probs, axis=1)
+        base_pair_f1 = fc.score_pair_f1(labels, base_preds, class_a=0, class_b=4)
+
+        temperature = fc.tune_pair_temperature(
+            labels=labels,
+            probs=probs,
+            class_a=0,
+            class_b=4,
+            temperature_grid=[0.7, 1.0, 1.3, 1.6],
+        )
+        calibrated = fc.apply_pair_temperature(
+            probs=probs,
+            class_a=0,
+            class_b=4,
+            temperature=temperature,
+        )
+        threshold = fc.tune_pair_threshold(
+            labels=labels,
+            probs=calibrated,
+            class_a=0,
+            class_b=4,
+            threshold_grid=[0.3, 0.4, 0.5, 0.6, 0.7],
+        )
+        tuned_preds = fc.apply_pair_threshold(
+            preds=np.argmax(calibrated, axis=1),
+            probs=calibrated,
+            class_a=0,
+            class_b=4,
+            threshold=threshold,
+        )
+        self.assertGreaterEqual(fc.score_pair_f1(labels, tuned_preds, class_a=0, class_b=4), base_pair_f1)
+
 
 if __name__ == "__main__":
     unittest.main()
