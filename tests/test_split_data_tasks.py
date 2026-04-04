@@ -9,6 +9,7 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+import split_data
 from split_data import (
     RawSample,
     build_processed_root,
@@ -86,6 +87,79 @@ class SplitDataTaskTests(unittest.TestCase):
         test_names = {sample.raw_path.name for sample in splits['Test']}
         self.assertIn('only', train_names)
         self.assertNotIn('only', test_names)
+
+    def test_split_task_inputs_paper_profile_uses_exact_mta_targets(self) -> None:
+        samples = []
+        for label, total in {
+            'Dridex': 620,
+            'Emotet': 4220,
+            'Hancitor': 16830,
+            'IcedID': 1825,
+            'Qakbot': 4200,
+            'Trickbot': 2250,
+            'Ursnif': 640,
+        }.items():
+            for idx in range(total):
+                samples.append(DummySample(f'{label}-{idx}', label))
+
+        splits = split_task_inputs(
+            samples,
+            train_ratio=0.8,
+            seed=42,
+            task_name='mta_multiclass',
+            distribution_profile='paper_mvtba',
+        )
+
+        self.assertEqual(sum(1 for s in splits['Train'] if s.label == 'Dridex'), 492)
+        self.assertEqual(sum(1 for s in splits['Test'] if s.label == 'Dridex'), 123)
+        self.assertEqual(sum(1 for s in splits['Train'] if s.label == 'IcedID'), 1454)
+        self.assertEqual(sum(1 for s in splits['Test'] if s.label == 'IcedID'), 364)
+        self.assertEqual(len(splits['Train']), 24416)
+        self.assertEqual(len(splits['Test']), 6105)
+
+    def test_split_task_inputs_paper_profile_requires_target_label(self) -> None:
+        samples = [DummySample(f'Artemis-{idx}', 'Artemis') for idx in range(7600)]
+        with self.assertRaisesRegex(ValueError, 'Cobalt'):
+            split_task_inputs(
+                samples,
+                train_ratio=0.8,
+                seed=42,
+                task_name='mfcp_multiclass',
+                distribution_profile='paper_mvtba',
+            )
+
+
+    def test_split_task_inputs_paper_profile_oversamples_when_short(self) -> None:
+        samples = [
+            DummySample('art-1', 'Artemis'),
+            DummySample('art-2', 'Artemis'),
+            DummySample('art-3', 'Artemis'),
+            DummySample('cob-1', 'Cobalt'),
+            DummySample('cob-2', 'Cobalt'),
+        ]
+
+        with patch.dict(
+            split_data.PAPER_MVTBA_TARGETS,
+            {
+                'mfcp_multiclass': {
+                    'Artemis': {'Train': 2, 'Test': 1},
+                    'Cobalt': {'Train': 2, 'Test': 1},
+                }
+            },
+            clear=False,
+        ):
+            splits = split_task_inputs(
+                samples,
+                train_ratio=0.8,
+                seed=7,
+                task_name='mfcp_multiclass',
+                distribution_profile='paper_mvtba',
+            )
+
+        self.assertEqual(sum(1 for s in splits['Train'] if s.label == 'Artemis'), 2)
+        self.assertEqual(sum(1 for s in splits['Test'] if s.label == 'Artemis'), 1)
+        self.assertEqual(sum(1 for s in splits['Train'] if s.label == 'Cobalt'), 2)
+        self.assertEqual(sum(1 for s in splits['Test'] if s.label == 'Cobalt'), 1)
 
     def test_build_processed_root_uses_task_name(self) -> None:
         root = build_processed_root(Path('/tmp/work'), 'ustc_multiclass')

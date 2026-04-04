@@ -54,3 +54,8 @@
 - 2026-04-04: 已在 `fusion_common.py` 实现 `score_pair_f1`、`tune/apply_pair_temperature`、`tune/apply_pair_threshold`，并扩展 `tune_binary_correction_alpha_for_pair(objective=...)`。
 - 2026-04-04: 已接入 `mfcp` method 与 soft-voting 后处理链路，新增 `mfcp_pair_temperature/mfcp_pair_threshold` 落盘字段。
 - 2026-04-04: 新增测试转绿，目标回归 `pytest -q tests/test_stacking_improvements.py -k 'pair_f1_objective or pair_calibration'`（2 passed）。
+- 2026-04-04: 在 `.worktrees/codex-paper-mta-mfcp-distribution` 创建隔离分支 `codex/paper-mta-mfcp-distribution`，按 TDD 新增 `paper_mvtba` 分布模式测试并验证红灯（`split_task_inputs` 不支持 profile 参数）。
+- 2026-04-04: 已实现 `src/split_data.py` 的 `--distribution_profile paper_mvtba`（仅作用 `mta_multiclass/mfcp_multiclass`），支持固定类集合与固定 Train/Test 计数抽样，缺类/样本不足会 fail-fast。
+- 2026-04-04: 回归通过 `python3 -m unittest tests.test_split_data_tasks -v`（12 tests, OK）。
+- 2026-04-04: 已同步更新 README 的 MTA/MFCP 预处理命令与参数说明，新增 `--distribution_profile` 用法。
+- 2026-04-04: 已重建主仓库 `ProcessedData/mta_multiclass` 与 `ProcessedData/mfcp_multiclass`（含 `image_data`），并完成逐类计数核验；MTA 与 MFCP 的 Train/Test 计数已按论文目标对齐。

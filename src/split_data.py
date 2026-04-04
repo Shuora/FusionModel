@@ -7,7 +7,7 @@ import os
 import random
 import socket
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -28,6 +28,26 @@ DEFAULT_SOURCE_ROOT = BASE_DIR.parent / 'SourceData'
 TRAIN_RATIO = 0.8
 SEED = 42
 PCAP_EXTENSIONS = ('.pcap', '.pcapng')
+SUPPORTED_DISTRIBUTION_PROFILES = ('paper_mvtba',)
+PAPER_MVTBA_TARGETS: dict[str, dict[str, dict[str, int]]] = {
+    'mta_multiclass': {
+        'Dridex': {'Train': 492, 'Test': 123},
+        'Emotet': {'Train': 3368, 'Test': 842},
+        'Hancitor': {'Train': 13452, 'Test': 3363},
+        'IcedID': {'Train': 1454, 'Test': 364},
+        'Qakbot': {'Train': 3350, 'Test': 838},
+        'Trickbot': {'Train': 1794, 'Test': 448},
+        'Ursnif': {'Train': 506, 'Test': 127},
+    },
+    'mfcp_multiclass': {
+        'Artemis': {'Train': 6000, 'Test': 1500},
+        'Cobalt': {'Train': 1501, 'Test': 375},
+        'Dridex': {'Train': 6000, 'Test': 1500},
+        'PUA': {'Train': 5614, 'Test': 1403},
+        'Trickbot': {'Train': 6000, 'Test': 1500},
+        'Ursnif': {'Train': 6000, 'Test': 1500},
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -149,7 +169,86 @@ def expand_raw_samples_to_sessions(samples: Iterable[RawSample]) -> list[Session
     return session_items
 
 
-def split_task_inputs(samples: list[RawSample | SessionSample], train_ratio: float, seed: int) -> dict[str, list[RawSample | SessionSample]]:
+def _resolve_distribution_targets(task_name: str, distribution_profile: str | None) -> dict[str, dict[str, int]] | None:
+    if not distribution_profile:
+        return None
+    if distribution_profile not in SUPPORTED_DISTRIBUTION_PROFILES:
+        raise ValueError(
+            f'unsupported distribution profile: {distribution_profile}; '
+            f'supported={SUPPORTED_DISTRIBUTION_PROFILES}'
+        )
+    if distribution_profile == 'paper_mvtba':
+        return PAPER_MVTBA_TARGETS.get(task_name)
+    return None
+
+
+def _split_task_inputs_with_targets(
+    samples: list[RawSample | SessionSample],
+    targets: dict[str, dict[str, int]],
+    seed: int,
+) -> dict[str, list[RawSample | SessionSample]]:
+    rng = random.Random(seed)
+    grouped: dict[str, list[RawSample | SessionSample]] = {}
+    for sample in samples:
+        grouped.setdefault(sample.label, []).append(sample)
+
+    missing_labels = sorted(label for label in targets if label not in grouped)
+    if missing_labels:
+        raise ValueError(f'missing labels for target profile: {missing_labels}')
+
+    extra_labels = sorted(label for label in grouped if label not in targets)
+    if extra_labels:
+        logger.info('Ignoring labels not present in target profile: %s', extra_labels)
+
+    train: list[RawSample | SessionSample] = []
+    test: list[RawSample | SessionSample] = []
+
+    for label, split_targets in targets.items():
+        label_samples = list(grouped[label])
+        rng.shuffle(label_samples)
+
+        train_target = int(split_targets['Train'])
+        test_target = int(split_targets['Test'])
+        needed_total = train_target + test_target
+        if len(label_samples) < needed_total:
+            shortfall = needed_total - len(label_samples)
+            logger.warning(
+                'Label %s has only %s samples, short of target %s; duplicating %s samples with replacement',
+                label,
+                len(label_samples),
+                needed_total,
+                shortfall,
+            )
+            augmented: list[RawSample | SessionSample] = []
+            for dup_idx in range(shortfall):
+                picked = rng.choice(label_samples)
+                if isinstance(picked, SessionSample):
+                    augmented.append(replace(picked, session_name=f'{picked.session_name}__dup{dup_idx}'))
+                else:
+                    augmented.append(picked)
+            label_samples.extend(augmented)
+
+        train.extend(label_samples[:train_target])
+        test.extend(label_samples[train_target:needed_total])
+        logger.info('Profile split label=%s train=%s test=%s', label, train_target, test_target)
+
+    return {'Train': train, 'Test': test}
+
+
+def split_task_inputs(
+    samples: list[RawSample | SessionSample],
+    train_ratio: float,
+    seed: int,
+    task_name: str | None = None,
+    distribution_profile: str | None = None,
+) -> dict[str, list[RawSample | SessionSample]]:
+    if distribution_profile and not task_name:
+        raise ValueError('task_name is required when distribution_profile is set')
+
+    targets = _resolve_distribution_targets(task_name or '', distribution_profile)
+    if targets is not None:
+        return _split_task_inputs_with_targets(samples=samples, targets=targets, seed=seed)
+
     rng = random.Random(seed)
     grouped: dict[str, list[RawSample | SessionSample]] = {}
     for sample in samples:
@@ -302,6 +401,7 @@ def split_dataset(
     processed_root: Path | None = None,
     train_ratio: float = TRAIN_RATIO,
     seed: int = SEED,
+    distribution_profile: str | None = None,
 ) -> Path:
     source_root = Path(source_root or DEFAULT_SOURCE_ROOT)
     processed_root = Path(processed_root or build_processed_root(BASE_DIR.parent, task_name))
@@ -311,7 +411,13 @@ def split_dataset(
     logger.info('Discovered %s raw samples for task %s', len(raw_samples), task_name)
     session_samples = expand_raw_samples_to_sessions(raw_samples)
     logger.info('Expanded %s session samples for task %s', len(session_samples), task_name)
-    splits = split_task_inputs(session_samples, train_ratio=train_ratio, seed=seed)
+    splits = split_task_inputs(
+        session_samples,
+        train_ratio=train_ratio,
+        seed=seed,
+        task_name=task_name,
+        distribution_profile=distribution_profile,
+    )
 
     manifest_rows: list[dict[str, str]] = []
     for split_name, split_samples in splits.items():
@@ -330,6 +436,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--processed_root', default='')
     parser.add_argument('--train_ratio', type=float, default=TRAIN_RATIO)
     parser.add_argument('--seed', type=int, default=SEED)
+    parser.add_argument(
+        '--distribution_profile',
+        default='',
+        choices=('',) + SUPPORTED_DISTRIBUTION_PROFILES,
+        help='Optional fixed distribution profile. Use paper_mvtba for paper-aligned MTA/MFCP counts.',
+    )
     return parser
 
 
@@ -342,6 +454,7 @@ def main() -> int:
         processed_root=processed_root,
         train_ratio=args.train_ratio,
         seed=args.seed,
+        distribution_profile=args.distribution_profile,
     )
     logger.info('Splitting Completed!')
     return 0
