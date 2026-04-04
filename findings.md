@@ -36,3 +36,6 @@
 - 2026-04-04 梯度无效排查: 当前 AMP 分支在 `scaler.unscale_` 后自行扫描梯度并将非有限梯度计入 `invalid_grad_batches`，会把 `GradScaler` 可恢复的 overflow 也记为“梯度无效”并触发跳过告警。
 - 2026-04-04 梯度无效修复: 已移除 AMP 路径中的 `_has_non_finite_gradients` 强制跳过逻辑，改为交给 `GradScaler.step/update` 统一处理 overflow；CPU/非AMP 路径的梯度有限值保护保持不变。
 - 2026-04-04 回归验证: 新增测试 `test_amp_overflow_is_not_counted_as_invalid_grad_batch`，确保 AMP overflow 不再记为 `invalid_grad_batches` 且 `scaler.step()` 会被调用。
+- 2026-04-04 mta/mfcp 现状审计: 仓库已实现 `mta` 类增益调优与 `mfcp` `0/4` 二分类校正，但 `mta` 目标类硬编码为 `[0,1]`，对类顺序/映射有隐式依赖。
+- 2026-04-04 mta 增强: 已改为按 `meta_labels` 样本数自动选择最少的两个类别做 gain 调优，仅在 `mta_multiclass` 触发。
+- 2026-04-04 mfcp 增强: 已新增 OOF 驱动的 `alpha` 自动调参（`0~1`）用于控制 `0/4` 二分类校正强度，避免固定强校正导致过修正；仅在 `mfcp_multiclass` 触发。

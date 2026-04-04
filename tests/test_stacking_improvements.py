@@ -127,6 +127,89 @@ class StackingImprovementTests(unittest.TestCase):
             fc.f1_score(labels, preds, average="macro"),
         )
 
+    def test_binary_pair_correction_alpha_zero_keeps_original_predictions(self) -> None:
+        labels = np.array([0, 0, 4, 4], dtype=np.int64)
+        features = np.array(
+            [
+                [0.10, 0.10],
+                [0.15, 0.20],
+                [0.90, 0.85],
+                [0.80, 0.95],
+            ],
+            dtype=np.float64,
+        )
+        preds = np.array([4, 4, 0, 0], dtype=np.int64)
+        probs = np.array(
+            [
+                [0.45, 0.0, 0.1, 0.0, 0.45],
+                [0.40, 0.0, 0.1, 0.0, 0.50],
+                [0.48, 0.0, 0.1, 0.0, 0.42],
+                [0.52, 0.0, 0.1, 0.0, 0.35],
+            ],
+            dtype=np.float64,
+        )
+        head = fc.fit_binary_centroid_head(features, labels, class_a=0, class_b=4)
+        corrected_preds, corrected_probs = fc.apply_binary_correction_for_pair(
+            preds=preds,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=0,
+            class_b=4,
+            alpha=0.0,
+        )
+        np.testing.assert_array_equal(corrected_preds, preds)
+        np.testing.assert_allclose(corrected_probs, fc._normalize_probs(probs), rtol=1e-6, atol=1e-6)
+
+    def test_tune_binary_pair_alpha_not_worse_than_baseline_on_oof(self) -> None:
+        labels = np.array([0, 0, 0, 4, 4, 4], dtype=np.int64)
+        features = np.array(
+            [
+                [0.20, 0.20],
+                [0.25, 0.18],
+                [0.18, 0.24],
+                [0.80, 0.85],
+                [0.75, 0.90],
+                [0.90, 0.78],
+            ],
+            dtype=np.float64,
+        )
+        probs = np.array(
+            [
+                [0.40, 0.0, 0.1, 0.0, 0.50],
+                [0.45, 0.0, 0.1, 0.0, 0.45],
+                [0.38, 0.0, 0.1, 0.0, 0.52],
+                [0.60, 0.0, 0.1, 0.0, 0.30],
+                [0.48, 0.0, 0.1, 0.0, 0.42],
+                [0.58, 0.0, 0.1, 0.0, 0.22],
+            ],
+            dtype=np.float64,
+        )
+        head = fc.fit_binary_centroid_head(features, labels, class_a=0, class_b=4)
+        alpha = fc.tune_binary_correction_alpha_for_pair(
+            labels=labels,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=0,
+            class_b=4,
+            alpha_grid=[0.0, 0.25, 0.5, 0.75, 1.0],
+        )
+        base_preds = np.argmax(probs, axis=1)
+        tuned_preds, _ = fc.apply_binary_correction_for_pair(
+            preds=base_preds,
+            probs=probs,
+            features=features,
+            head=head,
+            class_a=0,
+            class_b=4,
+            alpha=alpha,
+        )
+        self.assertGreaterEqual(
+            fc.f1_score(labels, tuned_preds, average="macro"),
+            fc.f1_score(labels, base_preds, average="macro"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

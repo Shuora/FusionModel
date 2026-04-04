@@ -95,3 +95,21 @@
 - [x] 已完成最小代码修复（仅 AMP 分支）。
 - [x] 已运行相关回归测试并通过。
 - [x] 已同步更新 findings/progress 文档。
+
+## Task (2026-04-04 mta/mfcp 定向增强)
+仅针对 `mta_multiclass` 与 `mfcp_multiclass` 进一步增强 stacking 后处理，提升弱类稳定性且不影响其他任务。
+
+## Plan
+1. 审核现有 `fusion_common.py` 中 mta/mfcp 定向逻辑是否已覆盖（gain 与 0/4 校正）。
+2. 在不改其他任务行为前提下增强：
+   - `mta`：由固定类索引改为“按样本数最少类”自动选 gain 目标类；
+   - `mfcp`：对 `0/4` 校正新增 OOF 驱动的 `alpha` 自适应。
+3. 补充单测覆盖新增行为（`alpha=0` 不改变预测、自动调参不劣于基线）。
+4. 运行目标测试并同步 README / findings / progress。
+
+## Task Status (2026-04-04 mta/mfcp 定向增强)
+- [x] 完成实现现状审计，确认已有 OOF/soft-voting/mta gain/mfcp pair correction。
+- [x] 已完成 mta 最小类动态 gain 目标类改造（仅 mta 生效）。
+- [x] 已完成 mfcp 二分类校正 `alpha` 自适应（仅 mfcp 生效）。
+- [x] 运行目标测试并记录结果。
+- [x] 同步更新 findings/progress/README。
