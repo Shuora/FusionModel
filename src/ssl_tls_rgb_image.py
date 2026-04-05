@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 from pathlib import Path
 
@@ -20,7 +21,7 @@ except ModuleNotFoundError:
     def tqdm(iterable, **kwargs):
         return iterable
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -127,8 +128,25 @@ def process_bin_file(bin_path: Path, input_dir: Path, output_dir: Path) -> Path:
     tmp_path = out_path.with_suffix(out_path.suffix + '.tmp')
     img.save(tmp_path, format='PNG')
     tmp_path.replace(out_path)
-    logger.info('Saved: %s', out_path)
     return out_path
+
+
+def setup_logging(log_file: Path) -> Path:
+    log_file = Path(log_file)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    handlers = [
+        logging.FileHandler(str(log_file), encoding='utf-8'),
+        logging.StreamHandler(),
+    ]
+    kwargs = {
+        'level': logging.INFO,
+        'format': '%(asctime)s - %(levelname)s - %(message)s',
+        'handlers': handlers,
+    }
+    if 'force' in inspect.signature(logging.basicConfig).parameters:
+        kwargs['force'] = True
+    logging.basicConfig(**kwargs)
+    return log_file
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -136,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dataset_root', required=True)
     parser.add_argument('--input_dir', default='')
     parser.add_argument('--output_dir', default='')
+    parser.add_argument('--log_file', default='')
     return parser
 
 
@@ -145,17 +164,26 @@ def main() -> int:
     input_dir, output_dir = resolve_roots(dataset_root, Path(args.input_dir) if args.input_dir else None, Path(args.output_dir) if args.output_dir else None)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    log_file = Path(args.log_file) if args.log_file else dataset_root / 'metadata' / 'ssl_tls_rgb_image.log'
+    resolved_log = setup_logging(log_file)
+    logger.info('Image preprocessing log file: %s', resolved_log)
+
     bin_files = get_bin_files(input_dir)
     logger.info('Found %s bin files.', len(bin_files))
     skipped = 0
     processed = 0
-    for bin_path in tqdm(bin_files, desc='Processing', ncols=80):
+    progress = tqdm(bin_files, desc='Processing images', ncols=100, unit='file')
+    for bin_path in progress:
         out_path = get_output_path(bin_path, input_dir, output_dir)
         if out_path.exists() and out_path.stat().st_size > 0:
             skipped += 1
+            if hasattr(progress, 'set_postfix'):
+                progress.set_postfix(processed=processed, skipped=skipped, refresh=False)
             continue
         process_bin_file(bin_path, input_dir, output_dir)
         processed += 1
+        if hasattr(progress, 'set_postfix'):
+            progress.set_postfix(processed=processed, skipped=skipped, refresh=False)
     logger.info('Done. processed=%s, skipped=%s, total=%s', processed, skipped, len(bin_files))
     return 0
 

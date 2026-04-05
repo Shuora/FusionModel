@@ -123,6 +123,8 @@ ProcessedData/
 
 - 当前实现是先把原始抓包展开为 session，再在 session 级别切分 `Train/Test`
 - 训练命令中的 `--dataset_root` 应该指向 `ProcessedData` 的父目录，而不是 `ProcessedData/<task_name>`
+- 预处理默认会将日志落盘到任务目录下的 metadata/split_data.log 和 metadata/ssl_tls_rgb_image.log
+- 如需自定义日志文件路径，可分别为两个脚本传入 --log_file
 
 ## 通用说明
 

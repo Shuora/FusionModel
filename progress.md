@@ -66,3 +66,7 @@
 - 2026-04-04: 在 `src/fusion_common.py` 新增 `build_deterministic_meta_loader`、`detect_stacking_special_tasks` 与 task hint 解析逻辑；`run_stacking_experiment` 已切换到 deterministic meta loader 并加入 OOF-test gap 诊断日志。
 - 2026-04-04: 回归验证通过：`pytest -q -s tests/test_stacking_improvements.py tests/test_attention_entrypoints.py tests/test_fusion_output_artifacts.py`（30 passed）。
 - 2026-04-04: 已同步更新 README 的 stacking 默认行为说明（元特征提取数据流与 MTA 7 类识别）。
+- 2026-04-05: 完成预处理体验优化：`src/ssl_tls_rgb_image.py` 移除逐条图片保存日志，统一为进度条 + processed/skipped 实时统计。
+- 2026-04-05: 完成预处理日志落盘：`src/split_data.py` 与 `src/ssl_tls_rgb_image.py` 均新增 `--log_file`，默认落盘到任务 `metadata/` 目录。
+- 2026-04-05: 已同步 README 预处理章节，补充日志文件默认路径与 `--log_file` 用法。
+- 2026-04-05: 验证结果：`python3 -m py_compile src/split_data.py src/ssl_tls_rgb_image.py` 通过；`python3 -m unittest tests.test_split_data_tasks tests.test_ssl_tls_rgb_image` 中 split_data 通过，ssl_tls_rgb_image 因本机 numpy 环境污染失败。

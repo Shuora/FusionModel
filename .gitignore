@@ -9,3 +9,4 @@ __pycache__/
 /ProcessedData/
 .codex
 /ProcessedData_time_split/
+/catboost_info/

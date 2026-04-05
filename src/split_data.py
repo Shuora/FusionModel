@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -20,7 +21,6 @@ except ModuleNotFoundError:
 
 from task_config import get_task_config
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -49,6 +49,23 @@ PAPER_MVTBA_TARGETS: dict[str, dict[str, dict[str, int]]] = {
     },
 }
 
+
+def setup_logging(log_file: Path) -> Path:
+    log_file = Path(log_file)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    handlers = [
+        logging.FileHandler(str(log_file), encoding="utf-8"),
+        logging.StreamHandler(),
+    ]
+    kwargs = {
+        "level": logging.INFO,
+        "format": "%(asctime)s - %(message)s",
+        "handlers": handlers,
+    }
+    if "force" in inspect.signature(logging.basicConfig).parameters:
+        kwargs["force"] = True
+    logging.basicConfig(**kwargs)
+    return log_file
 
 @dataclass(frozen=True)
 class RawSample:
@@ -442,12 +459,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=('',) + SUPPORTED_DISTRIBUTION_PROFILES,
         help='Optional fixed distribution profile. Use paper_mvtba for paper-aligned MTA/MFCP counts.',
     )
+    parser.add_argument('--log_file', default='')
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     processed_root = Path(args.processed_root) if args.processed_root else None
+    resolved_processed_root = processed_root or build_processed_root(BASE_DIR.parent, args.task_name)
+    log_file = Path(args.log_file) if args.log_file else resolved_processed_root / 'metadata' / 'split_data.log'
+    resolved_log = setup_logging(log_file)
+    logger.info('Split preprocessing log file: %s', resolved_log)
     split_dataset(
         task_name=args.task_name,
         source_root=Path(args.source_root),
