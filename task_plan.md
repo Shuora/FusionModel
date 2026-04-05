@@ -139,3 +139,24 @@
 - [x] 相关测试转绿。
 - [x] 重建 MTA/MFCP 处理数据并校验计数。
 - [x] 同步更新 README。
+
+
+## Task (2026-04-04 MTA stacking 指标提升修复)
+针对你反馈的 `mta_multiclass` stacking 指标不理想，定位并修复导致泛化偏差与任务定向后处理失效的实现问题。
+
+## Plan
+1. 复核最新 MTA/USTC/binary 训练产物与分布差异，确认问题属于“数据难度 + 实现偏差”而非单点参数。
+2. 先补失败测试，覆盖：
+   - `MTA` 任务识别在包含 `IcedID` 时仍应触发；
+   - stacking 元特征 loader 不应继承训练阶段 `WeightedRandomSampler/drop_last`。
+3. 修改 `src/fusion_common.py`：
+   - 引入 deterministic meta loader（顺序、全量、无 sampler、无 drop_last）；
+   - 以 task hint + class signature 做 `mta/mfcp` 任务识别，修复 MTA 后处理漏触发；
+   - 增加 OOF-test gap 诊断日志。
+4. 回归测试并同步 README、findings、progress。
+
+## Task Status (2026-04-04 MTA stacking 指标提升修复)
+- [x] 完成根因定位与对比分析。
+- [x] 新增失败测试并确认红灯。
+- [x] 完成核心修复实现。
+- [x] 回归测试通过并完成文档同步。

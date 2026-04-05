@@ -413,10 +413,11 @@ python3 src/train_fusion_attention_stacking.py \
 `attention_stacking` 当前默认行为（无需额外参数）：
 
 - 元特征包含 `text/image/fusion` 三分支概率，并自动拼接 entropy、margin、分支一致性特征。
+- 元特征提取使用 deterministic loader（忽略训练阶段 `weighted sampler/shuffle/drop_last`），避免 OOF 评估被采样偏置放大。
 - 对每个 meta learner 自动执行 5-fold OOF 训练以减少元学习器过拟合。
 - 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
 - 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
-- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优；对 `mfcp_multiclass` 自动做 `0/4` 二分类后处理链路：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
+- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做 `0/4` 二分类后处理链路：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
 
 早停相关建议（`fusion_common.py` 当前默认行为）：
 

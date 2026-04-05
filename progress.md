@@ -59,3 +59,10 @@
 - 2026-04-04: 回归通过 `python3 -m unittest tests.test_split_data_tasks -v`（12 tests, OK）。
 - 2026-04-04: 已同步更新 README 的 MTA/MFCP 预处理命令与参数说明，新增 `--distribution_profile` 用法。
 - 2026-04-04: 已重建主仓库 `ProcessedData/mta_multiclass` 与 `ProcessedData/mfcp_multiclass`（含 `image_data`），并完成逐类计数核验；MTA 与 MFCP 的 Train/Test 计数已按论文目标对齐。
+
+- 2026-04-04: 针对你反馈的 MTA stacking 指标偏低，在 `.worktrees/codex-mta-stacking-boost` 创建隔离分支 `codex/mta-stacking-boost` 并建立回归基线。
+- 2026-04-04: 完成问题定位：MTA 最新 run 存在显著 OOF-test gap（约 0.216），并确认 class-name 硬编码未覆盖 `IcedID` 导致 MTA 定向后处理失效。
+- 2026-04-04: 按 TDD 新增失败测试 `test_build_deterministic_meta_loader_ignores_weighted_sampler` 与 `test_detect_stacking_special_tasks_supports_mta_with_icedid`，确认红灯后再实现修复。
+- 2026-04-04: 在 `src/fusion_common.py` 新增 `build_deterministic_meta_loader`、`detect_stacking_special_tasks` 与 task hint 解析逻辑；`run_stacking_experiment` 已切换到 deterministic meta loader 并加入 OOF-test gap 诊断日志。
+- 2026-04-04: 回归验证通过：`pytest -q -s tests/test_stacking_improvements.py tests/test_attention_entrypoints.py tests/test_fusion_output_artifacts.py`（30 passed）。
+- 2026-04-04: 已同步更新 README 的 stacking 默认行为说明（元特征提取数据流与 MTA 7 类识别）。
