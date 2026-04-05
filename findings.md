@@ -52,3 +52,6 @@
 - 2026-04-04 根因2 (任务识别): `run_stacking_experiment` 对 MTA 的 class-name 硬编码未包含 `IcedID`，导致 MTA 定向 gain 后处理在 7 类 MTA 数据上未触发。
 - 2026-04-04 证据: 最新 MTA run 的 meta learner 出现 `oof_macro_f1≈0.948` 但 `test_macro_f1≈0.733`（gap≈0.216），已在本次修复中加入日志级告警。
 - 2026-04-04 修复: 新增 deterministic meta loader（顺序、全量、无 sampler、无 drop_last）并接入 stacking；同时改为 task hint + class signature 的任务识别，恢复 MTA 后处理触发。
+- 2026-04-05 预处理输出改造: `ssl_tls_rgb_image.py` 原先每张图片都会 `logger.info("Saved: ...")`，在大数据集上会刷屏；现改为仅显示 `tqdm` 进度条并附带 processed/skipped 统计。
+- 2026-04-05 预处理日志落盘: `split_data.py` 与 `ssl_tls_rgb_image.py` 新增 `--log_file`，默认分别写入 `<processed_root>/metadata/split_data.log` 与 `<dataset_root>/metadata/ssl_tls_rgb_image.log`。
+- 2026-04-05 测试环境问题: `tests.test_ssl_tls_rgb_image` 在当前机器失败原因为用户目录下 cp312 的 numpy 动态库污染 py39 环境（`_multiarray_umath.cpython-312`），与本次功能改动无直接关系。
