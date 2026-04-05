@@ -46,3 +46,9 @@
 - 2026-04-04 论文分布对齐: `SourceData/MTA` 实际家族目录名为 `IcedID`（大写 D），与论文写法 `Icedid` 存在大小写差异；本次按仓库现有目录命名保留为 `IcedID`。
 - 2026-04-04 论文分布对齐: `SourceData/MFCP` 含 `Cobalt`，之前 `ProcessedData/mfcp_multiclass` 缺失并非源数据不存在，而是旧处理产物未按论文口径重建。
 - 2026-04-04 论文分布对齐: MFCP 的 PUA 可提取 session 为 6737，低于论文目标 7017；为满足目标计数，本次对 PUA 启用了有放回补齐，并为补齐样本加 `__dupN` 后缀避免文件覆盖。
+
+- 2026-04-04 MTA 指标复盘: 论文分布下 `mta_multiclass` 类别极不均衡（Train/Test 均约 `27.34:1`），明显高于 `ustc_multiclass` 的 `1.69:1`，直接限制“接近 USTC 指标”的可达上限。
+- 2026-04-04 根因1 (实现偏差): stacking 元特征此前直接使用训练 `train_loader` 提取，在 `weighted_sampler_loss` 下会继承 `WeightedRandomSampler + drop_last`，导致 OOF 评估与真实分布偏离并放大乐观偏差。
+- 2026-04-04 根因2 (任务识别): `run_stacking_experiment` 对 MTA 的 class-name 硬编码未包含 `IcedID`，导致 MTA 定向 gain 后处理在 7 类 MTA 数据上未触发。
+- 2026-04-04 证据: 最新 MTA run 的 meta learner 出现 `oof_macro_f1≈0.948` 但 `test_macro_f1≈0.733`（gap≈0.216），已在本次修复中加入日志级告警。
+- 2026-04-04 修复: 新增 deterministic meta loader（顺序、全量、无 sampler、无 drop_last）并接入 stacking；同时改为 task hint + class signature 的任务识别，恢复 MTA 后处理触发。

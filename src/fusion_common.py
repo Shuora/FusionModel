@@ -86,6 +86,49 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs"
 
+MTA_CLASS_SIGNATURES = (
+    frozenset(["dridex", "emotet", "hancitor", "qakbot", "trickbot", "ursnif"]),
+    frozenset(["dridex", "emotet", "hancitor", "icedid", "qakbot", "trickbot", "ursnif"]),
+)
+MFCP_CLASS_SIGNATURE = frozenset(["artemis", "dridex", "pua", "trickbot", "ursnif"])
+KNOWN_TASK_NAMES = {
+    "binary_benign_vs_malicious",
+    "ustc_multiclass",
+    "mta_multiclass",
+    "mfcp_multiclass",
+}
+
+
+def infer_task_name_from_data_dir(path: Optional[Union[str, os.PathLike]]) -> str:
+    if not path:
+        return ""
+    try:
+        parts = [str(p).lower() for p in Path(path).resolve().parts]
+    except Exception:
+        parts = [str(p).lower() for p in Path(path).parts]
+    for part in parts:
+        if part in KNOWN_TASK_NAMES:
+            return part
+    return ""
+
+
+def detect_stacking_special_tasks(
+    *,
+    train_classes: List[str],
+    train_image_dir: Optional[Union[str, os.PathLike]] = None,
+    train_pcap_dir: Optional[Union[str, os.PathLike]] = None,
+    explicit_task_name: str = "",
+) -> Tuple[bool, bool]:
+    class_names_lower = [str(c).strip().lower() for c in train_classes]
+    class_set = frozenset(class_names_lower)
+    task_hint = str(explicit_task_name or "").strip().lower()
+    if not task_hint:
+        task_hint = infer_task_name_from_data_dir(train_image_dir) or infer_task_name_from_data_dir(train_pcap_dir)
+
+    is_mta_task = bool(task_hint == "mta_multiclass" or class_set in MTA_CLASS_SIGNATURES)
+    is_mfcp_task = bool(task_hint == "mfcp_multiclass" or class_set == MFCP_CLASS_SIGNATURE)
+    return is_mta_task, is_mfcp_task
+
 
 def resolve_charbert_src() -> str:
     return str(Path(__file__).resolve().parent / 'CharBERT' / 'src')
@@ -889,6 +932,43 @@ def load_fusion_data(
     dataloader.classes = dataset.classes  # type: ignore[attr-defined]
     logger.info("融合数据加载完成，类别数: %s, 样本总数: %s", len(dataset.classes), len(dataset))
     return dataloader, dataset.classes
+
+
+def build_deterministic_meta_loader(data_loader: DataLoader) -> DataLoader:
+    """Build an evaluation-style loader from an existing loader's dataset.
+
+    This removes train-time sampler/shuffle/drop_last effects so stacking meta
+    features are generated exactly once per underlying sample.
+    """
+
+    dataset = data_loader.dataset
+    batch_size = int(getattr(data_loader, "batch_size", 1) or 1)
+    num_workers = int(getattr(data_loader, "num_workers", 0) or 0)
+    pin_memory = bool(getattr(data_loader, "pin_memory", False))
+    persistent_workers = bool(getattr(data_loader, "persistent_workers", False))
+
+    kwargs: Dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "drop_last": False,
+    }
+    collate_fn = getattr(data_loader, "collate_fn", None)
+    if collate_fn is not None:
+        kwargs["collate_fn"] = collate_fn
+    if num_workers > 0:
+        kwargs["persistent_workers"] = persistent_workers
+        prefetch_factor = getattr(data_loader, "prefetch_factor", None)
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(prefetch_factor)
+
+    deterministic_loader = DataLoader(dataset, **kwargs)
+    if hasattr(data_loader, "class_counts"):
+        deterministic_loader.class_counts = data_loader.class_counts  # type: ignore[attr-defined]
+    if hasattr(data_loader, "classes"):
+        deterministic_loader.classes = data_loader.classes  # type: ignore[attr-defined]
+    return deterministic_loader
 
 
 class CharBERTTextEncoder(nn.Module):
@@ -2803,25 +2883,34 @@ def run_stacking_experiment(
     )
     log_saved(run_logger, report_path, "report")
 
+    meta_train_loader = build_deterministic_meta_loader(train_loader)
+    meta_test_loader = build_deterministic_meta_loader(test_loader)
     meta_features, meta_labels = generate_meta_features(
         model.text_encoder,
         model.mobilevit,
-        train_loader,
+        meta_train_loader,
         device,
         fusion_model=model,
     )
     test_meta_features, test_meta_labels = generate_meta_features(
         model.text_encoder,
         model.mobilevit,
-        test_loader,
+        meta_test_loader,
         device,
         fusion_model=model,
     )
+    run_logger.info(
+        "meta feature extraction completed: train_samples=%s test_samples=%s",
+        int(len(meta_labels)),
+        int(len(test_meta_labels)),
+    )
     sample_weights = build_inverse_frequency_sample_weights(meta_labels)
     class_count = len(train_classes)
-    class_names_lower = [str(c).strip().lower() for c in train_classes]
-    is_mta_task = class_names_lower == ["dridex", "emotet", "hancitor", "qakbot", "trickbot", "ursnif"]
-    is_mfcp_task = class_names_lower == ["artemis", "dridex", "pua", "trickbot", "ursnif"]
+    is_mta_task, is_mfcp_task = detect_stacking_special_tasks(
+        train_classes=train_classes,
+        train_image_dir=train_image_dir,
+        train_pcap_dir=train_pcap_dir,
+    )
     mta_gain_target_classes: List[int] = []
     if is_mta_task and len(meta_labels):
         mta_classes, mta_counts = np.unique(meta_labels, return_counts=True)
@@ -2963,6 +3052,15 @@ def run_stacking_experiment(
 
         tag = f"{ensemble_tag}_{method}"
         run_logger.info("[%s] acc=%.4f macro_f1=%.4f", tag, acc, macro_f1)
+        oof_test_gap = float(oof_macro_f1 - macro_f1)
+        if oof_test_gap > 0.12:
+            run_logger.warning(
+                "[%s] OOF-test gap is large: oof_macro_f1=%.4f test_macro_f1=%.4f gap=%.4f",
+                tag,
+                oof_macro_f1,
+                macro_f1,
+                oof_test_gap,
+            )
         if report:
             run_logger.info("[%s] 分类报告:\n%s", tag, report)
         run_logger.info("[%s] 混淆矩阵:\n%s", tag, cm)

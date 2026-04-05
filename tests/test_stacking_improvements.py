@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -54,6 +56,31 @@ class StackingImprovementTests(unittest.TestCase):
         self.assertEqual(w.shape[0], labels.shape[0])
         self.assertGreater(float(w[labels == 2].mean()), float(w[labels == 0].mean()))
         self.assertGreater(float(w[labels == 1].mean()), float(w[labels == 0].mean()))
+
+    def test_build_deterministic_meta_loader_ignores_weighted_sampler(self) -> None:
+        features = torch.arange(10, dtype=torch.float32).unsqueeze(1)
+        pcap = torch.arange(10, dtype=torch.int64).unsqueeze(1)
+        labels = torch.tensor([0, 1] * 5, dtype=torch.int64)
+        dataset = TensorDataset(features, pcap, labels)
+        sampler = WeightedRandomSampler(torch.ones(10, dtype=torch.double), num_samples=10, replacement=True)
+        sampled_loader = DataLoader(dataset, batch_size=4, sampler=sampler, drop_last=True)
+
+        deterministic_loader = fc.build_deterministic_meta_loader(sampled_loader)
+
+        observed = []
+        for batch in deterministic_loader:
+            observed.extend(batch[0].squeeze(1).tolist())
+        self.assertEqual(len(observed), 10)
+        self.assertListEqual(observed, list(range(10)))
+
+    def test_detect_stacking_special_tasks_supports_mta_with_icedid(self) -> None:
+        classes = ["Dridex", "Emotet", "Hancitor", "IcedID", "Qakbot", "Trickbot", "Ursnif"]
+        is_mta, is_mfcp = fc.detect_stacking_special_tasks(
+            train_classes=classes,
+            train_image_dir="/tmp/ProcessedData/mta_multiclass/image_data/Train",
+        )
+        self.assertTrue(is_mta)
+        self.assertFalse(is_mfcp)
 
     def test_weighted_soft_voting_combines_probabilities(self) -> None:
         p1 = np.array([[0.9, 0.1], [0.2, 0.8]], dtype=np.float64)
