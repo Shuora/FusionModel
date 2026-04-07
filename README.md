@@ -251,19 +251,39 @@ python3 src/train_fusion_attention_stacking.py \
   --task_name binary_benign_vs_malicious \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention_stacking \
-  --meta_methods xgboost \
+  --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_calibration temp \
   --stacking_threshold_objective macro_f1_minority_recall \
   --stacking_minority_lambda 0.3 \
   --stacking_oof_folds 5 \
+  --epochs 40 \
+  --lr 3e-4 \
+  --patience 8 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
   --num_workers 4 \
   --prefetch_factor 2 \
-  --device auto
+  --pin_memory \
+  --persistent_workers \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
 ```
 
 ### 实验二：`ustc_multiclass`
@@ -291,19 +311,39 @@ python3 src/train_fusion_attention_stacking.py \
   --task_name ustc_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking \
-  --meta_methods xgboost \
+  --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_calibration temp \
   --stacking_threshold_objective macro_f1_minority_recall \
   --stacking_minority_lambda 0.3 \
   --stacking_oof_folds 5 \
+  --epochs 40 \
+  --lr 3e-4 \
+  --patience 8 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
   --num_workers 4 \
   --prefetch_factor 2 \
-  --device auto
+  --pin_memory \
+  --persistent_workers \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
 ```
 
 ### 实验三：`mta_multiclass`
@@ -356,7 +396,14 @@ python3 src/train_fusion_attention_stacking.py \
   --num_workers 4 \
   --prefetch_factor 2 \
   --pin_memory \
-  --persistent_workers
+  --persistent_workers \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
 ```
 
 ### 实验四：`mfcp_multiclass`
@@ -409,26 +456,48 @@ python3 src/train_fusion_attention_stacking.py \
   --num_workers 4 \
   --prefetch_factor 2 \
   --pin_memory \
-  --persistent_workers
+  --persistent_workers \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
 ```
 
 ## Char-aware 训练命令（四任务独立）
 
-下面给出四个任务的 `attention` 独立命令。`attention_stacking` 也可直接使用同样的 char-aware 参数（在对应 stacking 命令末尾追加即可）。
+下面给出四个任务的 `attention_stacking` 独立命令，统一采用当前推荐稳定参数（`lr=3e-4`、`epochs=40`、`patience=8`）并显式启用 `charaware`。
 
 ### 1) `binary_benign_vs_malicious`
 
 ```bash
-python3 src/train_fusion_attention.py \
+python3 src/train_fusion_attention_stacking.py \
   --task_name binary_benign_vs_malicious \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention_stacking \
+  --meta_methods xgboost,lightgbm,catboost \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
+  --epochs 40 \
+  --patience 8 \
+  --lr 3e-4 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --num_workers 4 \
   --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers \
   --device auto \
   --charbert_mode charaware \
   --char_vocab hex \
@@ -441,16 +510,31 @@ python3 src/train_fusion_attention.py \
 ### 2) `ustc_multiclass`
 
 ```bash
-python3 src/train_fusion_attention.py \
+python3 src/train_fusion_attention_stacking.py \
   --task_name ustc_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking \
+  --meta_methods xgboost,lightgbm,catboost \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
+  --epochs 40 \
+  --patience 8 \
+  --lr 3e-4 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --num_workers 4 \
   --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers \
   --device auto \
   --charbert_mode charaware \
   --char_vocab hex \
@@ -463,16 +547,31 @@ python3 src/train_fusion_attention.py \
 ### 3) `mta_multiclass`
 
 ```bash
-python3 src/train_fusion_attention.py \
+python3 src/train_fusion_attention_stacking.py \
   --task_name mta_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_stacking \
+  --meta_methods xgboost,lightgbm,catboost \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
+  --epochs 40 \
+  --patience 8 \
+  --lr 3e-4 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --num_workers 4 \
   --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers \
   --device auto \
   --charbert_mode charaware \
   --char_vocab hex \
@@ -485,16 +584,31 @@ python3 src/train_fusion_attention.py \
 ### 4) `mfcp_multiclass`
 
 ```bash
-python3 src/train_fusion_attention.py \
+python3 src/train_fusion_attention_stacking.py \
   --task_name mfcp_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention_stacking \
+  --meta_methods xgboost,lightgbm,catboost \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
+  --epochs 40 \
+  --patience 8 \
+  --lr 3e-4 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --num_workers 4 \
   --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers \
   --device auto \
   --charbert_mode charaware \
   --char_vocab hex \
