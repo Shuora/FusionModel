@@ -82,6 +82,17 @@ class StackingImprovementTests(unittest.TestCase):
         self.assertTrue(is_mta)
         self.assertFalse(is_mfcp)
 
+    def test_detect_stacking_special_tasks_supports_mfcp_with_cobalt(self) -> None:
+        classes = ["Artemis", "Cobalt", "Dridex", "PUA", "Trickbot", "Ursnif"]
+        is_mta, is_mfcp = fc.detect_stacking_special_tasks(train_classes=classes)
+        self.assertFalse(is_mta)
+        self.assertTrue(is_mfcp)
+
+    def test_resolve_mfcp_pair_class_indices_by_name(self) -> None:
+        classes = ["Artemis", "Cobalt", "Dridex", "PUA", "Trickbot", "Ursnif"]
+        pair = fc.resolve_mfcp_pair_class_indices(classes)
+        self.assertEqual(pair, (0, 5))
+
     def test_weighted_soft_voting_combines_probabilities(self) -> None:
         p1 = np.array([[0.9, 0.1], [0.2, 0.8]], dtype=np.float64)
         p2 = np.array([[0.6, 0.4], [0.7, 0.3]], dtype=np.float64)
