@@ -27,6 +27,15 @@ class AttentionEntrypointTests(unittest.TestCase):
         self.assertEqual(args.task_name, "mta_multiclass")
         self.assertEqual(args.meta_methods, "xgboost")
 
+    def test_attention_stacking_parser_has_two_level_args(self) -> None:
+        parser = build_attention_stacking_parser()
+        args = parser.parse_args(["--task_name", "mta_multiclass"])
+        self.assertEqual(args.stacking_level, "two_level")
+        self.assertEqual(args.stacking_calibration, "temp")
+        self.assertEqual(args.stacking_threshold_objective, "macro_f1_minority_recall")
+        self.assertAlmostEqual(args.stacking_minority_lambda, 0.3)
+        self.assertEqual(args.stacking_oof_folds, 5)
+
     def test_attention_parser_has_charaware_args_with_compatible_defaults(self) -> None:
         parser = build_attention_parser()
         args = parser.parse_args(["--task_name", "binary_benign_vs_malicious"])

@@ -91,3 +91,15 @@
 - 2026-04-07: 完成 `src/fusion_common.py` 升级：新增 CLI 参数、kwargs 透传、`initialize_fusion_model`/`run_*_experiment` 参数链路与 `CharBERTTextEncoder` 新接口适配。
 - 2026-04-07: 完成 `README.md` 同步：新增 char-aware 可选参数列表、模式说明与最小启用示例。
 - 2026-04-07: 目标回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_run_all_modes tests.test_fusion_output_artifacts tests.test_charbert_loader`（26 tests, OK）。
+
+- 2026-04-07: 按你“inline + worktree”要求在 `.worktrees/codex-two-level-stacking` 启动二层 stacking 改造，先完成基线校验：`attention_entrypoints + fusion_output_artifacts + stacking_improvements` 共 34 tests, OK。
+- 2026-04-07: 按 TDD 新增 two-level 相关测试（参数透传、校准、Level-2 特征、阈值优化、编排降级、报告字段），红灯验证失败点为新增函数/参数缺失。
+- 2026-04-07: 完成参数接线：`add_common_args/build_common_kwargs/run_stacking_experiment` 已支持 five new stacking args，并输出 stacking config 日志。
+- 2026-04-07: 完成能力实现：新增 multiclass calibration（temp/isotonic）、ECE/Brier、Level-2 特征构造、per-class threshold、two-level blender OOF 路径、effective-level 自动降级。
+- 2026-04-07: 完成主链路接入：`run_stacking_experiment` 在可用 learner>=2 时新增 `two_level_blender` 结果落盘；保留单层 method 与 soft-voting 对照。
+- 2026-04-07: 完成 README 同步：四个任务的 `attention_stacking` 命令和参数说明已加入 two-level 相关参数与默认行为说明。
+- 2026-04-07: 完成回归验证：`python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_run_all_modes -v`（47 tests, OK）。
+- 2026-04-07: 根据你“还有什么没实现”反馈补齐设计缺口：新增 pairwise-KL 特征、hard-sample factor 加权、two-level oof-test gap 字段与告警。
+- 2026-04-07: 补齐后再次回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_run_all_modes -v`（49 tests, OK）。
+- 2026-04-07: 根据你“再仔细检查”反馈继续补齐：修复 two-level postprocess 参数接线（`threshold_objective/objective_value`），并把 `single_layer_baseline` 正式接入 `method_results` 主流程。
+- 2026-04-07: 增补测试并回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_run_all_modes -v`（52 tests, OK）。

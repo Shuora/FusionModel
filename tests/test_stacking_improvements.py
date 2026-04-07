@@ -347,6 +347,161 @@ class StackingImprovementTests(unittest.TestCase):
         )
         self.assertGreaterEqual(fc.score_pair_f1(labels, tuned_preds, class_a=0, class_b=4), base_pair_f1)
 
+    def test_tune_and_apply_multiclass_temperature_improves_nll_toy(self) -> None:
+        labels = np.array([0, 1, 2, 0, 1, 2], dtype=np.int64)
+        probs = np.array(
+            [
+                [0.90, 0.05, 0.05],
+                [0.70, 0.20, 0.10],
+                [0.70, 0.20, 0.10],
+                [0.55, 0.25, 0.20],
+                [0.30, 0.40, 0.30],
+                [0.40, 0.40, 0.20],
+            ],
+            dtype=np.float64,
+        )
+        base_nll = fc.log_loss(labels, probs, labels=[0, 1, 2])
+        temperature = fc.tune_multiclass_temperature(labels=labels, probs=probs, grid=[0.7, 1.0, 1.3, 1.6])
+        calibrated = fc.apply_multiclass_temperature(probs=probs, temperature=temperature)
+        tuned_nll = fc.log_loss(labels, calibrated, labels=[0, 1, 2])
+        self.assertLessEqual(tuned_nll, base_nll + 1e-9)
+
+    def test_compute_calibration_metrics_outputs_valid_ranges(self) -> None:
+        labels = np.array([0, 1, 0, 1], dtype=np.int64)
+        probs = np.array([[0.8, 0.2], [0.4, 0.6], [0.55, 0.45], [0.3, 0.7]], dtype=np.float64)
+        metrics = fc.compute_calibration_metrics(labels=labels, probs=probs, n_bins=10)
+        self.assertIn("ece", metrics)
+        self.assertIn("brier", metrics)
+        self.assertGreaterEqual(metrics["ece"], 0.0)
+        self.assertGreaterEqual(metrics["brier"], 0.0)
+
+    def test_build_level2_features_combines_probs_and_uncertainty(self) -> None:
+        p1 = np.array([[0.8, 0.2], [0.3, 0.7]], dtype=np.float64)
+        p2 = np.array([[0.6, 0.4], [0.9, 0.1]], dtype=np.float64)
+        feat = fc.build_level2_features({"xgboost": p1, "lightgbm": p2})
+        self.assertEqual(feat.shape[0], 2)
+        self.assertGreater(feat.shape[1], 4)
+
+    def test_build_level2_features_pairwise_kl_is_zero_when_models_identical(self) -> None:
+        p1 = np.array([[0.8, 0.2], [0.3, 0.7]], dtype=np.float64)
+        p2 = np.array([[0.8, 0.2], [0.3, 0.7]], dtype=np.float64)
+        kl = fc.compute_pairwise_kl_features({"xgboost": p1, "lightgbm": p2})
+        self.assertEqual(kl.shape, (2, 1))
+        self.assertTrue(np.allclose(kl, 0.0, atol=1e-8))
+
+    def test_build_hard_sample_factors_prioritizes_low_confidence(self) -> None:
+        p1 = np.array([[0.95, 0.05], [0.55, 0.45]], dtype=np.float64)
+        p2 = np.array([[0.90, 0.10], [0.51, 0.49]], dtype=np.float64)
+        hard = fc.build_hard_sample_factors({"xgboost": p1, "lightgbm": p2})
+        self.assertEqual(hard.shape, (2,))
+        self.assertGreater(float(hard[1]), float(hard[0]))
+        self.assertAlmostEqual(float(np.mean(hard)), 1.0, places=6)
+
+    def test_tune_per_class_thresholds_improves_minority_recall(self) -> None:
+        labels = np.array([0, 0, 0, 1, 1, 1], dtype=np.int64)
+        probs = np.array(
+            [
+                [0.80, 0.20],
+                [0.70, 0.30],
+                [0.65, 0.35],
+                [0.55, 0.45],
+                [0.60, 0.40],
+                [0.52, 0.48],
+            ],
+            dtype=np.float64,
+        )
+        base_preds = np.argmax(probs, axis=1)
+        base_rec = fc.recall_score(labels, base_preds, labels=[1], average="macro", zero_division=0)
+        tau = fc.tune_per_class_thresholds(
+            labels=labels,
+            probs=probs,
+            minority_classes=[1],
+            objective="macro_f1_minority_recall",
+            minority_lambda=0.5,
+            grid=[0.7, 0.85, 1.0, 1.15, 1.3],
+        )
+        tuned_preds = fc.apply_per_class_thresholds(probs=probs, thresholds=tau)
+        tuned_rec = fc.recall_score(labels, tuned_preds, labels=[1], average="macro", zero_division=0)
+        self.assertGreaterEqual(tuned_rec, base_rec)
+
+    def test_compute_threshold_objective_value_matches_definition(self) -> None:
+        labels = np.array([0, 0, 1, 1], dtype=np.int64)
+        preds = np.array([0, 1, 1, 1], dtype=np.int64)
+        macro = fc.f1_score(labels, preds, average="macro", zero_division=0)
+        minor = fc.recall_score(labels, preds, labels=[1], average="macro", zero_division=0)
+        score = fc.compute_threshold_objective_value(
+            labels=labels,
+            preds=preds,
+            minority_classes=[1],
+            objective="macro_f1_minority_recall",
+            minority_lambda=0.3,
+        )
+        self.assertAlmostEqual(score, macro + 0.3 * minor, places=8)
+
+    def test_resolve_effective_stacking_level_fallbacks_to_single(self) -> None:
+        level = fc.resolve_effective_stacking_level(requested_level="two_level", successful_methods=["xgboost"])
+        self.assertEqual(level, "single")
+
+    def test_two_level_stacking_uses_level2_when_multiple_methods_available(self) -> None:
+        y = np.array([0, 0, 1, 1], dtype=np.int64)
+        p1 = np.array([[0.8, 0.2], [0.7, 0.3], [0.6, 0.4], [0.4, 0.6]], dtype=np.float64)
+        p2 = np.array([[0.7, 0.3], [0.6, 0.4], [0.3, 0.7], [0.2, 0.8]], dtype=np.float64)
+        out = fc.run_level2_blender_oof(
+            labels=y,
+            level1_oof_probs={"xgboost": p1, "lightgbm": p2},
+            level1_test_probs={"xgboost": p1, "lightgbm": p2},
+            oof_folds=2,
+            minority_classes=[1],
+            threshold_objective="macro_f1_minority_recall",
+            minority_lambda=0.3,
+        )
+        self.assertIn("preds", out)
+        self.assertIn("probs", out)
+        self.assertIn("thresholds", out)
+        self.assertIn("threshold_objective_value", out)
+        self.assertEqual(out["probs"].shape, p1.shape)
+
+    def test_build_single_layer_baseline_result_uses_best_oof_method(self) -> None:
+        entries = [
+            {"method": "xgboost", "acc": 0.7, "macro_f1": 0.68, "oof_acc": 0.71, "oof_macro_f1": 0.66},
+            {"method": "lightgbm", "acc": 0.72, "macro_f1": 0.70, "oof_acc": 0.73, "oof_macro_f1": 0.74},
+            {"method": "soft_voting", "acc": 0.75, "macro_f1": 0.73, "oof_acc": 0.74, "oof_macro_f1": 0.72},
+        ]
+        summary = fc.build_single_layer_baseline_result(entries)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["method"], "single_layer_baseline")
+        self.assertEqual(summary["source_method"], "lightgbm")
+        self.assertAlmostEqual(summary["oof_macro_f1"], 0.74)
+
+    def test_single_layer_baseline_returns_none_when_no_valid_method(self) -> None:
+        entries = [
+            {"method": "soft_voting", "oof_macro_f1": 0.71},
+            {"method": "two_level_blender", "oof_macro_f1": 0.73},
+            {"method": "xgboost", "failed": True, "oof_macro_f1": 0.8},
+        ]
+        summary = fc.build_single_layer_baseline_result(entries)
+        self.assertIsNone(summary)
+
+    def test_build_two_level_postprocess_payload_contains_required_fields(self) -> None:
+        payload = fc.build_two_level_postprocess_payload(
+            stacking_level="two_level",
+            calibration={"method": "temp", "ece": 0.03, "brier": 0.12},
+            thresholds=np.array([1.0, 0.9], dtype=np.float64),
+            minority_classes=[1],
+            minority_recall_before=0.20,
+            minority_recall_after=0.45,
+            threshold_objective="macro_f1_minority_recall",
+            objective_value=0.812,
+            oof_test_gap=0.08,
+        )
+        self.assertEqual(payload["stacking_level"], "two_level")
+        self.assertIn("calibration", payload)
+        self.assertIn("thresholds", payload)
+        self.assertIn("minority_metrics", payload)
+        self.assertEqual(payload["threshold_objective"], "macro_f1_minority_recall")
+        self.assertAlmostEqual(payload["objective_value"], 0.812)
+        self.assertAlmostEqual(payload["oof_test_gap"], 0.08)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -328,6 +328,39 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertEqual(kwargs["char_fusion"], "concat")
         self.assertEqual(kwargs["char_fusion_layers"], "last")
 
+    def test_build_common_kwargs_contains_two_level_stacking_flags(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args(
+            [
+                "--task_name",
+                "mta_multiclass",
+                "--stacking_level",
+                "two_level",
+                "--stacking_calibration",
+                "temp",
+                "--stacking_threshold_objective",
+                "macro_f1_minority_recall",
+                "--stacking_minority_lambda",
+                "0.4",
+                "--stacking_oof_folds",
+                "7",
+            ]
+        )
+
+        with mock.patch.object(
+            fc,
+            "resolve_task_dataset_dirs",
+            return_value=("train_img", "train_pcap", "test_img", "test_pcap", "mta_multiclass"),
+        ):
+            kwargs = fc.build_common_kwargs(args)
+
+        self.assertEqual(kwargs["stacking_level"], "two_level")
+        self.assertEqual(kwargs["stacking_calibration"], "temp")
+        self.assertEqual(kwargs["stacking_threshold_objective"], "macro_f1_minority_recall")
+        self.assertAlmostEqual(kwargs["stacking_minority_lambda"], 0.4)
+        self.assertEqual(kwargs["stacking_oof_folds"], 7)
+
     def test_training_loader_drops_tail_batch_but_eval_loader_keeps_it(self) -> None:
         class FakeFusionDataset:
             def __init__(self, *args, **kwargs) -> None:
