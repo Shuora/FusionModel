@@ -55,3 +55,18 @@
 - 2026-04-05 预处理输出改造: `ssl_tls_rgb_image.py` 原先每张图片都会 `logger.info("Saved: ...")`，在大数据集上会刷屏；现改为仅显示 `tqdm` 进度条并附带 processed/skipped 统计。
 - 2026-04-05 预处理日志落盘: `split_data.py` 与 `ssl_tls_rgb_image.py` 新增 `--log_file`，默认分别写入 `<processed_root>/metadata/split_data.log` 与 `<dataset_root>/metadata/ssl_tls_rgb_image.log`。
 - 2026-04-05 测试环境问题: `tests.test_ssl_tls_rgb_image` 在当前机器失败原因为用户目录下 cp312 的 numpy 动态库污染 py39 环境（`_multiarray_umath.cpython-312`），与本次功能改动无直接关系。
+
+- 2026-04-06 MFCP 对齐 MTA 改动: `run_stacking_experiment` 的 MFCP pair 后处理原先硬编码 `class_a=0,class_b=4`，在论文分布对齐后引入 `Cobalt` 的 6 类 MFCP 下会出现索引漂移风险。
+- 2026-04-06 MFCP 对齐 MTA 改动: 已改为按类名解析 pair（`Artemis/Ursnif`）并在 `method` 与 `soft_voting` 两条路径统一生效，避免依赖类别顺序。
+- 2026-04-06 任务识别鲁棒性: `MFCP` class signature 从单一 5 类扩展为 5/6 类双签名，保证含 `Cobalt` 时仍触发 MFCP 定向后处理。
+- 2026-04-06 可观测性补强: `metrics.json` 的 `postprocess` 新增 `mfcp_pair_classes`，用于确认每次 run 实际执行的 pair 类别。
+- 2026-04-06 命令文档同步: `README.md` 的 `mfcp_multiclass` stacking 命令已对齐 MTA 当前推荐稳定配置（多 meta learner + focal/class-balance + val_f1 early-stop + reduce scheduler）。
+
+- 2026-04-07 CharBERT 现状复核: `src/CharBERT/src/model.py` 当前是轻量 byte Transformer（Embedding + TransformerEncoder），不含独立 char encoder 与分层 token/char 融合机制。
+- 2026-04-07 融合链路兼容性: `src/fusion_common.py` 当前 cross-attention 主体依赖文本序列特征（`Q=image, K/V=text`），文本分支内部升级为 char-aware 后可保持外部接口不变。
+- 2026-04-07 设计结论: 在“训练入口不变”约束下，推荐 `legacy/charaware` 双模式兼容升级；默认保留 `legacy`，通过参数显式启用 `charaware`，以降低回归风险。
+
+- 2026-04-07 实现落地: `src/CharBERT/src/model.py` 已新增 `charaware` 模式，包含 token/char 双路径、char-CNN 编码与分层融合（`gated/add/concat`）。
+- 2026-04-07 兼容策略: `src/fusion_common.py` 新增 `--charbert_mode` 等参数并透传到文本编码器；默认仍 `legacy`，现有 attention/stacking 命令不改也可跑。
+- 2026-04-07 接口兼容: 新模型提供 `encode_tokens`，`CharBERTTextEncoder` 优先走该接口；旧 `legacy` 路径仍可用。
+- 2026-04-07 验证结果: 在清理 Python 用户站点污染后（`unset PYTHONPATH PYTHONHOME PYTHONUSERBASE && PYTHONNOUSERSITE=1`），目标测试集 `26 tests` 全部通过。

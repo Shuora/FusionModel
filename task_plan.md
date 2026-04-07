@@ -174,3 +174,46 @@
 - [x] 完成代码改造。
 - [x] 完成 README 同步。
 - [x] 完成语法校验；单测受本地 numpy 环境污染影响未全绿（见 progress/findings）。
+
+## Task (2026-04-06 参照 MTA 最新改动对齐 MFCP 训练/验证)
+将 `mfcp_multiclass` 的 stacking 训练/验证后处理链路对齐到 MTA 近期“按任务语义而非硬编码索引”思路，修复新增 `Cobalt` 后 `0/4` 索引漂移导致的校正失效/误校正风险。
+
+## Plan
+1. 复核 `src/fusion_common.py` 中 MTA 最新改造点（任务识别鲁棒性、deterministic meta loader）并定位 MFCP 仍使用固定索引的路径。
+2. 将 MFCP pair 校正从固定 `class_a=0,class_b=4` 改为按类名解析（`Artemis/Ursnif`），同时兼容 5 类与 6 类（含 `Cobalt`）分布。
+3. 补充回归测试：覆盖 MFCP 含 `Cobalt` 的任务识别与 pair 索引解析。
+4. 运行目标测试并同步 README / findings / progress。
+
+## Task Status (2026-04-06 MFCP 训练/验证对齐)
+- [x] 完成 MTA/MFCP 差异复核与根因定位。
+- [x] 完成 MFCP pair 后处理按类名解析改造。
+- [x] 补充 MFCP 含 `Cobalt` 回归测试。
+- [x] 运行目标测试并记录结果。
+
+## Task (2026-04-06 更新 MFCP 训练命令)
+更新 `README.md` 中 `mfcp_multiclass` 的 stacking 训练命令，使其与当前 MTA 推荐稳定配置保持一致，避免示例命令与现有调优实践不一致。
+
+## Plan
+1. 定位 README 的 `mfcp_multiclass` 训练命令区块。
+2. 仅修改 `attention_stacking` 命令参数，保持入口脚本与路径不变。
+3. 同步更新 findings/progress。
+
+## Task Status (2026-04-06 MFCP 训练命令更新)
+- [x] README 命令已更新。
+- [x] findings/progress 已同步。
+
+## Task (2026-04-07 CharBERT 兼容式升级设计)
+在不改变现有 attention/attention_stacking 训练入口的前提下，将当前“命名为 CharBERT 的轻量 byte Transformer”升级为更接近真正 CharBERT 思想的 char-aware byte encoder，并先产出设计 spec。
+
+## Plan
+1. 审核当前 `src/CharBERT/src` 与 `src/fusion_common.py` 的文本分支实现，确认与真正 CharBERT 的差距。
+2. 在“兼容式升级”约束下形成多方案对比，确定推荐方案（char-aware + 分层门控融合）。
+3. 编写设计文档到 `docs/superpowers/specs/2026-04-07-charaware-byte-charbert-design.md`，覆盖架构、数据流、参数兼容、checkpoint 兼容、验证与回滚。
+4. 完成 spec 自检并同步 `findings.md`、`progress.md`。
+
+## Task Status (2026-04-07 CharBERT 兼容式升级实现)
+- [x] 先补测试：新增 CLI/kwargs 参数透传与 `charaware` 构建回归测试并确认红灯。
+- [x] 完成 `src/CharBERT/src/model.py` 的 char-aware 升级（char encoder + layer-wise fusion）。
+- [x] 完成 `src/fusion_common.py` 参数扩展与模型初始化透传，保持入口脚本不变。
+- [x] 同步更新 `README.md` 参数文档与启用示例。
+- [x] 运行目标测试并通过。

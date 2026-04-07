@@ -90,7 +90,11 @@ MTA_CLASS_SIGNATURES = (
     frozenset(["dridex", "emotet", "hancitor", "qakbot", "trickbot", "ursnif"]),
     frozenset(["dridex", "emotet", "hancitor", "icedid", "qakbot", "trickbot", "ursnif"]),
 )
-MFCP_CLASS_SIGNATURE = frozenset(["artemis", "dridex", "pua", "trickbot", "ursnif"])
+MFCP_CLASS_SIGNATURES = (
+    frozenset(["artemis", "dridex", "pua", "trickbot", "ursnif"]),
+    frozenset(["artemis", "cobalt", "dridex", "pua", "trickbot", "ursnif"]),
+)
+MFCP_PAIR_CLASS_NAMES = ("artemis", "ursnif")
 KNOWN_TASK_NAMES = {
     "binary_benign_vs_malicious",
     "ustc_multiclass",
@@ -126,8 +130,21 @@ def detect_stacking_special_tasks(
         task_hint = infer_task_name_from_data_dir(train_image_dir) or infer_task_name_from_data_dir(train_pcap_dir)
 
     is_mta_task = bool(task_hint == "mta_multiclass" or class_set in MTA_CLASS_SIGNATURES)
-    is_mfcp_task = bool(task_hint == "mfcp_multiclass" or class_set == MFCP_CLASS_SIGNATURE)
+    is_mfcp_task = bool(task_hint == "mfcp_multiclass" or class_set in MFCP_CLASS_SIGNATURES)
     return is_mta_task, is_mfcp_task
+
+
+def resolve_pair_class_indices(class_names: List[str], class_a_name: str, class_b_name: str) -> Optional[Tuple[int, int]]:
+    name_to_idx = {str(name).strip().lower(): idx for idx, name in enumerate(class_names)}
+    class_a = name_to_idx.get(str(class_a_name).strip().lower())
+    class_b = name_to_idx.get(str(class_b_name).strip().lower())
+    if class_a is None or class_b is None or class_a == class_b:
+        return None
+    return int(class_a), int(class_b)
+
+
+def resolve_mfcp_pair_class_indices(class_names: List[str]) -> Optional[Tuple[int, int]]:
+    return resolve_pair_class_indices(class_names, MFCP_PAIR_CLASS_NAMES[0], MFCP_PAIR_CLASS_NAMES[1])
 
 
 def resolve_charbert_src() -> str:
@@ -986,6 +1003,12 @@ class CharBERTTextEncoder(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.3,
+        charbert_mode: str = "legacy",
+        char_vocab: str = "hex",
+        char_emb_dim: int = 32,
+        char_cnn_channels: int = 64,
+        char_fusion: str = "gated",
+        char_fusion_layers: str = "all",
     ):
         super().__init__()
         self.feature_dim = feature_dim
@@ -1011,6 +1034,12 @@ class CharBERTTextEncoder(nn.Module):
             cfg.num_heads = num_heads
             cfg.dropout = dropout
             cfg.max_len = seq_len
+            cfg.mode = charbert_mode
+            cfg.char_vocab = char_vocab
+            cfg.char_emb_dim = int(char_emb_dim)
+            cfg.char_cnn_channels = int(char_cnn_channels)
+            cfg.char_fusion = char_fusion
+            cfg.char_fusion_layers = char_fusion_layers
 
             self.charbert = build_model(cfg, num_labels=feature_dim)
             self.pad_id = getattr(cfg, "pad_id", cfg.vocab_size - 3)
@@ -1027,7 +1056,11 @@ class CharBERTTextEncoder(nn.Module):
             return None, None
 
         attention_mask = (x != self.pad_id).long()
-        if hasattr(self.charbert, "embedding") and hasattr(self.charbert, "encoder"):
+        if hasattr(self.charbert, "encode_tokens"):
+            enc, pad_mask = self.charbert.encode_tokens(x, attention_mask=attention_mask)
+            return enc, pad_mask
+
+        if hasattr(self.charbert, "embedding") and callable(getattr(self.charbert, "encoder", None)):
             emb = self.charbert.embedding(x)
             if hasattr(self.charbert, "pos_encoder"):
                 emb = self.charbert.pos_encoder(emb)
@@ -1069,7 +1102,18 @@ class CharBERTTextEncoder(nn.Module):
 class AttentionFusionModel(nn.Module):
     """Cross-attention fusion model."""
 
-    def __init__(self, num_classes: int = 10, attention_dim: int = 256, char_hidden_size: int = 128):
+    def __init__(
+        self,
+        num_classes: int = 10,
+        attention_dim: int = 256,
+        char_hidden_size: int = 128,
+        charbert_mode: str = "legacy",
+        char_vocab: str = "hex",
+        char_emb_dim: int = 32,
+        char_cnn_channels: int = 64,
+        char_fusion: str = "gated",
+        char_fusion_layers: str = "all",
+    ):
         super().__init__()
 
         mv_cfg = MobileViTConfig()
@@ -1085,6 +1129,12 @@ class AttentionFusionModel(nn.Module):
             num_layers=2,
             num_heads=4,
             dropout=0.3,
+            charbert_mode=charbert_mode,
+            char_vocab=char_vocab,
+            char_emb_dim=char_emb_dim,
+            char_cnn_channels=char_cnn_channels,
+            char_fusion=char_fusion,
+            char_fusion_layers=char_fusion_layers,
         )
         self.pad_id = getattr(self.text_encoder, "pad_id", 256)
 
@@ -1132,13 +1182,32 @@ class AttentionFusionModel(nn.Module):
         return logits
 
 
-def initialize_fusion_model(num_classes: int, fusion_mode: str = "attention", attention_dim: int = 256) -> nn.Module:
+def initialize_fusion_model(
+    num_classes: int,
+    fusion_mode: str = "attention",
+    attention_dim: int = 256,
+    charbert_mode: str = "legacy",
+    char_vocab: str = "hex",
+    char_emb_dim: int = 32,
+    char_cnn_channels: int = 64,
+    char_fusion: str = "gated",
+    char_fusion_layers: str = "all",
+) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
     if fusion_mode != "attention":
         raise ValueError(f"unsupported fusion mode: {fusion_mode}")
     if torch is None or MobileViTForImageClassification is None or MobileViTConfig is None:
         raise ModuleNotFoundError("torch and transformers are required for attention fusion training")
-    model = AttentionFusionModel(num_classes=num_classes, attention_dim=attention_dim)
+    model = AttentionFusionModel(
+        num_classes=num_classes,
+        attention_dim=attention_dim,
+        charbert_mode=charbert_mode,
+        char_vocab=char_vocab,
+        char_emb_dim=char_emb_dim,
+        char_cnn_channels=char_cnn_channels,
+        char_fusion=char_fusion,
+        char_fusion_layers=char_fusion_layers,
+    )
     logger.info("融合模型初始化完成，分类头设置为 %s 个类别", num_classes)
     return model
 
@@ -2387,6 +2456,12 @@ def add_common_args(p):
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--attention_dim", type=int, default=256)
+    p.add_argument("--charbert_mode", choices=["legacy", "charaware"], default="legacy")
+    p.add_argument("--char_vocab", choices=["hex", "ascii"], default="hex")
+    p.add_argument("--char_emb_dim", type=int, default=32)
+    p.add_argument("--char_cnn_channels", type=int, default=64)
+    p.add_argument("--char_fusion", choices=["gated", "add", "concat"], default="gated")
+    p.add_argument("--char_fusion_layers", choices=["first", "last", "all"], default="all")
     return p
 
 
@@ -2504,6 +2579,12 @@ def build_common_kwargs(args):
         persistent_workers=args.persistent_workers,
         prefetch_factor=args.prefetch_factor,
         attention_dim=args.attention_dim,
+        charbert_mode=args.charbert_mode,
+        char_vocab=args.char_vocab,
+        char_emb_dim=args.char_emb_dim,
+        char_cnn_channels=args.char_cnn_channels,
+        char_fusion=args.char_fusion,
+        char_fusion_layers=args.char_fusion_layers,
         use_amp=(not args.no_amp),
         use_index_cache=(not args.no_index_cache),
         rebuild_index_cache=args.rebuild_index_cache,
@@ -2551,6 +2632,12 @@ def run_fusion_experiment(
     persistent_workers: bool,
     prefetch_factor: int,
     attention_dim: int = 256,
+    charbert_mode: str = "legacy",
+    char_vocab: str = "hex",
+    char_emb_dim: int = 32,
+    char_cnn_channels: int = 64,
+    char_fusion: str = "gated",
+    char_fusion_layers: str = "all",
     use_amp: bool = True,
     use_index_cache: bool = True,
     rebuild_index_cache: bool = False,
@@ -2617,7 +2704,17 @@ def run_fusion_experiment(
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        fusion_mode,
+        attention_dim=attention_dim,
+        charbert_mode=charbert_mode,
+        char_vocab=char_vocab,
+        char_emb_dim=char_emb_dim,
+        char_cnn_channels=char_cnn_channels,
+        char_fusion=char_fusion,
+        char_fusion_layers=char_fusion_layers,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
@@ -2752,6 +2849,12 @@ def run_stacking_experiment(
     persistent_workers: bool,
     prefetch_factor: int,
     attention_dim: int = 256,
+    charbert_mode: str = "legacy",
+    char_vocab: str = "hex",
+    char_emb_dim: int = 32,
+    char_cnn_channels: int = 64,
+    char_fusion: str = "gated",
+    char_fusion_layers: str = "all",
     ensemble_tag: Optional[str] = None,
     use_amp: bool = True,
     use_index_cache: bool = True,
@@ -2821,7 +2924,17 @@ def run_stacking_experiment(
     assert train_classes == test_classes, "训练集和测试集类别不一致"
     num_classes = len(train_classes)
 
-    model = initialize_fusion_model(num_classes, base_fusion_mode, attention_dim=attention_dim)
+    model = initialize_fusion_model(
+        num_classes,
+        base_fusion_mode,
+        attention_dim=attention_dim,
+        charbert_mode=charbert_mode,
+        char_vocab=char_vocab,
+        char_emb_dim=char_emb_dim,
+        char_cnn_channels=char_cnn_channels,
+        char_fusion=char_fusion,
+        char_fusion_layers=char_fusion_layers,
+    )
     model, history = train_fusion_model(
         model,
         train_loader,
@@ -2911,6 +3024,12 @@ def run_stacking_experiment(
         train_image_dir=train_image_dir,
         train_pcap_dir=train_pcap_dir,
     )
+    mfcp_pair_indices = resolve_mfcp_pair_class_indices(train_classes) if is_mfcp_task else None
+    if is_mfcp_task and mfcp_pair_indices is None:
+        run_logger.warning(
+            "MFCP pair correction skipped: required classes not found, classes=%s",
+            train_classes,
+        )
     mta_gain_target_classes: List[int] = []
     if is_mta_task and len(meta_labels):
         mta_classes, mta_counts = np.unique(meta_labels, return_counts=True)
@@ -2967,15 +3086,16 @@ def run_stacking_experiment(
             pred_probs = apply_class_gains(pred_probs, gains)
             preds = np.argmax(pred_probs, axis=1).astype(np.int64)
             postprocess["mta_class_gains"] = {str(k): float(v) for k, v in gains.items()}
-        if is_mfcp_task and len(meta_labels):
-            head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+        if is_mfcp_task and len(meta_labels) and mfcp_pair_indices is not None:
+            pair_class_a, pair_class_b = mfcp_pair_indices
+            head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
             pair_alpha = tune_binary_correction_alpha_for_pair(
                 labels=meta_labels,
                 probs=oof_probs,
                 features=meta_features,
                 head=head,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 objective="pair_f1",
             )
             oof_pair_probs = oof_probs
@@ -2985,33 +3105,33 @@ def run_stacking_experiment(
                     probs=oof_probs,
                     features=meta_features,
                     head=head,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     alpha=pair_alpha,
                 )
                 pair_temperature = tune_pair_temperature(
                     labels=meta_labels,
                     probs=oof_pair_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                 )
                 oof_pair_probs = apply_pair_temperature(
                     probs=oof_pair_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     temperature=pair_temperature,
                 )
                 pair_threshold = tune_pair_threshold(
                     labels=meta_labels,
                     probs=oof_pair_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                 )
                 oof_pair_preds = apply_pair_threshold(
                     preds=oof_pair_preds,
                     probs=oof_pair_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     threshold=pair_threshold,
                 )
                 method_oof_probs_for_vote = oof_pair_probs
@@ -3023,27 +3143,28 @@ def run_stacking_experiment(
                 probs=pred_probs,
                 features=test_meta_features,
                 head=head,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 alpha=pair_alpha,
             )
             pred_probs = apply_pair_temperature(
                 probs=pred_probs,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 temperature=pair_temperature,
             )
             preds = apply_pair_threshold(
                 preds=np.argmax(pred_probs, axis=1).astype(np.int64),
                 probs=pred_probs,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 threshold=pair_threshold,
             )
             postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
             postprocess["mfcp_binary_pair_alpha"] = float(pair_alpha)
             postprocess["mfcp_pair_temperature"] = float(pair_temperature)
             postprocess["mfcp_pair_threshold"] = float(pair_threshold)
+            postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
 
         acc = accuracy_score(test_meta_labels, preds) if len(test_meta_labels) else 0.0
         macro_f1 = f1_score(test_meta_labels, preds, average="macro") if len(test_meta_labels) else 0.0
@@ -3132,15 +3253,16 @@ def run_stacking_experiment(
             vote_probs = apply_class_gains(vote_probs, vote_gains)
             vote_preds = np.argmax(vote_probs, axis=1).astype(np.int64)
             vote_postprocess["mta_class_gains"] = {str(k): float(v) for k, v in vote_gains.items()}
-        if is_mfcp_task and len(meta_labels):
-            vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=0, class_b=4)
+        if is_mfcp_task and len(meta_labels) and mfcp_pair_indices is not None:
+            pair_class_a, pair_class_b = mfcp_pair_indices
+            vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
             vote_pair_alpha = tune_binary_correction_alpha_for_pair(
                 labels=meta_labels,
                 probs=oof_vote_probs,
                 features=meta_features,
                 head=vote_head,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 objective="pair_f1",
             ) if len(oof_vote_probs) else 0.0
             if len(oof_vote_probs):
@@ -3150,33 +3272,33 @@ def run_stacking_experiment(
                     probs=oof_vote_probs,
                     features=meta_features,
                     head=vote_head,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     alpha=vote_pair_alpha,
                 )
                 vote_pair_temperature = tune_pair_temperature(
                     labels=meta_labels,
                     probs=oof_vote_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                 )
                 oof_vote_probs = apply_pair_temperature(
                     probs=oof_vote_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     temperature=vote_pair_temperature,
                 )
                 vote_pair_threshold = tune_pair_threshold(
                     labels=meta_labels,
                     probs=oof_vote_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                 )
                 oof_vote_preds = apply_pair_threshold(
                     preds=oof_vote_preds,
                     probs=oof_vote_probs,
-                    class_a=0,
-                    class_b=4,
+                    class_a=pair_class_a,
+                    class_b=pair_class_b,
                     threshold=vote_pair_threshold,
                 )
             else:
@@ -3187,27 +3309,28 @@ def run_stacking_experiment(
                 probs=vote_probs,
                 features=test_meta_features,
                 head=vote_head,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 alpha=vote_pair_alpha,
             )
             vote_probs = apply_pair_temperature(
                 probs=vote_probs,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 temperature=vote_pair_temperature,
             )
             vote_preds = apply_pair_threshold(
                 preds=np.argmax(vote_probs, axis=1).astype(np.int64),
                 probs=vote_probs,
-                class_a=0,
-                class_b=4,
+                class_a=pair_class_a,
+                class_b=pair_class_b,
                 threshold=vote_pair_threshold,
             )
             vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
             vote_postprocess["mfcp_binary_pair_alpha"] = float(vote_pair_alpha)
             vote_postprocess["mfcp_pair_temperature"] = float(vote_pair_temperature)
             vote_postprocess["mfcp_pair_threshold"] = float(vote_pair_threshold)
+            vote_postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
 
         vote_acc = accuracy_score(test_meta_labels, vote_preds) if len(test_meta_labels) else 0.0
         vote_macro_f1 = f1_score(test_meta_labels, vote_preds, average="macro") if len(test_meta_labels) else 0.0

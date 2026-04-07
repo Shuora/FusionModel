@@ -31,6 +31,14 @@ class TrainingConfig:
     num_heads: int = 4
     dropout: float = 0.1
 
+    # 文本编码模式（兼容升级）
+    mode: str = "legacy"  # legacy | charaware
+    char_vocab: str = "hex"  # hex | ascii
+    char_emb_dim: int = 32
+    char_cnn_channels: int = 64
+    char_fusion: str = "gated"  # gated | add | concat
+    char_fusion_layers: str = "all"  # first | last | all
+
     # 训练设备
     device: str = "cuda"
 

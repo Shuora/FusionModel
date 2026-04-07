@@ -292,6 +292,42 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertEqual(kwargs["early_stop_metric"], "val_loss")
         self.assertEqual(kwargs["early_stop_mode"], "auto")
 
+    def test_build_common_kwargs_contains_charaware_flags(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args(
+            [
+                "--task_name",
+                "binary_benign_vs_malicious",
+                "--charbert_mode",
+                "charaware",
+                "--char_vocab",
+                "ascii",
+                "--char_emb_dim",
+                "24",
+                "--char_cnn_channels",
+                "48",
+                "--char_fusion",
+                "concat",
+                "--char_fusion_layers",
+                "last",
+            ]
+        )
+
+        with mock.patch.object(
+            fc,
+            "resolve_task_dataset_dirs",
+            return_value=("train_img", "train_pcap", "test_img", "test_pcap", "binary_benign_vs_malicious"),
+        ):
+            kwargs = fc.build_common_kwargs(args)
+
+        self.assertEqual(kwargs["charbert_mode"], "charaware")
+        self.assertEqual(kwargs["char_vocab"], "ascii")
+        self.assertEqual(kwargs["char_emb_dim"], 24)
+        self.assertEqual(kwargs["char_cnn_channels"], 48)
+        self.assertEqual(kwargs["char_fusion"], "concat")
+        self.assertEqual(kwargs["char_fusion_layers"], "last")
+
     def test_training_loader_drops_tail_batch_but_eval_loader_keeps_it(self) -> None:
         class FakeFusionDataset:
             def __init__(self, *args, **kwargs) -> None:

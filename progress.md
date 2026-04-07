@@ -70,3 +70,24 @@
 - 2026-04-05: 完成预处理日志落盘：`src/split_data.py` 与 `src/ssl_tls_rgb_image.py` 均新增 `--log_file`，默认落盘到任务 `metadata/` 目录。
 - 2026-04-05: 已同步 README 预处理章节，补充日志文件默认路径与 `--log_file` 用法。
 - 2026-04-05: 验证结果：`python3 -m py_compile src/split_data.py src/ssl_tls_rgb_image.py` 通过；`python3 -m unittest tests.test_split_data_tasks tests.test_ssl_tls_rgb_image` 中 split_data 通过，ssl_tls_rgb_image 因本机 numpy 环境污染失败。
+
+- 2026-04-06: 对照 2026-04-04 MTA 修复链路复核 `src/fusion_common.py`，确认 MFCP 后处理仍存在 `class_a=0,class_b=4` 固定索引依赖。
+- 2026-04-06: 已将 MFCP pair 校正改为按类名解析（`Artemis/Ursnif`），并在 `method` 与 `soft_voting` 两条路径同时替换；新增 `mfcp_pair_classes` 落盘字段。
+- 2026-04-06: 已扩展 MFCP 任务签名识别，兼容含 `Cobalt` 的 6 类分布。
+- 2026-04-06: 回归验证通过：`python3 -m unittest tests.test_stacking_improvements -v`（14 tests, OK）；`python3 -m unittest tests.test_attention_entrypoints -v`（2 tests, OK）。
+- 2026-04-06: 按你的要求更新 `README.md` 中 `mfcp_multiclass` 的 `attention_stacking` 命令，与 `mta_multiclass` 当前推荐稳定参数对齐。
+
+- 2026-04-07: 按“是否真正 CharBERT”问题完成代码审计，确认当前实现为轻量 byte Transformer，缺少 char-aware 关键机制。
+- 2026-04-07: 与你确认改造方向为“兼容式升级”（入口脚本保持不变，默认仍注意力融合）。
+- 2026-04-07: 完成方案对比并确定推荐方案：分层门控 `char-aware byte encoder`（`legacy/charaware` 双模式）。
+- 2026-04-07: 已输出设计 spec：`docs/superpowers/specs/2026-04-07-charaware-byte-charbert-design.md`，包含架构、参数兼容、checkpoint 兼容、验证与回滚策略。
+
+- 2026-04-07: 根据你“开始实现”指令进入 build 阶段，先按 TDD 新增测试：
+  - `tests/test_attention_entrypoints.py`：校验新增 char-aware 参数默认值；
+  - `tests/test_fusion_output_artifacts.py`：校验 `build_common_kwargs` 透传；
+  - `tests/test_charbert_loader.py`：校验 `charaware` 模式可构建并前向。
+- 2026-04-07: 完成 `src/CharBERT/src/config.py` 扩展（`mode/char_vocab/char_emb_dim/char_cnn_channels/char_fusion/char_fusion_layers`）。
+- 2026-04-07: 完成 `src/CharBERT/src/model.py` 升级：新增 char lookup、char embedding + Conv1d、分层 token/char 融合和 `encode_tokens` 接口。
+- 2026-04-07: 完成 `src/fusion_common.py` 升级：新增 CLI 参数、kwargs 透传、`initialize_fusion_model`/`run_*_experiment` 参数链路与 `CharBERTTextEncoder` 新接口适配。
+- 2026-04-07: 完成 `README.md` 同步：新增 char-aware 可选参数列表、模式说明与最小启用示例。
+- 2026-04-07: 目标回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_run_all_modes tests.test_fusion_output_artifacts tests.test_charbert_loader`（26 tests, OK）。

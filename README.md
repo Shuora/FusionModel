@@ -321,14 +321,27 @@ python3 src/train_fusion_attention_stacking.py \
   --task_name mta_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_stacking \
-  --meta_methods xgboost \
+  --meta_methods xgboost,lightgbm,catboost \
+  --epochs 40 \
+  --lr 3e-4 \
+  --patience 8 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
   --batch_size 32 \
-  --epochs 32 \
-  --patience 4 \
-  --lr 1e-3 \
   --num_workers 4 \
   --prefetch_factor 2 \
-  --device auto
+  --pin_memory \
+  --persistent_workers
 ```
 
 ### 实验四：`mfcp_multiclass`
@@ -356,14 +369,119 @@ python3 src/train_fusion_attention_stacking.py \
   --task_name mfcp_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention_stacking \
-  --meta_methods xgboost \
+  --meta_methods xgboost,lightgbm,catboost \
+  --epochs 40 \
+  --lr 3e-4 \
+  --patience 8 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
+  --batch_size 32 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers
+```
+
+## Char-aware 训练命令（四任务独立）
+
+下面给出四个任务的 `attention` 独立命令。`attention_stacking` 也可直接使用同样的 char-aware 参数（在对应 stacking 命令末尾追加即可）。
+
+### 1) `binary_benign_vs_malicious`
+
+```bash
+python3 src/train_fusion_attention.py \
+  --task_name binary_benign_vs_malicious \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention \
   --batch_size 32 \
   --epochs 32 \
   --patience 4 \
   --lr 1e-3 \
   --num_workers 4 \
   --prefetch_factor 2 \
-  --device auto
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
+```
+
+### 2) `ustc_multiclass`
+
+```bash
+python3 src/train_fusion_attention.py \
+  --task_name ustc_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention \
+  --batch_size 32 \
+  --epochs 32 \
+  --patience 4 \
+  --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
+```
+
+### 3) `mta_multiclass`
+
+```bash
+python3 src/train_fusion_attention.py \
+  --task_name mta_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention \
+  --batch_size 32 \
+  --epochs 32 \
+  --patience 4 \
+  --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
+```
+
+### 4) `mfcp_multiclass`
+
+```bash
+python3 src/train_fusion_attention.py \
+  --task_name mfcp_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention \
+  --batch_size 32 \
+  --epochs 32 \
+  --patience 4 \
+  --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
 ```
 
 ## 可选训练参数
@@ -404,6 +522,12 @@ python3 src/train_fusion_attention_stacking.py \
 --val_every
 --output_dir
 --attention_dim
+--charbert_mode
+--char_vocab
+--char_emb_dim
+--char_cnn_channels
+--char_fusion
+--char_fusion_layers
 ```
 
 仅 `attention_stacking` 额外支持：
@@ -419,7 +543,31 @@ python3 src/train_fusion_attention_stacking.py \
 - 对每个 meta learner 自动执行 5-fold OOF 训练以减少元学习器过拟合。
 - 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
 - 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
-- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做 `0/4` 二分类后处理链路：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
+- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做 `Artemis/Ursnif` pair 二分类后处理链路（按类名定位，兼容含 `Cobalt` 的 6 类 MFCP）：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
+
+CharBERT 文本分支当前支持两种模式：
+
+- `--charbert_mode legacy`（默认）：保持原有轻量 byte Transformer 行为。
+- `--charbert_mode charaware`：启用 char-aware byte encoder（token/char 融合）。
+
+`charaware` 模式的常用参数：
+
+- `--char_vocab`：`hex`（默认）或 `ascii`。
+- `--char_emb_dim`：字符 embedding 维度，默认 `32`。
+- `--char_cnn_channels`：字符卷积通道数，默认 `64`。
+- `--char_fusion`：`gated`（默认）/`add`/`concat`。
+- `--char_fusion_layers`：`all`（默认）/`first`/`last`。
+
+最小启用示例（可附加到任意四个任务的 attention 或 attention_stacking 命令末尾）：
+
+```bash
+--charbert_mode charaware \
+--char_vocab hex \
+--char_emb_dim 32 \
+--char_cnn_channels 64 \
+--char_fusion gated \
+--char_fusion_layers all
+```
 
 早停相关建议（`fusion_common.py` 当前默认行为）：
 
@@ -429,7 +577,7 @@ python3 src/train_fusion_attention_stacking.py \
 - 若验证监控值出现 `NaN/Inf`，会按“未改善”推进早停计数，达到 `patience` 后停止并恢复最佳权重。
 - 若训练 batch 的 `loss` 出现 `NaN/Inf`，该 batch 会被跳过（不反向传播、不更新参数），并记录告警日志。
 
-`epochs` 与 `lr` 的建议搭配（当前模型为从头训练的 `MobileViTConfig + CharBERT`，优化器为 `AdamW`）：
+`epochs` 与 `lr` 的建议搭配（当前模型为从头训练的 `MobileViTConfig + CharBERT`，默认 `legacy`，优化器为 `AdamW`）：
 
 - 稳妥起点：`--epochs 32 --patience 4 --lr 1e-3 --batch_size 32 --num_workers 4 --prefetch_factor 2`（与代码默认一致）。
 - 若验证集波动较大或后期发散：优先把 `--lr` 降到 `5e-4` 或 `3e-4`，`--epochs` 可保持 `32`。
