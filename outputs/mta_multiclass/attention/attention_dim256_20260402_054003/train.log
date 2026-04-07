@@ -1,0 +1,99 @@
+2026-04-02 05:40:03,669 - INFO - run_attention - start attention: output_root=/home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention run_dir=/home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003
+2026-04-02 05:40:03,669 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/image_data/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/pcap_data/Train
+2026-04-02 05:40:03,699 - INFO - fusion_common - 融合数据索引进度: 1/6 类别 (Dridex)
+2026-04-02 05:40:03,810 - INFO - fusion_common - 融合数据索引进度: 2/6 类别 (Emotet)
+2026-04-02 05:40:05,872 - INFO - fusion_common - 融合数据索引进度: 3/6 类别 (Hancitor)
+2026-04-02 05:40:06,071 - INFO - fusion_common - 融合数据索引进度: 4/6 类别 (Qakbot)
+2026-04-02 05:40:06,301 - INFO - fusion_common - 融合数据索引进度: 5/6 类别 (Trickbot)
+2026-04-02 05:40:06,559 - INFO - fusion_common - 融合数据索引进度: 6/6 类别 (Ursnif)
+2026-04-02 05:40:06,861 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/image_data/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
+2026-04-02 05:40:06,876 - INFO - fusion_common - 融合数据集加载完成，总样本数: 137760
+2026-04-02 05:40:06,878 - INFO - fusion_common - 融合数据加载完成，类别数: 6, 样本总数: 137760
+2026-04-02 05:40:06,878 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/image_data/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/pcap_data/Test
+2026-04-02 05:40:06,887 - INFO - fusion_common - 融合数据索引进度: 1/6 类别 (Dridex)
+2026-04-02 05:40:06,916 - INFO - fusion_common - 融合数据索引进度: 2/6 类别 (Emotet)
+2026-04-02 05:40:07,354 - INFO - fusion_common - 融合数据索引进度: 3/6 类别 (Hancitor)
+2026-04-02 05:40:07,398 - INFO - fusion_common - 融合数据索引进度: 4/6 类别 (Qakbot)
+2026-04-02 05:40:07,447 - INFO - fusion_common - 融合数据索引进度: 5/6 类别 (Trickbot)
+2026-04-02 05:40:07,512 - INFO - fusion_common - 融合数据索引进度: 6/6 类别 (Ursnif)
+2026-04-02 05:40:07,586 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass/image_data/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
+2026-04-02 05:40:07,590 - INFO - fusion_common - 融合数据集加载完成，总样本数: 34444
+2026-04-02 05:40:07,591 - INFO - fusion_common - 融合数据加载完成，类别数: 6, 样本总数: 34444
+2026-04-02 05:40:07,591 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-04-02 05:40:07,667 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 6 个类别
+2026-04-02 05:40:07,667 - INFO - fusion_common - 开始训练融合模型
+2026-04-02 05:40:07,667 - INFO - fusion_common - 训练参数 - Epochs: 32, Learning Rate: 0.001, Early Stopping Patience: 4
+2026-04-02 05:40:07,667 - INFO - fusion_common - 训练策略 - class_balance: none, loss_type: ce, focal_gamma: 2.000, weight_decay: 0.000000, label_smoothing: 0.0000, early_stop_metric: val_loss, lr_scheduler: none, val_every: 1
+2026-04-02 05:40:07,667 - INFO - fusion_common - DataLoader参数 - train_batches: 4305, val_batches: 1077, batch_size: 32, num_workers: 4, pin_memory: True
+2026-04-02 05:40:08,002 - INFO - fusion_common - Epoch 1/32
+2026-04-02 05:45:04,283 - INFO - fusion_common - Epoch 1 结果: 训练 Loss: 0.5466, 训练 Acc: 0.7801, 训练 F1: 0.3951 | 验证 Loss: 0.4785, 验证 Acc: 0.8146, 验证 F1: 0.5018
+2026-04-02 05:45:04,302 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:45:04,303 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:45:04,303 - INFO - fusion_common - Epoch 2/32
+2026-04-02 05:49:28,139 - INFO - fusion_common - Epoch 2 结果: 训练 Loss: 0.4484, 训练 Acc: 0.8228, 训练 F1: 0.4998 | 验证 Loss: 0.4412, 验证 Acc: 0.8243, 验证 F1: 0.4896
+2026-04-02 05:49:28,156 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:49:28,156 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:49:28,156 - INFO - fusion_common - Epoch 3/32
+2026-04-02 05:53:52,267 - INFO - fusion_common - Epoch 3 结果: 训练 Loss: 0.4216, 训练 Acc: 0.8346, 训练 F1: 0.5270 | 验证 Loss: 0.4230, 验证 Acc: 0.8353, 验证 F1: 0.5222
+2026-04-02 05:53:52,282 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:53:52,282 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:53:52,282 - INFO - fusion_common - Epoch 4/32
+2026-04-02 05:58:18,604 - INFO - fusion_common - Epoch 4 结果: 训练 Loss: 0.4174, 训练 Acc: 0.8382, 训练 F1: 0.5365 | 验证 Loss: 0.4359, 验证 Acc: 0.8400, 验证 F1: 0.5408
+2026-04-02 05:58:18,604 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 05:58:18,604 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:58:18,604 - INFO - fusion_common - Epoch 5/32
+2026-04-02 06:02:42,136 - INFO - fusion_common - Epoch 5 结果: 训练 Loss: 0.4154, 训练 Acc: 0.8398, 训练 F1: 0.5413 | 验证 Loss: 0.4090, 验证 Acc: 0.8443, 验证 F1: 0.5511
+2026-04-02 06:02:42,153 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 06:02:42,153 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 06:02:42,153 - INFO - fusion_common - Epoch 6/32
+2026-04-02 06:07:09,075 - INFO - fusion_common - Epoch 6 结果: 训练 Loss: 0.4126, 训练 Acc: 0.8420, 训练 F1: 0.5441 | 验证 Loss: 0.4211, 验证 Acc: 0.8406, 验证 F1: 0.5476
+2026-04-02 06:07:09,075 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 06:07:09,075 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 06:07:09,076 - INFO - fusion_common - Epoch 7/32
+2026-04-02 06:11:39,140 - INFO - fusion_common - Epoch 7 结果: 训练 Loss: 0.4128, 训练 Acc: 0.8424, 训练 F1: 0.5453 | 验证 Loss: 0.4227, 验证 Acc: 0.8438, 验证 F1: 0.5480
+2026-04-02 06:11:39,140 - INFO - fusion_common - 早停计数器: 2/4
+2026-04-02 06:11:39,140 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 06:11:39,140 - INFO - fusion_common - Epoch 8/32
+2026-04-02 06:16:05,087 - INFO - fusion_common - Epoch 8 结果: 训练 Loss: 0.4069, 训练 Acc: 0.8446, 训练 F1: 0.5526 | 验证 Loss: 0.4177, 验证 Acc: 0.8445, 验证 F1: 0.5474
+2026-04-02 06:16:05,087 - INFO - fusion_common - 早停计数器: 3/4
+2026-04-02 06:16:05,088 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 06:16:05,088 - INFO - fusion_common - Epoch 9/32
+2026-04-02 06:20:33,331 - INFO - fusion_common - Epoch 9 结果: 训练 Loss: 0.4082, 训练 Acc: 0.8443, 训练 F1: 0.5504 | 验证 Loss: 0.4641, 验证 Acc: 0.8390, 验证 F1: 0.5512
+2026-04-02 06:20:33,344 - INFO - fusion_common - 早停计数器: 4/4
+2026-04-02 06:20:33,344 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 06:20:33,344 - INFO - fusion_common - 早停机制触发，在第 9 轮后停止训练
+2026-04-02 06:20:33,344 - INFO - fusion_common - 融合模型训练完成
+2026-04-02 06:20:35,483 - INFO - run_attention - [AttentionDiag] mean=0.001276 min=0.000000 max=0.031789 entropy=5.6921 top1=0.0072 top5=0.0360 top10=0.0719 nonpad_mass=1.0000 pad_mass=0.0000 nonpad_frac=0.6009
+2026-04-02 06:20:35,704 - INFO - run_attention - [AttentionDiag] saved attention curve: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/attention_curve.png
+2026-04-02 06:20:35,705 - INFO - run_attention - saved attention_curve: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/attention_curve.png (exists=True)
+2026-04-02 06:20:56,182 - INFO - run_attention - 评估结果:
+2026-04-02 06:20:56,182 - INFO - run_attention -   准确率: 0.8443
+2026-04-02 06:20:56,182 - INFO - run_attention -   Macro F1: 0.5511
+2026-04-02 06:20:56,182 - INFO - run_attention -   分类报告:
+              precision    recall  f1-score   support
+
+           0     0.0000    0.0000    0.0000       357
+           1     0.4753    0.5318    0.5019      1463
+           2     0.9027    0.9716    0.9359     23501
+           3     0.8617    0.4538    0.5945      2307
+           4     0.5623    0.4334    0.4895      2771
+           5     0.7740    0.7960    0.7849      4045
+
+    accuracy                         0.8443     34444
+   macro avg     0.5960    0.5311    0.5511     34444
+weighted avg     0.8299    0.8443    0.8312     34444
+
+2026-04-02 06:20:56,183 - INFO - run_attention -   混淆矩阵:
+[[    0    46   152    14    72    73]
+ [    0   778   319    30   223   113]
+ [    0    29 22834    45   266   327]
+ [    0   273   623  1047   213   151]
+ [    0   420   806    68  1201   276]
+ [    0    91   562    11   161  3220]]
+2026-04-02 06:20:56,309 - INFO - run_attention - saved metrics_curve: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/metrics_curve.png (exists=True)
+2026-04-02 06:20:56,385 - INFO - run_attention - saved confusion_matrix: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/confusion_matrix.png (exists=True)
+2026-04-02 06:20:56,386 - INFO - run_attention - saved report: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/report.md (exists=True)
+2026-04-02 06:20:56,442 - INFO - run_attention - saved model: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/fusion_model.pth (exists=True)
+2026-04-02 06:20:56,443 - INFO - run_attention - saved metrics_json: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/metrics.json (exists=True)
+2026-04-02 06:20:56,443 - INFO - run_attention - saved epoch_metrics_csv: /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/epoch_metrics.csv (exists=True)
+2026-04-02 06:20:56,443 - INFO - run_attention - done attention: run_dir=/home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003 log=/home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention/attention_dim256_20260402_054003/train.log
