@@ -59,6 +59,14 @@ except ModuleNotFoundError:
             _missing_sklearn()
 
 try:
+    from sklearn.metrics import log_loss, recall_score
+except ModuleNotFoundError:
+    def _missing_sklearn_extra(*args, **kwargs):
+        raise ModuleNotFoundError("scikit-learn is required for evaluation functionality")
+
+    log_loss = recall_score = _missing_sklearn_extra
+
+try:
     from sklearn.model_selection import StratifiedKFold
 except ModuleNotFoundError:
     StratifiedKFold = None
@@ -2200,6 +2208,410 @@ def tune_pair_threshold(
     return best_thr
 
 
+def apply_multiclass_temperature(*, probs: np.ndarray, temperature: float) -> np.ndarray:
+    probs = _normalize_probs(probs)
+    t = float(max(1e-3, temperature))
+    logits = np.log(np.clip(probs, 1e-12, 1.0))
+    scaled = logits / t
+    scaled -= np.max(scaled, axis=1, keepdims=True)
+    exp_scaled = np.exp(scaled)
+    return _normalize_probs(exp_scaled)
+
+
+def tune_multiclass_temperature(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    grid: Optional[List[float]] = None,
+) -> float:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    p = _normalize_probs(probs)
+    if y.size == 0 or p.shape[0] != y.size:
+        return 1.0
+    candidates = [float(v) for v in (grid or [0.7, 0.85, 1.0, 1.15, 1.3, 1.6]) if float(v) > 0]
+    if not candidates:
+        return 1.0
+    class_labels = list(range(p.shape[1]))
+    best_t = 1.0
+    best_loss = float(log_loss(y, p, labels=class_labels))
+    for t in candidates:
+        calibrated = apply_multiclass_temperature(probs=p, temperature=t)
+        cur_loss = float(log_loss(y, calibrated, labels=class_labels))
+        if np.isfinite(cur_loss) and cur_loss <= best_loss:
+            best_t = float(t)
+            best_loss = cur_loss
+    return best_t
+
+
+def compute_calibration_metrics(*, labels: np.ndarray, probs: np.ndarray, n_bins: int = 15) -> Dict[str, float]:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    p = _normalize_probs(probs)
+    if y.size == 0 or p.shape[0] != y.size:
+        return {"ece": 0.0, "brier": 0.0}
+
+    confidence = np.max(p, axis=1)
+    pred = np.argmax(p, axis=1)
+    correct = (pred == y).astype(np.float64)
+    bins = np.linspace(0.0, 1.0, num=max(2, int(n_bins) + 1))
+    ece = 0.0
+    for idx in range(len(bins) - 1):
+        left = bins[idx]
+        right = bins[idx + 1]
+        if idx == len(bins) - 2:
+            mask = (confidence >= left) & (confidence <= right)
+        else:
+            mask = (confidence >= left) & (confidence < right)
+        if not np.any(mask):
+            continue
+        acc_bin = float(np.mean(correct[mask]))
+        conf_bin = float(np.mean(confidence[mask]))
+        weight = float(np.mean(mask))
+        ece += abs(acc_bin - conf_bin) * weight
+
+    one_hot = np.zeros_like(p)
+    one_hot[np.arange(y.size), y] = 1.0
+    brier = float(np.mean(np.sum((p - one_hot) ** 2, axis=1)))
+    return {"ece": float(ece), "brier": brier}
+
+
+def calibrate_multiclass_probs(
+    *,
+    labels: np.ndarray,
+    oof_probs: np.ndarray,
+    test_probs: np.ndarray,
+    calibration: str,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    oof = _normalize_probs(oof_probs)
+    test = _normalize_probs(test_probs)
+    strategy = str(calibration or "none").strip().lower()
+    info: Dict[str, Any] = {"method": strategy}
+
+    if strategy == "temp":
+        t = tune_multiclass_temperature(labels=y, probs=oof)
+        oof = apply_multiclass_temperature(probs=oof, temperature=t)
+        test = apply_multiclass_temperature(probs=test, temperature=t)
+        info["temperature"] = float(t)
+    elif strategy == "isotonic":
+        try:
+            from sklearn.isotonic import IsotonicRegression
+
+            calibrated_oof = np.zeros_like(oof)
+            calibrated_test = np.zeros_like(test)
+            for class_idx in range(oof.shape[1]):
+                y_bin = (y == class_idx).astype(np.float64)
+                if len(np.unique(y_bin)) < 2:
+                    calibrated_oof[:, class_idx] = oof[:, class_idx]
+                    calibrated_test[:, class_idx] = test[:, class_idx]
+                    continue
+                ir = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                ir.fit(oof[:, class_idx], y_bin)
+                calibrated_oof[:, class_idx] = ir.transform(oof[:, class_idx])
+                calibrated_test[:, class_idx] = ir.transform(test[:, class_idx])
+            oof = _normalize_probs(calibrated_oof)
+            test = _normalize_probs(calibrated_test)
+        except Exception as exc:
+            info["fallback"] = "none"
+            info["error"] = str(exc)
+
+    info["oof_metrics"] = compute_calibration_metrics(labels=y, probs=oof)
+    return oof, test, info
+
+
+def build_level2_features(method_probs: Dict[str, np.ndarray]) -> np.ndarray:
+    if not method_probs:
+        return np.zeros((0, 0), dtype=np.float64)
+    ordered = sorted((name, _normalize_probs(prob)) for name, prob in method_probs.items())
+    blocks: List[np.ndarray] = []
+    for _, prob in ordered:
+        blocks.append(prob)
+        entropy = _entropy_features(prob)
+        margin = _margin_features(prob)
+        blocks.extend([entropy, margin])
+
+    stacked = np.stack([prob for _, prob in ordered], axis=0)
+    mean_prob = _normalize_probs(np.mean(stacked, axis=0))
+    vote_entropy = _entropy_features(mean_prob)
+    vote_margin = _margin_features(mean_prob)
+    pairwise_kl = compute_pairwise_kl_features(dict(ordered))
+    blocks.extend([vote_entropy, vote_margin, pairwise_kl])
+    return np.concatenate(blocks, axis=1).astype(np.float64, copy=False)
+
+
+def compute_pairwise_kl_features(method_probs: Dict[str, np.ndarray]) -> np.ndarray:
+    if not method_probs:
+        return np.zeros((0, 1), dtype=np.float64)
+    ordered = [_normalize_probs(prob) for _, prob in sorted(method_probs.items())]
+    n_samples = ordered[0].shape[0]
+    if len(ordered) < 2:
+        return np.zeros((n_samples, 1), dtype=np.float64)
+
+    eps = 1e-12
+    values = np.zeros((n_samples,), dtype=np.float64)
+    pairs = 0
+    for i in range(len(ordered)):
+        for j in range(i + 1, len(ordered)):
+            p = np.clip(ordered[i], eps, 1.0)
+            q = np.clip(ordered[j], eps, 1.0)
+            kl_pq = np.sum(p * (np.log(p) - np.log(q)), axis=1)
+            kl_qp = np.sum(q * (np.log(q) - np.log(p)), axis=1)
+            values += 0.5 * (kl_pq + kl_qp)
+            pairs += 1
+    if pairs > 0:
+        values /= float(pairs)
+    return values.reshape(-1, 1)
+
+
+def build_hard_sample_factors(method_probs: Dict[str, np.ndarray]) -> np.ndarray:
+    if not method_probs:
+        return np.array([], dtype=np.float64)
+    ordered = [_normalize_probs(prob) for _, prob in sorted(method_probs.items())]
+    mean_prob = _normalize_probs(np.mean(np.stack(ordered, axis=0), axis=0))
+    max_conf = np.max(mean_prob, axis=1)
+    hard = 1.0 + np.clip(1.0 - max_conf, 0.0, 1.0)
+    hard_mean = float(np.mean(hard)) if hard.size else 1.0
+    if hard_mean > 0:
+        hard = hard / hard_mean
+    return hard.astype(np.float64, copy=False)
+
+
+def apply_per_class_thresholds(*, probs: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
+    p = _normalize_probs(probs)
+    tau = np.asarray(thresholds, dtype=np.float64).reshape(1, -1)
+    if p.shape[1] != tau.shape[1]:
+        raise ValueError("threshold shape mismatch")
+    adjusted = p / np.clip(tau, 1e-6, None)
+    return np.argmax(adjusted, axis=1).astype(np.int64)
+
+
+def tune_per_class_thresholds(
+    *,
+    labels: np.ndarray,
+    probs: np.ndarray,
+    minority_classes: List[int],
+    objective: str,
+    minority_lambda: float,
+    grid: Optional[List[float]] = None,
+) -> np.ndarray:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    p = _normalize_probs(probs)
+    if y.size == 0 or p.shape[0] != y.size:
+        return np.ones(p.shape[1], dtype=np.float64)
+
+    candidates = [float(v) for v in (grid or [0.7, 0.85, 1.0, 1.15, 1.3]) if float(v) > 0]
+    if not candidates:
+        candidates = [1.0]
+    thresholds = np.ones(p.shape[1], dtype=np.float64)
+
+    def _score(preds: np.ndarray) -> float:
+        macro = float(f1_score(y, preds, average="macro", zero_division=0))
+        if objective == "macro_f1":
+            return macro
+        valid_minority = [int(c) for c in minority_classes if 0 <= int(c) < p.shape[1]]
+        if not valid_minority:
+            return macro
+        minor_recall = float(recall_score(y, preds, labels=valid_minority, average="macro", zero_division=0))
+        return macro + float(minority_lambda) * minor_recall
+
+    best_preds = apply_per_class_thresholds(probs=p, thresholds=thresholds)
+    best_score = _score(best_preds)
+    for class_idx in range(p.shape[1]):
+        best_value = thresholds[class_idx]
+        for value in candidates:
+            trial = thresholds.copy()
+            trial[class_idx] = float(value)
+            preds = apply_per_class_thresholds(probs=p, thresholds=trial)
+            score = _score(preds)
+            if score > best_score:
+                best_score = score
+                best_value = float(value)
+        thresholds[class_idx] = best_value
+    return thresholds
+
+
+def compute_threshold_objective_value(
+    *,
+    labels: np.ndarray,
+    preds: np.ndarray,
+    minority_classes: List[int],
+    objective: str,
+    minority_lambda: float,
+) -> float:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    p = np.asarray(preds, dtype=np.int64).reshape(-1)
+    if y.size == 0 or p.size != y.size:
+        return 0.0
+    macro = float(f1_score(y, p, average="macro", zero_division=0))
+    if objective == "macro_f1":
+        return macro
+    valid_minority = sorted({int(c) for c in minority_classes if 0 <= int(c)})
+    if not valid_minority:
+        return macro
+    minor = float(recall_score(y, p, labels=valid_minority, average="macro", zero_division=0))
+    return macro + float(minority_lambda) * minor
+
+
+def build_single_layer_baseline_result(method_results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for item in method_results:
+        method = str(item.get("method", ""))
+        if method in {"soft_voting", "two_level_blender", "single_layer_baseline"}:
+            continue
+        if item.get("skipped") or item.get("failed"):
+            continue
+        if "oof_macro_f1" not in item:
+            continue
+        candidates.append(item)
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda x: float(x.get("oof_macro_f1", 0.0)))
+    return {
+        "method": "single_layer_baseline",
+        "source_method": str(best.get("method", "")),
+        "acc": float(best.get("acc", 0.0)),
+        "macro_f1": float(best.get("macro_f1", 0.0)),
+        "oof_acc": float(best.get("oof_acc", 0.0)),
+        "oof_macro_f1": float(best.get("oof_macro_f1", 0.0)),
+        "report": best.get("report", ""),
+        "confusion_matrix": best.get("confusion_matrix", np.zeros((0, 0), dtype=int)),
+        "confusion_matrix_path": best.get("confusion_matrix_path"),
+        "report_path": best.get("report_path"),
+        "meta_model_path": best.get("meta_model_path"),
+        "postprocess": {"type": "single_layer_best_by_oof"},
+    }
+
+
+def resolve_effective_stacking_level(*, requested_level: str, successful_methods: List[str]) -> str:
+    level = str(requested_level or "single").strip().lower()
+    if level == "two_level" and len(successful_methods) >= 2:
+        return "two_level"
+    return "single"
+
+
+def _fit_level2_blender(train_x: np.ndarray, train_y: np.ndarray, sample_weight: Optional[np.ndarray]) -> Any:
+    try:
+        return train_meta_learner(train_x, train_y, method="xgboost", sample_weight=sample_weight)
+    except Exception:
+        from sklearn.linear_model import LogisticRegression
+
+        clf = LogisticRegression(max_iter=1000, multi_class="auto")
+        fit_kwargs: Dict[str, Any] = {}
+        if sample_weight is not None and len(sample_weight) == len(train_y):
+            fit_kwargs["sample_weight"] = sample_weight
+        clf.fit(train_x, train_y, **fit_kwargs)
+        return clf
+
+
+def run_level2_blender_oof(
+    *,
+    labels: np.ndarray,
+    level1_oof_probs: Dict[str, np.ndarray],
+    level1_test_probs: Dict[str, np.ndarray],
+    oof_folds: int,
+    minority_classes: List[int],
+    threshold_objective: str,
+    minority_lambda: float,
+) -> Dict[str, Any]:
+    y = np.asarray(labels, dtype=np.int64).reshape(-1)
+    x_oof = build_level2_features(level1_oof_probs)
+    x_test = build_level2_features(level1_test_probs)
+    if y.size == 0 or x_oof.shape[0] != y.size or x_test.shape[0] == 0:
+        return {
+            "preds": np.array([], dtype=np.int64),
+            "probs": np.zeros((0, 0), dtype=np.float64),
+            "oof_probs": np.zeros((0, 0), dtype=np.float64),
+            "thresholds": np.array([], dtype=np.float64),
+        }
+
+    num_classes = int(max(2, len(np.unique(y))))
+    base_weight = build_inverse_frequency_sample_weights(y)
+    hard_factor = build_hard_sample_factors(level1_oof_probs)
+    sample_weight = base_weight
+    if hard_factor.shape[0] == base_weight.shape[0]:
+        sample_weight = base_weight * hard_factor
+        weight_mean = float(np.mean(sample_weight)) if sample_weight.size else 1.0
+        if weight_mean > 0:
+            sample_weight = sample_weight / weight_mean
+
+    def _fit_predict(train_x: np.ndarray, train_y: np.ndarray, valid_x: np.ndarray) -> np.ndarray:
+        fold_w = build_inverse_frequency_sample_weights(train_y)
+        if train_x.shape[0] > 0:
+            train_conf = np.max(train_x[:, :num_classes], axis=1)
+            fold_hard = 1.0 + np.clip(1.0 - train_conf, 0.0, 1.0)
+            fold_hard_mean = float(np.mean(fold_hard)) if fold_hard.size else 1.0
+            if fold_hard_mean > 0:
+                fold_hard = fold_hard / fold_hard_mean
+            if fold_hard.shape[0] == fold_w.shape[0]:
+                fold_w = fold_w * fold_hard
+                fw_mean = float(np.mean(fold_w)) if fold_w.size else 1.0
+                if fw_mean > 0:
+                    fold_w = fold_w / fw_mean
+        model = _fit_level2_blender(train_x, train_y, fold_w)
+        _, fold_probs = _predict_with_meta_model(model, valid_x, num_classes=num_classes)
+        return fold_probs
+
+    oof_probs = compute_oof_predictions(
+        features=x_oof,
+        labels=y,
+        n_splits=max(2, int(oof_folds)),
+        seed=42,
+        fit_predict_fn=_fit_predict,
+    )
+    blender = _fit_level2_blender(x_oof, y, sample_weight)
+    _, test_probs = _predict_with_meta_model(blender, x_test, num_classes=oof_probs.shape[1])
+    thresholds = tune_per_class_thresholds(
+        labels=y,
+        probs=oof_probs,
+        minority_classes=minority_classes,
+        objective=threshold_objective,
+        minority_lambda=minority_lambda,
+    )
+    preds = apply_per_class_thresholds(probs=test_probs, thresholds=thresholds)
+    oof_threshold_preds = apply_per_class_thresholds(probs=oof_probs, thresholds=thresholds)
+    threshold_objective_value = compute_threshold_objective_value(
+        labels=y,
+        preds=oof_threshold_preds,
+        minority_classes=minority_classes,
+        objective=threshold_objective,
+        minority_lambda=minority_lambda,
+    )
+    return {
+        "preds": preds,
+        "probs": test_probs,
+        "oof_probs": oof_probs,
+        "thresholds": thresholds,
+        "threshold_objective_value": float(threshold_objective_value),
+        "blender": blender,
+    }
+
+
+def build_two_level_postprocess_payload(
+    *,
+    stacking_level: str,
+    calibration: Dict[str, float],
+    thresholds: np.ndarray,
+    minority_classes: List[int],
+    minority_recall_before: float,
+    minority_recall_after: float,
+    threshold_objective: str,
+    objective_value: float,
+    oof_test_gap: float,
+) -> Dict[str, Any]:
+    return {
+        "stacking_level": str(stacking_level),
+        "calibration": dict(calibration),
+        "thresholds": [float(v) for v in np.asarray(thresholds, dtype=np.float64).tolist()],
+        "threshold_objective": str(threshold_objective),
+        "objective_value": float(objective_value),
+        "oof_test_gap": float(oof_test_gap),
+        "minority_metrics": {
+            "classes": [int(c) for c in minority_classes],
+            "recall_before": float(minority_recall_before),
+            "recall_after": float(minority_recall_after),
+        },
+    }
+
+
 def compute_oof_predictions(
     *,
     features: np.ndarray,
@@ -2462,6 +2874,15 @@ def add_common_args(p):
     p.add_argument("--char_cnn_channels", type=int, default=64)
     p.add_argument("--char_fusion", choices=["gated", "add", "concat"], default="gated")
     p.add_argument("--char_fusion_layers", choices=["first", "last", "all"], default="all")
+    p.add_argument("--stacking_level", choices=["single", "two_level"], default="two_level")
+    p.add_argument("--stacking_calibration", choices=["none", "temp", "isotonic"], default="temp")
+    p.add_argument(
+        "--stacking_threshold_objective",
+        choices=["macro_f1", "macro_f1_minority_recall"],
+        default="macro_f1_minority_recall",
+    )
+    p.add_argument("--stacking_minority_lambda", type=float, default=0.3)
+    p.add_argument("--stacking_oof_folds", type=int, default=5)
     return p
 
 
@@ -2585,6 +3006,11 @@ def build_common_kwargs(args):
         char_cnn_channels=args.char_cnn_channels,
         char_fusion=args.char_fusion,
         char_fusion_layers=args.char_fusion_layers,
+        stacking_level=args.stacking_level,
+        stacking_calibration=args.stacking_calibration,
+        stacking_threshold_objective=args.stacking_threshold_objective,
+        stacking_minority_lambda=args.stacking_minority_lambda,
+        stacking_oof_folds=args.stacking_oof_folds,
         use_amp=(not args.no_amp),
         use_index_cache=(not args.no_index_cache),
         rebuild_index_cache=args.rebuild_index_cache,
@@ -2855,6 +3281,11 @@ def run_stacking_experiment(
     char_cnn_channels: int = 64,
     char_fusion: str = "gated",
     char_fusion_layers: str = "all",
+    stacking_level: str = "two_level",
+    stacking_calibration: str = "temp",
+    stacking_threshold_objective: str = "macro_f1_minority_recall",
+    stacking_minority_lambda: float = 0.3,
+    stacking_oof_folds: int = 5,
     ensemble_tag: Optional[str] = None,
     use_amp: bool = True,
     use_index_cache: bool = True,
@@ -2886,6 +3317,14 @@ def run_stacking_experiment(
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
     run_logger.info("start stacking: base=%s output_root=%s run_dir=%s", base_fusion_mode, output_dir, run_dir)
+    run_logger.info(
+        "stacking config: level=%s calibration=%s threshold_objective=%s minority_lambda=%.3f oof_folds=%d",
+        stacking_level,
+        stacking_calibration,
+        stacking_threshold_objective,
+        float(stacking_minority_lambda),
+        int(stacking_oof_folds),
+    )
     methods = list(meta_methods)
 
     train_loader, train_classes = load_fusion_data(
@@ -3040,6 +3479,9 @@ def run_stacking_experiment(
     successful_method_probs: List[np.ndarray] = []
     successful_oof_probs: List[np.ndarray] = []
     successful_method_weights: List[float] = []
+    successful_method_names: List[str] = []
+    method_test_probs_map: Dict[str, np.ndarray] = {}
+    method_oof_probs_map: Dict[str, np.ndarray] = {}
     for method in methods:
         try:
             def _fit_predict(train_x: np.ndarray, train_y: np.ndarray, valid_x: np.ndarray) -> np.ndarray:
@@ -3056,13 +3498,10 @@ def run_stacking_experiment(
             oof_probs = compute_oof_predictions(
                 features=meta_features,
                 labels=meta_labels,
-                n_splits=5,
+                n_splits=max(2, int(stacking_oof_folds)),
                 seed=42,
                 fit_predict_fn=_fit_predict,
             )
-            oof_preds = np.argmax(oof_probs, axis=1)
-            oof_acc = accuracy_score(meta_labels, oof_preds) if len(meta_labels) else 0.0
-            oof_macro_f1 = f1_score(meta_labels, oof_preds, average="macro") if len(meta_labels) else 0.0
             meta_model = train_meta_learner(
                 meta_features,
                 meta_labels,
@@ -3079,8 +3518,17 @@ def run_stacking_experiment(
             continue
 
         preds, pred_probs = _predict_with_meta_model(meta_model, test_meta_features, num_classes=class_count)
+        oof_probs, pred_probs, calibration_info = calibrate_multiclass_probs(
+            labels=meta_labels,
+            oof_probs=oof_probs,
+            test_probs=pred_probs,
+            calibration=stacking_calibration,
+        )
         method_oof_probs_for_vote = oof_probs
-        postprocess: Dict[str, Any] = {}
+        oof_preds = np.argmax(oof_probs, axis=1)
+        oof_acc = accuracy_score(meta_labels, oof_preds) if len(meta_labels) else 0.0
+        oof_macro_f1 = f1_score(meta_labels, oof_preds, average="macro") if len(meta_labels) else 0.0
+        postprocess: Dict[str, Any] = {"calibration": calibration_info}
         if is_mta_task and len(oof_probs):
             gains = tune_class_gains(labels=meta_labels, probs=oof_probs, target_classes=mta_gain_target_classes)
             pred_probs = apply_class_gains(pred_probs, gains)
@@ -3231,13 +3679,151 @@ def run_stacking_experiment(
         )
         successful_method_probs.append(pred_probs)
         successful_oof_probs.append(method_oof_probs_for_vote)
-        successful_method_weights.append(float(max(oof_macro_f1, 1e-6)))
+        successful_method_names.append(method)
+        method_test_probs_map[method] = pred_probs
+        method_oof_probs_map[method] = method_oof_probs_for_vote
+        oof_weight_preds = np.argmax(method_oof_probs_for_vote, axis=1).astype(np.int64)
+        oof_weight_macro_f1 = f1_score(meta_labels, oof_weight_preds, average="macro") if len(meta_labels) else 0.0
+        successful_method_weights.append(float(max(oof_weight_macro_f1, 1e-6)))
+
+    effective_level = resolve_effective_stacking_level(
+        requested_level=stacking_level,
+        successful_methods=successful_method_names,
+    )
+
+    if effective_level == "two_level":
+        minority_classes: List[int] = []
+        if len(meta_labels):
+            class_ids, class_counts = np.unique(np.asarray(meta_labels, dtype=np.int64), return_counts=True)
+            if len(class_ids):
+                sorted_idx = np.argsort(class_counts)
+                take = min(2, len(class_ids))
+                minority_classes = [int(class_ids[i]) for i in sorted_idx[:take].tolist()]
+        level2_out = run_level2_blender_oof(
+            labels=meta_labels,
+            level1_oof_probs=method_oof_probs_map,
+            level1_test_probs=method_test_probs_map,
+            oof_folds=stacking_oof_folds,
+            minority_classes=minority_classes,
+            threshold_objective=stacking_threshold_objective,
+            minority_lambda=stacking_minority_lambda,
+        )
+        two_level_preds = np.asarray(level2_out.get("preds", np.array([], dtype=np.int64)), dtype=np.int64)
+        two_level_probs = np.asarray(level2_out.get("probs", np.zeros((0, 0), dtype=np.float64)), dtype=np.float64)
+        two_level_oof_probs = np.asarray(level2_out.get("oof_probs", np.zeros((0, 0), dtype=np.float64)), dtype=np.float64)
+        two_level_thresholds = np.asarray(level2_out.get("thresholds", np.array([], dtype=np.float64)), dtype=np.float64)
+        two_level_objective_value = float(level2_out.get("threshold_objective_value", 0.0))
+
+        if len(test_meta_labels) and two_level_probs.shape[0] == len(test_meta_labels):
+            before_preds = np.argmax(two_level_probs, axis=1).astype(np.int64)
+            if minority_classes:
+                before_minor = float(
+                    recall_score(
+                        test_meta_labels,
+                        before_preds,
+                        labels=minority_classes,
+                        average="macro",
+                        zero_division=0,
+                    )
+                )
+                after_minor = float(
+                    recall_score(
+                        test_meta_labels,
+                        two_level_preds,
+                        labels=minority_classes,
+                        average="macro",
+                        zero_division=0,
+                    )
+                )
+            else:
+                before_minor = 0.0
+                after_minor = 0.0
+            two_level_acc = accuracy_score(test_meta_labels, two_level_preds)
+            two_level_macro_f1 = f1_score(test_meta_labels, two_level_preds, average="macro")
+            two_level_report = classification_report(test_meta_labels, two_level_preds, digits=4)
+            two_level_cm = confusion_matrix(test_meta_labels, two_level_preds)
+
+            oof_two_preds = np.argmax(two_level_oof_probs, axis=1).astype(np.int64) if len(two_level_oof_probs) else np.array([], dtype=np.int64)
+            oof_two_acc = accuracy_score(meta_labels, oof_two_preds) if len(oof_two_preds) else 0.0
+            oof_two_macro_f1 = f1_score(meta_labels, oof_two_preds, average="macro") if len(oof_two_preds) else 0.0
+            two_level_oof_test_gap = float(oof_two_macro_f1 - two_level_macro_f1)
+            if two_level_oof_test_gap > 0.12:
+                run_logger.warning(
+                    "[%s_two_level_blender] OOF-test gap is large: oof_macro_f1=%.4f test_macro_f1=%.4f gap=%.4f",
+                    ensemble_tag,
+                    float(oof_two_macro_f1),
+                    float(two_level_macro_f1),
+                    float(two_level_oof_test_gap),
+                )
+
+            two_level_cm_path = run_dir / "confusion_matrix_two_level_blender.png"
+            plot_confusion(two_level_cm, train_classes, two_level_cm_path, f"Confusion Matrix - {ensemble_tag}_two_level_blender")
+            log_saved(run_logger, two_level_cm_path, "confusion_matrix_two_level_blender")
+
+            two_level_report_path = run_dir / "report_two_level_blender.md"
+            save_report_md(
+                two_level_report_path,
+                title=f"融合方式: {base_fusion_mode}+stacking (two_level_blender)",
+                acc=two_level_acc,
+                macro_f1=two_level_macro_f1,
+                report=two_level_report,
+                cm=two_level_cm,
+                confusion_image=two_level_cm_path.name,
+                curve_image=curve_path.name,
+            )
+            log_saved(run_logger, two_level_report_path, "report_two_level_blender")
+
+            calibration_metrics = compute_calibration_metrics(labels=meta_labels, probs=two_level_oof_probs) if len(two_level_oof_probs) else {"ece": 0.0, "brier": 0.0}
+            postprocess = build_two_level_postprocess_payload(
+                stacking_level="two_level",
+                calibration={
+                    "method": str(stacking_calibration),
+                    "ece": float(calibration_metrics.get("ece", 0.0)),
+                    "brier": float(calibration_metrics.get("brier", 0.0)),
+                },
+                thresholds=two_level_thresholds,
+                minority_classes=minority_classes,
+                minority_recall_before=before_minor,
+                minority_recall_after=after_minor,
+                threshold_objective=stacking_threshold_objective,
+                objective_value=two_level_objective_value,
+                oof_test_gap=two_level_oof_test_gap,
+            )
+
+            method_results.append(
+                {
+                    "method": "two_level_blender",
+                    "acc": float(two_level_acc),
+                    "macro_f1": float(two_level_macro_f1),
+                    "oof_acc": float(oof_two_acc),
+                    "oof_macro_f1": float(oof_two_macro_f1),
+                    "report": two_level_report,
+                    "confusion_matrix": two_level_cm,
+                    "confusion_matrix_path": two_level_cm_path.name,
+                    "report_path": two_level_report_path.name,
+                    "meta_model_path": None,
+                    "postprocess": postprocess,
+                }
+            )
+            run_logger.info(
+                "[%s_two_level_blender] acc=%.4f macro_f1=%.4f oof_macro_f1=%.4f",
+                ensemble_tag,
+                float(two_level_acc),
+                float(two_level_macro_f1),
+                float(oof_two_macro_f1),
+            )
+        else:
+            run_logger.warning("two-level blender skipped: invalid level2 outputs")
+
+    single_layer_baseline = build_single_layer_baseline_result(method_results)
+    if single_layer_baseline is not None:
+        method_results.append(single_layer_baseline)
 
     if len(successful_method_probs) >= 2:
         vote_probs, vote_preds = weighted_soft_voting(successful_method_probs, successful_method_weights)
         vote_postprocess: Dict[str, Any] = {
             "weights": [float(w) for w in successful_method_weights],
-            "members": [m for m in methods if any(r.get("method") == m and not r.get("skipped") and not r.get("failed") for r in method_results)],
+            "members": [m for m in successful_method_names],
         }
         if len(successful_oof_probs) >= 2:
             oof_vote_probs, oof_vote_preds = weighted_soft_voting(successful_oof_probs, successful_method_weights)
@@ -3400,6 +3986,14 @@ def run_stacking_experiment(
             "report": base_eval["report"],
             "confusion_matrix": base_eval["cm"],
             "per_class_f1": base_eval["per_class_f1"],
+        },
+        "stacking": {
+            "requested_level": stacking_level,
+            "effective_level": effective_level,
+            "calibration": stacking_calibration,
+            "threshold_objective": stacking_threshold_objective,
+            "minority_lambda": float(stacking_minority_lambda),
+            "oof_folds": int(stacking_oof_folds),
         },
         "meta_methods": methods,
         "method_results": method_results,

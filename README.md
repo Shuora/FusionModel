@@ -222,7 +222,7 @@ python3 src/ssl_tls_rgb_image.py \
 - `src/train_fusion_attention.py`
 - `src/train_fusion_attention_stacking.py`
 
-提示：`attention_stacking` 若希望触发多模型 soft-voting，请把 `--meta_methods` 设为至少两个方法（例如 `xgboost,lightgbm,catboost`，前提是环境已安装对应库）。
+提示：`attention_stacking` 现默认启用二层 cost-sensitive stacking（`--stacking_level two_level`）。若希望同时产出对照 soft-voting，请把 `--meta_methods` 设为至少两个方法（例如 `xgboost,lightgbm,catboost`，前提是环境已安装对应库）。
 
 下面按四个任务分别给出独立命令，不使用合并命令。
 
@@ -252,6 +252,11 @@ python3 src/train_fusion_attention_stacking.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/attention_stacking \
   --meta_methods xgboost \
+  --stacking_level two_level \
+  --stacking_calibration temp \
+  --stacking_threshold_objective macro_f1_minority_recall \
+  --stacking_minority_lambda 0.3 \
+  --stacking_oof_folds 5 \
   --batch_size 32 \
   --epochs 32 \
   --patience 4 \
@@ -287,6 +292,11 @@ python3 src/train_fusion_attention_stacking.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking \
   --meta_methods xgboost \
+  --stacking_level two_level \
+  --stacking_calibration temp \
+  --stacking_threshold_objective macro_f1_minority_recall \
+  --stacking_minority_lambda 0.3 \
+  --stacking_oof_folds 5 \
   --batch_size 32 \
   --epochs 32 \
   --patience 4 \
@@ -322,6 +332,11 @@ python3 src/train_fusion_attention_stacking.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_stacking \
   --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level two_level \
+  --stacking_calibration temp \
+  --stacking_threshold_objective macro_f1_minority_recall \
+  --stacking_minority_lambda 0.3 \
+  --stacking_oof_folds 5 \
   --epochs 40 \
   --lr 3e-4 \
   --patience 8 \
@@ -370,6 +385,11 @@ python3 src/train_fusion_attention_stacking.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
   --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention_stacking \
   --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level two_level \
+  --stacking_calibration temp \
+  --stacking_threshold_objective macro_f1_minority_recall \
+  --stacking_minority_lambda 0.3 \
+  --stacking_oof_folds 5 \
   --epochs 40 \
   --lr 3e-4 \
   --patience 8 \
@@ -534,13 +554,21 @@ python3 src/train_fusion_attention.py \
 
 ```text
 --meta_methods
+--stacking_level
+--stacking_calibration
+--stacking_threshold_objective
+--stacking_minority_lambda
+--stacking_oof_folds
 ```
 
 `attention_stacking` 当前默认行为（无需额外参数）：
 
 - 元特征包含 `text/image/fusion` 三分支概率，并自动拼接 entropy、margin、分支一致性特征。
 - 元特征提取使用 deterministic loader（忽略训练阶段 `weighted sampler/shuffle/drop_last`），避免 OOF 评估被采样偏置放大。
-- 对每个 meta learner 自动执行 5-fold OOF 训练以减少元学习器过拟合。
+- 对每个 meta learner 自动执行 OOF 训练（默认 `5` folds，可由 `--stacking_oof_folds` 调整）以减少元学习器过拟合。
+- 默认在至少 2 个可用 Level-1 meta learner 时启用 `two_level` 二层融合器（cost-sensitive blender），并支持可解释降级：若可用 learner < 2，自动回落到 single-layer。
+- 默认对 Level-1 概率做 `temp` 校准（可选 `none/isotonic`），并在 `metrics.json` 记录校准质量指标（ECE/Brier）。
+- 默认在二层输出上执行 per-class threshold 优化，目标为 `macro_f1 + lambda * minority_recall`（`lambda` 由 `--stacking_minority_lambda` 控制）。
 - 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
 - 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
 - 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做 `Artemis/Ursnif` pair 二分类后处理链路（按类名定位，兼容含 `Cobalt` 的 6 类 MFCP）：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
@@ -629,7 +657,9 @@ outputs/<task_name>/attention_stacking/
 - attention 诊断图
 - stacking 结果图（各 meta learner）
 - `soft_voting` 报告与混淆矩阵（当至少 2 个 meta learner 可用时）
-- `metrics.json` 中记录每个 meta learner 的 `oof_acc/oof_macro_f1` 与后处理参数
+- `metrics.json` 中记录每个 meta learner 的 `oof_acc/oof_macro_f1` 与后处理参数；并记录 `stacking.requested_level/effective_level`、校准配置、阈值优化配置
+- `two_level_blender` 的 `postprocess` 额外记录：`threshold_objective`、`objective_value`、`oof_test_gap`、`minority_metrics`
+- 增加 `single_layer_baseline` 汇总条目（按 OOF macro-F1 选择最佳单层 meta learner），便于与 `soft_voting/two_level_blender` 做同口径对照
 
 ## 不推荐作为主命令的合并入口
 

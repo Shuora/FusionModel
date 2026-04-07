@@ -70,3 +70,14 @@
 - 2026-04-07 兼容策略: `src/fusion_common.py` 新增 `--charbert_mode` 等参数并透传到文本编码器；默认仍 `legacy`，现有 attention/stacking 命令不改也可跑。
 - 2026-04-07 接口兼容: 新模型提供 `encode_tokens`，`CharBERTTextEncoder` 优先走该接口；旧 `legacy` 路径仍可用。
 - 2026-04-07 验证结果: 在清理 Python 用户站点污染后（`unset PYTHONPATH PYTHONHOME PYTHONUSERBASE && PYTHONNOUSERSITE=1`），目标测试集 `26 tests` 全部通过。
+
+- 2026-04-07 two-level 改造: `attention_stacking` 新增参数 `--stacking_level/--stacking_calibration/--stacking_threshold_objective/--stacking_minority_lambda/--stacking_oof_folds`，默认开启二层路径（`two_level` + `temp` + `macro_f1_minority_recall`）。
+- 2026-04-07 two-level 改造: 新增多分类概率校准链路（temp 为默认，isotonic 可选）与校准指标统计（ECE/Brier），并将校准信息写入每个 method 的 `postprocess`。
+- 2026-04-07 two-level 改造: 新增 Level-2 特征构造（多 method 概率 + entropy/margin + 聚合不确定性）、二层 blender OOF/全量训练、per-class threshold 优化，目标显式对齐弱类召回。
+- 2026-04-07 two-level 改造: 新增 `requested_level/effective_level` 降级策略；当可用 Level-1 learner 少于 2 个时自动回退 single-layer，保证可用性。
+- 2026-04-07 可观测性补强: `metrics.json` 新增 `stacking` 配置块（level/calibration/objective/lambda/folds），并在 `method_results` 增加 `two_level_blender` 条目及阈值/弱类召回前后对比。
+- 2026-04-07 设计缺口补齐: Level-2 特征新增 `pairwise KL` 一致性统计，满足 spec 中的“method 间分歧信号”。
+- 2026-04-07 设计缺口补齐: Level-2 训练权重新增 `hard_sample_factor`（低置信样本更高权重），并与 `inverse_frequency` 归一化组合。
+- 2026-04-07 设计缺口补齐: two-level 新增独立 `oof_test_gap` 字段与大 gap 告警（阈值 `0.12`），与单层路径一致。
+- 2026-04-07 严格复核补齐: `build_two_level_postprocess_payload` 调用参数已与签名一致（新增 `threshold_objective/objective_value`），避免运行时参数缺失。
+- 2026-04-07 严格复核补齐: `single_layer_baseline` 不再仅是工具函数，已在主流程中落盘到 `method_results`，可直接用于单层/soft_voting/two_level 对照。

@@ -217,3 +217,38 @@
 - [x] 完成 `src/fusion_common.py` 参数扩展与模型初始化透传，保持入口脚本不变。
 - [x] 同步更新 `README.md` 参数文档与启用示例。
 - [x] 运行目标测试并通过。
+
+## Task (2026-04-07 二层代价敏感 Stacking 全量改造)
+将 `attention_stacking` 从当前单层 stacking + soft-voting 主路径升级为二层 cost-sensitive stacking 主路径，覆盖四个任务并优先提升弱类召回；保留单层/soft-voting 作为对照与降级路径。
+
+## Plan
+1. 在 worktree 中先补失败测试：新增 two-level 参数、校准、Level-2 特征、阈值优化、two-level 编排与报告字段测试。
+2. 改造 `src/fusion_common.py`：
+   - 增加 two-level 参数接线与 `build_common_kwargs` 透传；
+   - 增加多分类校准（temp/isotonic）与 ECE/Brier 统计；
+   - 增加 Level-2 特征构造、per-class threshold 优化；
+   - 增加 two-level blender 主链路与 `requested/effective level` 降级策略；
+   - 在 `metrics.json` 增加 stacking 配置与 two-level 后处理字段。
+3. 同步更新 `README.md`（四任务独立 attention_stacking 命令与新参数说明）。
+4. 运行目标回归并同步 `findings.md`、`progress.md`。
+
+## Task Status (2026-04-07 二层代价敏感 Stacking 全量改造)
+- [x] 完成 TDD 红灯（新增 9 个 two-level 相关测试，确认失败）。
+- [x] 完成核心实现（参数接线、校准、Level-2、阈值优化、主链路与落盘）。
+- [x] 完成 README 同步（四任务命令+参数说明）。
+- [x] 运行完整回归并同步 findings/progress。
+
+## Task (2026-04-07 二层 Stacking 严格复核补齐)
+对已实现 two-level 方案执行二次严格复核，补齐“函数存在但未接入主流程”与“调用签名不一致”类隐性缺口，并再次完成回归验证。
+
+## Plan
+1. 修复 two-level postprocess 参数接线，确保 `threshold_objective/objective_value` 被正确落盘。
+2. 将 `single_layer_baseline` 正式接入 `method_results` 主流程。
+3. 补充对应单测并执行全量目标回归。
+4. 同步 `README.md`、`findings.md`、`progress.md`。
+
+## Task Status (2026-04-07 二层 Stacking 严格复核补齐)
+- [x] 参数接线与主流程接入已完成。
+- [x] 单测补充并通过。
+- [x] 全量目标回归通过。
+- [x] 文档与过程记录已同步。
