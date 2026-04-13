@@ -124,6 +124,7 @@ ProcessedData/
 - 当前实现是先把原始抓包展开为 session，再在 session 级别切分 `Train/Test`
 - 训练命令中的 `--dataset_root` 应该指向 `ProcessedData` 的父目录，而不是 `ProcessedData/<task_name>`
 - 预处理默认会将日志落盘到任务目录下的 metadata/split_data.log 和 metadata/ssl_tls_rgb_image.log
+- `split_data.py` 日志会输出预处理汇总：raw 文件数、session 总数、写入 bin 总数、家族总数，以及每个家族的 Train/Test/Total 样本数
 - 如需自定义日志文件路径，可分别为两个脚本传入 --log_file
 
 ## 通用说明
@@ -185,8 +186,7 @@ python3 src/ssl_tls_rgb_image.py \
 python3 src/split_data.py \
   --task_name mta_multiclass \
   --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass \
-  --distribution_profile paper_mvtba
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mta_multiclass
 ```
 
 #### Step 2. 生成 RGB 图像
@@ -204,8 +204,7 @@ python3 src/ssl_tls_rgb_image.py \
 python3 src/split_data.py \
   --task_name mfcp_multiclass \
   --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass \
-  --distribution_profile paper_mvtba
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
 ```
 
 #### Step 2. 生成 RGB 图像

@@ -103,3 +103,22 @@
 - 2026-04-07: 补齐后再次回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_run_all_modes -v`（49 tests, OK）。
 - 2026-04-07: 根据你“再仔细检查”反馈继续补齐：修复 two-level postprocess 参数接线（`threshold_objective/objective_value`），并把 `single_layer_baseline` 正式接入 `method_results` 主流程。
 - 2026-04-07: 增补测试并回归通过：`python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_run_all_modes -v`（52 tests, OK）。
+- 2026-04-07: 按你要求增强预处理可观测性：`split_data.py` 新增预处理汇总日志与按家族 Train/Test/Total 样本统计输出。
+- 2026-04-07: 按 TDD 补充 `tests/test_split_data_tasks.py` 两个新测试（family summary 统计、日志输出校验）并回归通过：`python3 -m unittest tests.test_split_data_tasks -v`（15 tests, OK）。
+- 2026-04-07: 同步更新 README 预处理说明，明确 `split_data.py` 日志新增家族级统计输出。
+
+- 2026-04-07: 根据你的新问题完成 MTA/MFCP 训练产物审计，读取并对比 `metrics.json`、`report*.md`、`train.log` 与 `ProcessedData/*/metadata/manifest.json`。
+- 2026-04-07: 通过脚本汇总关键证据：MTA `20260404 -> 20260405` 的 OOF-test gap 从约 0.214 降至约 0.074；MFCP `20260406` gap 约 0.037，且 health 指标无 invalid 事件。
+- 2026-04-07: 完成根因排序：MTA 以数据分布极不均衡（max:min≈66:1）为主，MFCP 以类间可分性/特定配对混淆为主；当前集成学习链路整体有效，不是主故障源。
+
+- 2026-04-07: 按你的要求联网抓取 MTA/MFCP 官方页面并生成“尽量均衡”的下载清单 CSV。
+- 2026-04-07: 复用仓库内 `mta_direct_links_2021plus.txt`，按 7 类各 20 条写出 `outputs/balanced_pcap_links_mta_20_per_family.csv`。
+- 2026-04-07: 解析 `stratosphereips.org/datasets-malware` 的 capture 链接并二次解析各 capture 页面 `.pcap` 直链，按 6 类各 2 条写出 `outputs/balanced_pcap_links_mfcp_target2_per_family.csv`。
+- 2026-04-07: 额外生成合并文件 `outputs/balanced_pcap_links_combined.csv`，总计 152 条链接。
+
+- 2026-04-10: 读取 planning-with-files 约束并执行 session-catchup；确认本次请求为“MTA 最新训练日志复盘”。
+- 2026-04-10: 定位最新 MTA 训练产物，确认 `attention_stacking_v2/attention_stacking_20260408_234642` 仅存在 `train.log`。
+- 2026-04-10: 复核最新 `train.log`，记录末尾止于 `Epoch 40/40` 起始行，缺少最终 epoch 结果与 done/metrics 产物；整理 val_f1 平台期与 early-stop 计数情况。
+- 2026-04-10: 按用户要求回滚“精确 1w/类”版本，重新整理为“每类约 1w（可上下浮动）”。
+- 2026-04-10: 实施方式为从原始备份重建 `mta_multiclass`，设置每类总量上限 12000，不做上采样，保持原始 Train/Test 比例。
+- 2026-04-10: 完成一致性校验：`manifest total=81708`，各类分布在 `10176~12000`，并保留两个回滚快照目录。
