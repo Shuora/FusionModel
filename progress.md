@@ -125,4 +125,9 @@
 - 2026-04-13: 收到新的时序预处理增强需求，目标是引入 packet boundary / direction / length / delta_t / hierarchical input，并尽量保持现有训练入口不变。
 - 2026-04-13: 新增红灯测试，当前实现还没有 `split_data.PacketRecord` 和 `fusion_common.build_temporal_pcap_token_ids`，说明 packet 级元数据链路尚未接入。
 - 2026-04-13: 已完成时序预处理增强实现，`split_data.py` 现在写出 packet sidecar，`fusion_common.py` 现在优先读 sidecar 并生成分层 byte 序列。
+- 2026-04-13: 继续补完模型侧 packet-aware hierarchy，`CharBERTTextEncoder` 现在会基于 packet block、packet 元数据和 packet encoder 融合 CLS 与 packet summary。
 - 2026-04-13: 已完成回归验证：`python3 -m unittest tests.test_split_data_tasks tests.test_temporal_pcap_hierarchy tests.test_fusion_output_artifacts tests.test_attention_entrypoints tests.test_run_all_modes -v`。
+- 2026-04-13: 已完成文档措辞对齐，明确 `charaware` 路径不是简单平均池化，而是 packet 级元数据 + packet encoder 的分层时序摘要；再次回归确认 `49 tests, OK`。
+- 2026-04-13: 已补 `FusionDataset.load_pcap_data()` 的 sidecar/legacy 双路径回归测试，并再次验证 `49 tests, OK`。
+- 2026-04-13: 已补 sidecar 版本门控与回退测试，避免未来 sidecar 格式升级后被静默误读。
+- 2026-04-13: 最新完整回归通过 `50 tests, OK`，包含 sidecar 版本回退场景。

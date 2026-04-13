@@ -105,3 +105,6 @@
 - 2026-04-13 时序预处理审计: 当前 `split_data.py` 的 session 提取只保留 payload 字节并写入 `.bin`，`fusion_common.py::load_pcap_data()` 只读取前 `max_pcap_length` 个字节并补 `CLS/SEP/PAD`，没有 packet 边界、方向、长度或 `delta_t` 信息。
 - 2026-04-13 时序增强结果: `split_data.py` 现在会为每个 session 同步写出 `.bin` 与 `.json` sidecar；sidecar 保存 `timestamp/direction/packet_length/payload_hex`，训练时可从中重建 packet 边界与 `delta_t`。
 - 2026-04-13 时序增强结果: `fusion_common.py` 新增 `build_temporal_pcap_token_ids()`，会把 packet 元数据编码为 `<PKT ...>` / `</PKT>` 的分层 byte 序列，并在 sidecar 缺失时回退 legacy `.bin`。
+- 2026-04-13 时序增强补完: `CharBERTTextEncoder` 已接入 packet-aware hierarchy，会先对每个 packet payload 做 block pooling，再注入 packet 级元数据并经过 packet encoder，最后与 CLS 表示融合，模型侧真正利用了 packet boundary 语义。
+- 2026-04-13 时序增强回归: 已补 `FusionDataset.load_pcap_data()` 的 sidecar/legacy 双路径测试，确认分层 packet 序列会优先从 `.json` sidecar 读取，缺失时回退旧 `.bin`。
+- 2026-04-13 时序增强加固: `FusionDataset.load_pcap_data()` 现在会校验 sidecar `version`，不支持的版本会显式回退到 legacy `.bin`，避免后续格式演进时静默误读。

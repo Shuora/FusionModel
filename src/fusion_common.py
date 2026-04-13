@@ -565,6 +565,221 @@ def convert_grayscale_to_rgb(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def build_temporal_pcap_token_ids(
+    packet_records: list[dict],
+    max_pcap_length: int,
+    *,
+    pad_token: int = 256,
+    cls_token: int = 257,
+    sep_token: int = 258,
+) -> list[int]:
+    max_len = int(max_pcap_length)
+    if max_len < 2:
+        return [cls_token]
+
+    token_ids: list[int] = [cls_token]
+    previous_timestamp: float | None = None
+    for packet in packet_records:
+        try:
+            timestamp = float(packet.get('timestamp', 0.0))
+            direction = int(packet.get('direction', 0))
+            packet_length = int(packet.get('packet_length', 0))
+            payload_hex = str(packet.get('payload_hex', ''))
+            payload = bytes.fromhex(payload_hex)
+        except (TypeError, ValueError) as exc:
+            logger.warning('跳过格式不合法的 packet 记录: %s', exc)
+            continue
+
+        delta_t = 0.0 if previous_timestamp is None else max(timestamp - previous_timestamp, 0.0)
+        previous_timestamp = timestamp
+        header = f'<PKT dir={direction} len={packet_length} dt={delta_t:.6f}>'.encode('ascii')
+        footer = b'</PKT>'
+        block = list(header) + list(payload) + list(footer)
+        if len(token_ids) + len(block) + 1 > max_len:
+            break
+        token_ids.extend(block)
+
+    token_ids.append(sep_token)
+    if len(token_ids) < max_len:
+        token_ids.extend([pad_token] * (max_len - len(token_ids)))
+    return token_ids
+
+
+_TEMPORAL_PACKET_HEADER_RE = re.compile(
+    r"^<PKT dir=(?P<direction>\d+) len=(?P<length>\d+) dt=(?P<delta>[0-9]+(?:\.[0-9]+)?)>$"
+)
+
+
+def _decode_temporal_packet_header(header_tokens: list[int]) -> dict[str, float | int]:
+    header_text = bytes(int(token) for token in header_tokens if 0 <= int(token) <= 255).decode(
+        'ascii',
+        errors='ignore',
+    )
+    match = _TEMPORAL_PACKET_HEADER_RE.match(header_text)
+    if match:
+        return {
+            'direction': int(match.group('direction')),
+            'packet_length': int(match.group('length')),
+            'delta_t': float(match.group('delta')),
+        }
+    return {'direction': 0, 'packet_length': 0, 'delta_t': 0.0}
+
+
+def _extract_temporal_packet_records(input_ids: list[int], pad_id: int) -> list[dict[str, int | float]]:
+    header_prefix = [60, 80, 75, 84, 32]  # "<PKT "
+    footer = [60, 47, 80, 75, 84, 62]  # "</PKT>"
+    records: list[dict[str, int | float]] = []
+    idx = 0
+    n = len(input_ids)
+
+    while idx <= n - len(header_prefix):
+        if input_ids[idx : idx + len(header_prefix)] != header_prefix:
+            idx += 1
+            continue
+
+        header_start = idx
+        header_end = None
+        cursor = idx + len(header_prefix)
+        while cursor < n:
+            token = input_ids[cursor]
+            if token == pad_id:
+                break
+            if token == 62:  # ">"
+                header_end = cursor
+                break
+            cursor += 1
+
+        if header_end is None:
+            idx += 1
+            continue
+
+        payload_start = header_end + 1
+        footer_start = None
+        cursor = payload_start
+        while cursor <= n - len(footer):
+            if input_ids[cursor : cursor + len(footer)] == footer:
+                footer_start = cursor
+                break
+            if input_ids[cursor] == pad_id:
+                break
+            cursor += 1
+
+        if footer_start is None:
+            idx += 1
+            continue
+
+        header_meta = _decode_temporal_packet_header(input_ids[header_start : header_end + 1])
+        records.append(
+            {
+                'header_start': header_start,
+                'header_end': header_end,
+                'payload_start': payload_start,
+                'payload_end': footer_start,
+                'direction': header_meta['direction'],
+                'packet_length': header_meta['packet_length'],
+                'delta_t': header_meta['delta_t'],
+            }
+        )
+        idx = footer_start + len(footer)
+
+    return records
+
+
+def _build_temporal_packet_meta_tensor(record: dict[str, int | float], *, device, dtype) -> torch.Tensor:
+    direction = float(record.get('direction', 0))
+    packet_length = float(record.get('packet_length', 0))
+    delta_t = float(record.get('delta_t', 0.0))
+    meta = torch.tensor(
+        [
+            direction,
+            math.log1p(max(packet_length, 0.0)) / 10.0,
+            math.log1p(max(delta_t, 0.0)) / 10.0,
+        ],
+        device=device,
+        dtype=dtype,
+    )
+    return meta
+
+
+def _find_temporal_packet_spans(input_ids: list[int], pad_id: int) -> list[tuple[int, int]]:
+    header_prefix = [60, 80, 75, 84, 32]  # "<PKT "
+    footer = [60, 47, 80, 75, 84, 62]  # "</PKT>"
+    spans: list[tuple[int, int]] = []
+    idx = 0
+    n = len(input_ids)
+    while idx <= n - len(header_prefix):
+        if input_ids[idx : idx + len(header_prefix)] != header_prefix:
+            idx += 1
+            continue
+
+        header_end = None
+        cursor = idx + len(header_prefix)
+        while cursor < n:
+            token = input_ids[cursor]
+            if token == pad_id:
+                break
+            if token == 62:  # ">"
+                header_end = cursor
+                break
+            cursor += 1
+
+        if header_end is None:
+            idx += 1
+            continue
+
+        payload_start = header_end + 1
+        cursor = payload_start
+        while cursor <= n - len(footer):
+            if input_ids[cursor : cursor + len(footer)] == footer:
+                if payload_start < cursor:
+                    spans.append((payload_start, cursor))
+                idx = cursor + len(footer)
+                break
+            if input_ids[cursor] == pad_id:
+                idx = n
+                break
+            cursor += 1
+        else:
+            idx += 1
+    return spans
+
+
+def pool_temporal_packet_blocks(
+    encoded: torch.Tensor,
+    input_ids: torch.Tensor,
+    pad_id: int,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Optional[torch.Tensor]:
+    if encoded.ndim != 3 or input_ids.ndim != 2 or encoded.size(0) != input_ids.size(0):
+        raise ValueError('encoded/input_ids batch dimensions do not match')
+
+    device = encoded.device
+    summaries: list[torch.Tensor] = []
+    for batch_idx in range(encoded.size(0)):
+        token_ids = input_ids[batch_idx].detach().cpu().tolist()
+        spans = _find_temporal_packet_spans(token_ids, pad_id)
+        packet_vecs: list[torch.Tensor] = []
+        for start, end in spans:
+            block = encoded[batch_idx, start:end]
+            if attention_mask is not None:
+                block_mask = attention_mask[batch_idx, start:end].to(dtype=encoded.dtype)
+                block = block * block_mask.unsqueeze(-1)
+                denom = block_mask.sum().clamp(min=1.0)
+                packet_vec = block.sum(dim=0) / denom
+            else:
+                packet_vec = block.mean(dim=0)
+            packet_vecs.append(packet_vec)
+
+        if packet_vecs:
+            summaries.append(torch.stack(packet_vecs, dim=0).mean(dim=0))
+        else:
+            summaries.append(encoded[batch_idx, 0])
+
+    if not summaries:
+        return None
+    return torch.stack(summaries, dim=0).to(device=device, dtype=encoded.dtype)
+
+
 class FusionDataset(Dataset):
     """
     融合数据集类，同时加载图像数据和Pcap数据
@@ -761,7 +976,8 @@ class FusionDataset(Dataset):
         """
         加载和预处理pcap数据，并返回字节ID序列（LongTensor）。
 
-        - 序列 = [CLS] + bytes[:max_len-2] + [SEP]
+        - Legacy: 序列 = [CLS] + bytes[:max_len-2] + [SEP]
+        - Hierarchical: 若存在同名 `.json` sidecar，则序列 = [CLS] + packet tag + payload + [/PKT] + ... + [SEP]
         - 不足 max_len 用 PAD 填充
 
         约定：byte id 取值 [0,255]；特殊 token：PAD=256, CLS=257, SEP=258
@@ -773,6 +989,30 @@ class FusionDataset(Dataset):
             sep_token = 258
             if max_len < 2:
                 return torch.tensor([cls_token], dtype=torch.long)
+
+            meta_path = Path(pcap_path).with_suffix('.json')
+            if meta_path.is_file():
+                try:
+                    with meta_path.open('r', encoding='utf-8') as f:
+                        payload = json.load(f)
+                    if not isinstance(payload, dict):
+                        raise ValueError('temporal sidecar payload must be a JSON object')
+                    version = int(payload.get('version', 0))
+                    if version != 1:
+                        logger.warning('不支持的时序 sidecar 版本 %s，回退 legacy `.bin`', version)
+                    else:
+                        packets = payload.get('packets', [])
+                        if isinstance(packets, list) and packets:
+                            tokens = build_temporal_pcap_token_ids(
+                                packets,
+                                max_pcap_length=max_len,
+                                pad_token=pad_token,
+                                cls_token=cls_token,
+                                sep_token=sep_token,
+                            )
+                            return torch.tensor(tokens, dtype=torch.long)
+                except Exception as exc:
+                    logger.warning('读取时序 sidecar 失败 %s: %s', meta_path, exc)
 
             # 只读取模型会用到的字节，避免大 pcap 文件整包读取导致 I/O 成为瓶颈。
             with open(pcap_path, "rb") as f:
@@ -1059,6 +1299,19 @@ class CharBERTTextEncoder(nn.Module):
             self.charbert = None
             self.proj = nn.Linear(1, feature_dim)
 
+        self.temporal_packet_proj = nn.Linear(self.char_hidden_size + 3, self.char_hidden_size)
+        self.temporal_packet_activation = nn.GELU()
+        self.temporal_packet_norm = nn.LayerNorm(self.char_hidden_size)
+        temporal_packet_layer = nn.TransformerEncoderLayer(
+            d_model=self.char_hidden_size,
+            nhead=num_heads,
+            dim_feedforward=self.char_hidden_size * 4,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.temporal_packet_encoder = nn.TransformerEncoder(temporal_packet_layer, num_layers=1)
+        self.temporal_packet_pos_emb = nn.Embedding(max(2, seq_len + 1), self.char_hidden_size)
+
     def encode_tokens(self, x: torch.Tensor):
         if self.charbert is None:
             return None, None
@@ -1078,6 +1331,55 @@ class CharBERTTextEncoder(nn.Module):
 
         return None, None
 
+    def _encode_temporal_session_summary(
+        self,
+        encoded: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Optional[torch.Tensor]:
+        if encoded.ndim != 3 or input_ids.ndim != 2 or encoded.size(0) != input_ids.size(0):
+            raise ValueError('encoded/input_ids batch dimensions do not match')
+
+        summaries: list[torch.Tensor] = []
+        for batch_idx in range(encoded.size(0)):
+            token_ids = input_ids[batch_idx].detach().cpu().tolist()
+            packet_records = _extract_temporal_packet_records(token_ids, self.pad_id)
+            packet_vecs: list[torch.Tensor] = []
+            for packet_idx, record in enumerate(packet_records):
+                payload_start = int(record['payload_start'])
+                payload_end = int(record['payload_end'])
+                if payload_end <= payload_start:
+                    continue
+
+                block = encoded[batch_idx, payload_start:payload_end]
+                if attention_mask is not None:
+                    block_mask = attention_mask[batch_idx, payload_start:payload_end].to(dtype=encoded.dtype)
+                    block = block * block_mask.unsqueeze(-1)
+                    denom = block_mask.sum().clamp(min=1.0)
+                    payload_vec = block.sum(dim=0) / denom
+                else:
+                    payload_vec = block.mean(dim=0)
+
+                meta_vec = _build_temporal_packet_meta_tensor(record, device=encoded.device, dtype=encoded.dtype)
+                packet_input = torch.cat([payload_vec, meta_vec], dim=-1).unsqueeze(0)
+                packet_vec = self.temporal_packet_proj(packet_input)
+                packet_vec = self.temporal_packet_activation(packet_vec)
+                packet_vec = self.temporal_packet_norm(packet_vec)
+                pos_idx = min(packet_idx, self.temporal_packet_pos_emb.num_embeddings - 1)
+                packet_vec = packet_vec + self.temporal_packet_pos_emb(
+                    torch.tensor([pos_idx], device=encoded.device, dtype=torch.long)
+                )
+                packet_vecs.append(packet_vec.squeeze(0))
+
+            if packet_vecs:
+                packet_seq = torch.stack(packet_vecs, dim=0).unsqueeze(0)
+                packet_seq = self.temporal_packet_encoder(packet_seq)
+                summaries.append(packet_seq.mean(dim=1).squeeze(0))
+
+        if not summaries:
+            return None
+        return torch.stack(summaries, dim=0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.charbert is None:
             x_mean = x.float().mean(dim=1, keepdim=True)
@@ -1088,8 +1390,17 @@ class CharBERTTextEncoder(nn.Module):
         enc, pad_mask = self.encode_tokens(x)
         if enc is not None:
             enc = enc * attention_mask.unsqueeze(-1).to(enc.dtype)
-            denom = attention_mask.sum(dim=1, keepdim=True).clamp(min=1).to(enc.dtype)
-            pooled = enc.sum(dim=1) / denom
+            cls_summary = enc[:, 0]
+            packet_summary = self._encode_temporal_session_summary(
+                enc,
+                x,
+                attention_mask=attention_mask,
+            )
+            if packet_summary is not None:
+                pooled = 0.5 * cls_summary + 0.5 * packet_summary
+            else:
+                denom = attention_mask.sum(dim=1, keepdim=True).clamp(min=1).to(enc.dtype)
+                pooled = enc.sum(dim=1) / denom
             return self.proj(pooled)
 
         try:

@@ -74,6 +74,8 @@
   - `ProcessedData/<task>/pcap_data/{Train,Test}`（session 目录下同时落 `*.bin` 与 `*.json` sidecar；训练时优先读 sidecar，缺失则回退旧 `.bin`）
   - `ProcessedData/<task>/image_data/{Train,Test}`
   - 训练入口：`src/train_fusion_attention.py`、`src/train_fusion_attention_stacking.py`、`src/run_all_modes.py`
+- 时序分支约定：
+  - `charaware` 模式会对 sidecar 中的 packet block 做 packet-aware hierarchy：先聚合 packet payload，再注入 packet 级元数据并经过 packet encoder，最后与 CLS 表示融合；这层逻辑是当前“分层输入”的实现位置，不要再把 packet 级语义只当作扁平字节序列理解
 - 默认训练输出目录位于仓库根目录：`outputs/`
 - 默认训练运行参数应在代码和文档间保持一致：
   - `batch_size=32`
