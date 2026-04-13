@@ -8,7 +8,7 @@ import os
 import random
 import socket
 import struct
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -75,12 +75,21 @@ class RawSample:
 
 
 @dataclass(frozen=True)
+class PacketRecord:
+    timestamp: float
+    direction: int
+    packet_length: int
+    payload: bytes
+
+
+@dataclass(frozen=True)
 class SessionSample:
     raw_path: Path
     label: str
     dataset_name: str
     session_name: str
     bin_data: bytes
+    packet_records: tuple[PacketRecord, ...] = field(default_factory=tuple)
 
 
 def ip_to_str(ip_bytes: bytes) -> str | None:
@@ -88,6 +97,20 @@ def ip_to_str(ip_bytes: bytes) -> str | None:
         return socket.inet_ntoa(ip_bytes).replace('.', '-')
     except OSError:
         return None
+
+
+def _canonical_flow_key(
+    proto: str,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+) -> tuple[tuple[str, str, int, str, int], int]:
+    forward = (src_ip, src_port)
+    reverse = (dst_ip, dst_port)
+    if forward <= reverse:
+        return (proto, src_ip, src_port, dst_ip, dst_port), 0
+    return (proto, dst_ip, dst_port, src_ip, src_port), 1
 
 
 def build_processed_root(base_dir: Path, task_name: str) -> Path:
@@ -170,7 +193,14 @@ def expand_raw_samples_to_sessions(samples: Iterable[RawSample]) -> list[Session
             continue
 
         pcap_base = sample.raw_path.stem
-        for (proto, src_ip, src_port, dst_ip, dst_port), bin_data in sessions.items():
+        for (proto, src_ip, src_port, dst_ip, dst_port), packet_records in sessions.items():
+            normalized_packets = _normalize_packet_records(packet_records)
+            if normalized_packets:
+                bin_data = b''.join(record.payload for record in normalized_packets if record.payload)
+            elif isinstance(packet_records, (bytes, bytearray)):
+                bin_data = bytes(packet_records)
+            else:
+                bin_data = b''
             if not bin_data:
                 continue
             session_name = f'{pcap_base}.{proto}_{src_ip}_{src_port}_{dst_ip}_{dst_port}'
@@ -181,9 +211,18 @@ def expand_raw_samples_to_sessions(samples: Iterable[RawSample]) -> list[Session
                     dataset_name=sample.dataset_name,
                     session_name=session_name,
                     bin_data=bytes(bin_data),
+                    packet_records=normalized_packets,
                 )
             )
     return session_items
+
+
+def _normalize_packet_records(packet_records: object) -> tuple[PacketRecord, ...]:
+    if isinstance(packet_records, tuple) and packet_records and isinstance(packet_records[0], PacketRecord):
+        return packet_records
+    if isinstance(packet_records, list) and packet_records and isinstance(packet_records[0], PacketRecord):
+        return tuple(packet_records)
+    return tuple()
 
 
 def _resolve_distribution_targets(task_name: str, distribution_profile: str | None) -> dict[str, dict[str, int]] | None:
@@ -369,15 +408,15 @@ def iter_packets(capture_path: Path):
             yield ts, buf
 
 
-def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, str, int, str, int], bytearray]:
+def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, str, int, str, int], list[PacketRecord]]:
     capture_path = Path(capture_path)
-    sessions: dict[tuple[str, str, int, str, int], bytearray] = {}
+    sessions: dict[tuple[str, str, int, str, int], list[PacketRecord]] = {}
     try:
         import dpkt
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError('dpkt is required to extract sessions from capture files') from exc
 
-    for _, buf in iter_packets(capture_path):
+    for ts, buf in iter_packets(capture_path):
         try:
             eth = dpkt.ethernet.Ethernet(buf)
         except (dpkt.UnpackError, ValueError):
@@ -400,8 +439,15 @@ def extract_sessions(capture_path: os.PathLike[str] | str) -> dict[tuple[str, st
         payload = transport.data
         if not payload:
             continue
-        key = (proto, src_ip, transport.sport, dst_ip, transport.dport)
-        sessions.setdefault(key, bytearray()).extend(payload)
+        key, direction = _canonical_flow_key(proto, src_ip, transport.sport, dst_ip, transport.dport)
+        sessions.setdefault(key, []).append(
+            PacketRecord(
+                timestamp=float(ts),
+                direction=int(direction),
+                packet_length=len(buf),
+                payload=bytes(payload),
+            )
+        )
     return sessions
 
 
@@ -412,6 +458,22 @@ def _write_sessions(samples: Iterable[SessionSample], split_name: str, processed
         dst_dir.mkdir(parents=True, exist_ok=True)
         bin_path = dst_dir / f'{sample.session_name}.bin'
         bin_path.write_bytes(sample.bin_data)
+        if sample.packet_records:
+            meta_path = bin_path.with_suffix('.json')
+            meta_payload = {
+                'version': 1,
+                'raw_path': str(sample.raw_path),
+                'label': sample.label,
+                'dataset_name': sample.dataset_name,
+                'session_name': sample.session_name,
+                'packets': [],
+            }
+            for record in sample.packet_records:
+                record_payload = asdict(record)
+                record_payload['payload_hex'] = record.payload.hex()
+                record_payload.pop('payload', None)
+                meta_payload['packets'].append(record_payload)
+            meta_path.write_text(json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding='utf-8')
         manifest_rows.append(
             {
                 'split': split_name,

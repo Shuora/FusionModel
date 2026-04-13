@@ -327,7 +327,9 @@
 
 ## Task Status (2026-04-13 时序预处理增强)
 - [x] 已审计当前时序输入契约，确认 packet 级信息在 `extract_sessions` / `load_pcap_data` 处丢失。
-- [x] 已补红灯测试，覆盖 packet 元数据写入与 temporal token 生成。
+- [x] 已补红灯测试，覆盖 packet 元数据写入、temporal token 生成，以及 loader 的 sidecar / legacy 回退路径。
 - [x] 已实现 packet 级 sidecar、hierarchical byte 序列加载与 legacy fallback。
+- [x] 已补模型侧 packet-aware hierarchy，实现 packet block、packet 元数据与 CLS 表示融合。
+- [x] 已补 sidecar 版本门控，避免未来格式升级导致静默误读。
 - [x] 已运行相关回归测试并通过。
 - [x] 已同步 README / AGENTS / findings / progress。
