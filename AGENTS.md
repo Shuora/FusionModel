@@ -71,7 +71,7 @@
   - `mfcp_multiclass`
 - 标准数据流：
   - `SourceData/<dataset>`
-  - `ProcessedData/<task>/pcap_data/{Train,Test}`
+  - `ProcessedData/<task>/pcap_data/{Train,Test}`（session 目录下同时落 `*.bin` 与 `*.json` sidecar；训练时优先读 sidecar，缺失则回退旧 `.bin`）
   - `ProcessedData/<task>/image_data/{Train,Test}`
   - 训练入口：`src/train_fusion_attention.py`、`src/train_fusion_attention_stacking.py`、`src/run_all_modes.py`
 - 默认训练输出目录位于仓库根目录：`outputs/`
