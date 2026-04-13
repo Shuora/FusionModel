@@ -110,18 +110,25 @@ ProcessedData/
         └── manifest.json
 ```
 
+`pcap_data` 里的每个 session 默认会同时落盘：
+
+- `*.bin`：兼容旧流程的原始字节流
+- `*.json`：packet 级 sidecar，保存 packet boundary、direction、length 和 `delta_t`
+
 ## 数据预处理流程
 
 每个任务的预处理都分两步：
 
 1. `split_data.py`
    把 `SourceData` 里的原始 `pcap/pcapng` 提取为 session，并写入 `ProcessedData/<task_name>/pcap_data/...`
+   - 同步写出 `*.bin` + `*.json` sidecar，其中 `*.json` 记录 packet boundary、direction、length 与 `delta_t`
 2. `ssl_tls_rgb_image.py`
    把 `pcap_data` 下的 `.bin` 转换为 `image_data` 下的 `.png`
 
 注意：
 
 - 当前实现是先把原始抓包展开为 session，再在 session 级别切分 `Train/Test`
+- 训练时 `FusionDataset` 会优先读取同名 `.json` sidecar，并将 packet boundary / direction / length / `delta_t` 编成分层 byte 序列；如果 sidecar 缺失，则自动回退到旧的纯字节流 `.bin`
 - 训练命令中的 `--dataset_root` 应该指向 `ProcessedData` 的父目录，而不是 `ProcessedData/<task_name>`
 - 预处理默认会将日志落盘到任务目录下的 metadata/split_data.log 和 metadata/ssl_tls_rgb_image.log
 - `split_data.py` 日志会输出预处理汇总：raw 文件数、session 总数、写入 bin 总数、家族总数，以及每个家族的 Train/Test/Total 样本数

@@ -102,3 +102,6 @@
 - 2026-04-10 MTA 重新整理: 已按“每类约 1w（允许上下浮动）”重建 `ProcessedData/mta_multiclass`，策略为 `cap_total_per_class=12000`、小类不做上采样。
 - 2026-04-10 MTA 重新整理: 新分布为 Dridex=10176、Qakbot=11532，其余 5 类=12000；Train/Test 维持原始比例约 8:2。
 - 2026-04-10 MTA 重新整理: 已保留两份可回滚快照：原始全集 `mta_multiclass_backup_before_10k_20260410_230330` 与精确10k版 `mta_multiclass_exact10k_snapshot_20260410_230812`。
+- 2026-04-13 时序预处理审计: 当前 `split_data.py` 的 session 提取只保留 payload 字节并写入 `.bin`，`fusion_common.py::load_pcap_data()` 只读取前 `max_pcap_length` 个字节并补 `CLS/SEP/PAD`，没有 packet 边界、方向、长度或 `delta_t` 信息。
+- 2026-04-13 时序增强结果: `split_data.py` 现在会为每个 session 同步写出 `.bin` 与 `.json` sidecar；sidecar 保存 `timestamp/direction/packet_length/payload_hex`，训练时可从中重建 packet 边界与 `delta_t`。
+- 2026-04-13 时序增强结果: `fusion_common.py` 新增 `build_temporal_pcap_token_ids()`，会把 packet 元数据编码为 `<PKT ...>` / `</PKT>` 的分层 byte 序列，并在 sidecar 缺失时回退 legacy `.bin`。

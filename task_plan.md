@@ -309,3 +309,25 @@
 - [x] 已按“每类约1w”完成重采样（上限 12000，小类不放大）。
 - [x] 已完成 manifest 与目录计数校验。
 - [x] 已保留可回滚快照目录。
+
+## Task (2026-04-13 时序预处理增强)
+将融合流水线的时序分支从“纯字节流裁剪”升级为“保留 packet 边界、方向、长度与 `delta_t` 的分层输入”，同时尽量保持现有训练入口与图像分支接口不变。
+
+## Plan
+1. 审计当前 `split_data.py`、`fusion_common.py` 与 `CharBERT` 文本分支的数据契约，确认 packet 级信息现在哪里被丢弃。
+2. 先新增回归测试，覆盖：
+   - 新的时序样本格式是否保留 packet 边界、方向、长度与时间间隔；
+   - 数据集加载器是否能解析分层 packet 序列；
+   - 旧字节流输入的兼容行为是否明确。
+3. 最小改造预处理与加载链路：
+   - `split_data.py` 输出新的时序样本表示；
+   - `fusion_common.py` 的数据集读取与 CharBERT 输入适配分层 packet 序列；
+   - 如有必要，补充轻量的 packet/session 聚合逻辑，但不扩大训练入口。
+4. 运行目标测试并同步更新 `README.md`、`findings.md`、`progress.md`，明确新格式与验证方式。
+
+## Task Status (2026-04-13 时序预处理增强)
+- [x] 已审计当前时序输入契约，确认 packet 级信息在 `extract_sessions` / `load_pcap_data` 处丢失。
+- [x] 已补红灯测试，覆盖 packet 元数据写入与 temporal token 生成。
+- [x] 已实现 packet 级 sidecar、hierarchical byte 序列加载与 legacy fallback。
+- [x] 已运行相关回归测试并通过。
+- [x] 已同步 README / AGENTS / findings / progress。

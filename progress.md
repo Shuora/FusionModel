@@ -122,3 +122,7 @@
 - 2026-04-10: 按用户要求回滚“精确 1w/类”版本，重新整理为“每类约 1w（可上下浮动）”。
 - 2026-04-10: 实施方式为从原始备份重建 `mta_multiclass`，设置每类总量上限 12000，不做上采样，保持原始 Train/Test 比例。
 - 2026-04-10: 完成一致性校验：`manifest total=81708`，各类分布在 `10176~12000`，并保留两个回滚快照目录。
+- 2026-04-13: 收到新的时序预处理增强需求，目标是引入 packet boundary / direction / length / delta_t / hierarchical input，并尽量保持现有训练入口不变。
+- 2026-04-13: 新增红灯测试，当前实现还没有 `split_data.PacketRecord` 和 `fusion_common.build_temporal_pcap_token_ids`，说明 packet 级元数据链路尚未接入。
+- 2026-04-13: 已完成时序预处理增强实现，`split_data.py` 现在写出 packet sidecar，`fusion_common.py` 现在优先读 sidecar 并生成分层 byte 序列。
+- 2026-04-13: 已完成回归验证：`python3 -m unittest tests.test_split_data_tasks tests.test_temporal_pcap_hierarchy tests.test_fusion_output_artifacts tests.test_attention_entrypoints tests.test_run_all_modes -v`。
