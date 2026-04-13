@@ -22,6 +22,29 @@ from split_data import (
 
 
 class SplitDataTaskTests(unittest.TestCase):
+    def test_build_family_split_summary_counts_train_test_total(self) -> None:
+        splits = {
+            'Train': [
+                DummySample('a1', 'alpha'),
+                DummySample('a2', 'alpha'),
+                DummySample('b1', 'beta'),
+            ],
+            'Test': [
+                DummySample('a3', 'alpha'),
+                DummySample('b2', 'beta'),
+            ],
+        }
+
+        summary = split_data.build_family_split_summary(splits)
+
+        self.assertEqual(
+            summary,
+            {
+                'alpha': {'Train': 2, 'Test': 1, 'Total': 3},
+                'beta': {'Train': 1, 'Test': 1, 'Total': 2},
+            },
+        )
+
     def test_discover_ustc_flat_files(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:
             root = tmp_path / 'SourceData' / 'USTC-TFC2016'
@@ -213,6 +236,35 @@ class SplitDataTaskTests(unittest.TestCase):
             test_bins = sorted((processed_root / 'pcap_data' / 'Test' / 'Geodo').glob('*.bin'))
             self.assertEqual(len(train_bins), 2)
             self.assertEqual(len(test_bins), 2)
+
+    def test_split_dataset_logs_family_train_test_summary(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'USTC-TFC2016'
+            source_root.mkdir(parents=True)
+            capture_path = source_root / 'Geodo.pcap'
+            capture_path.write_bytes(b'x')
+
+            fake_sessions = {
+                ('TCP', '1-1-1-1', 1111, '2-2-2-2', 80): bytearray(b'a'),
+                ('TCP', '1-1-1-1', 1112, '2-2-2-2', 80): bytearray(b'b'),
+                ('TCP', '1-1-1-1', 1113, '2-2-2-2', 80): bytearray(b'c'),
+                ('TCP', '1-1-1-1', 1114, '2-2-2-2', 80): bytearray(b'd'),
+            }
+
+            with self.assertLogs('split_data', level='INFO') as captured:
+                with patch('split_data.extract_sessions', return_value=fake_sessions):
+                    split_dataset(
+                        task_name='ustc_multiclass',
+                        source_root=tmp_path / 'SourceData',
+                        processed_root=tmp_path / 'ProcessedData' / 'ustc_multiclass',
+                        train_ratio=0.5,
+                        seed=7,
+                    )
+
+        output = '\n'.join(captured.output)
+        self.assertIn('Preprocess summary:', output)
+        self.assertIn('families=1', output)
+        self.assertIn('Family summary: label=Geodo train=2 test=2 total=4', output)
 
     def test_iter_packets_tolerates_truncated_tail_in_pcap(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:

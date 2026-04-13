@@ -252,3 +252,60 @@
 - [x] 单测补充并通过。
 - [x] 全量目标回归通过。
 - [x] 文档与过程记录已同步。
+
+## Task (2026-04-07 预处理日志补充家族统计)
+增强预处理日志可观测性：除文件处理数量外，输出生成家族数，以及每个家族的 Train/Test/Total 样本统计。
+
+## Plan
+1. 在 `split_data.py` 增加家族级统计汇总函数并接入日志输出。
+2. 按 TDD 补充单元测试，覆盖统计结果与日志输出内容。
+3. 运行 `tests.test_split_data_tasks` 验证通过。
+4. 同步更新 README、findings、progress。
+
+## Task Status (2026-04-07 预处理日志补充家族统计)
+- [x] 代码实现完成：新增汇总日志与家族 Train/Test/Total 输出。
+- [x] 测试已补齐并通过（15 tests, OK）。
+- [x] README/findings/progress 已同步。
+
+## Task (2026-04-07 MTA/MFCP 训练问题定位)
+基于 `outputs/` 中 MTA 与 MFCP 的训练日志、`metrics.json`、分类报告与处理后分布，判断主要瓶颈属于模型能力、分支平衡、数据分布还是集成学习链路。
+
+## Plan
+1. 收集并对比 MTA/MFCP 最新 attention + attention_stacking 的关键指标（macro_f1、弱类 recall、OOF-test gap）。
+2. 从 `train.log` 排查训练稳定性与集成链路告警（NaN/Inf、early stop、OOF gap warning）。
+3. 从 `ProcessedData/*/metadata/manifest.json` 统计 Train/Test 类别分布不均衡程度。
+4. 按证据给出 root cause 排序与下一步优化优先级。
+
+## Task Status (2026-04-07 MTA/MFCP 训练问题定位)
+- [x] 指标/日志/分类报告已完成交叉核对。
+- [x] 类别分布统计完成（MTA max/min≈66:1，MFCP max/min≈34.6:1）。
+- [x] 已形成结论：MTA 以分布不均衡为主，MFCP 以类间可分性不足为主；集成学习当前不是主故障源。
+
+## Task (2026-04-07 MTA/MFCP 均衡下载链接清单)
+从 MTA 与 MFCP 官方页面抓取可下载 pcap 链接，按家族尽量均衡生成 CSV 并落盘。
+
+## Plan
+1. 抓取并解析 `https://www.stratosphereips.org/datasets-malware` 与 `https://malware-traffic-analysis.net/` 的链接信息。
+2. 从 MTA 现有整理文件提取 7 类家族 direct pcap.zip 链接，按每类固定数量采样。
+3. 从 MFCP 数据集页提取家族候选 capture，并二次解析 capture 页面得到 direct `.pcap` 下载链接。
+4. 输出 MTA、MFCP、combined 三份 CSV 到 `outputs/`。
+
+## Task Status (2026-04-07 MTA/MFCP 均衡下载链接清单)
+- [x] 官方页面已抓取并解析。
+- [x] 已生成 MTA 每类 20 条（共 140 条）链接清单。
+- [x] 已生成 MFCP 每类目标 2 条（共 12 条）链接清单，并尽量补齐稀缺家族。
+- [x] CSV 已落盘到 `outputs/`。
+
+## Task (2026-04-10 MTA 最新训练日志复盘)
+复盘最新 MTA 训练日志，确认训练是否完成、是否出现数值异常或早停异常，并给出无提升的原因判断与下一步建议。
+
+## Plan
+1. 定位最新 MTA run（attention / attention_stacking / attention_stacking_v2）日志与产物。
+2. 复核 train.log 结尾与关键指标走势，检查是否中断、是否存在 NaN/Inf 或早停异常。
+3. 对比此前 MTA run 的已知基线，输出问题归因与改进建议。
+
+## Task Status (2026-04-10 MTA 每类约1w整理)
+- [x] 已回滚精确 1w/类版本。
+- [x] 已按“每类约1w”完成重采样（上限 12000，小类不放大）。
+- [x] 已完成 manifest 与目录计数校验。
+- [x] 已保留可回滚快照目录。

@@ -288,6 +288,19 @@ def split_task_inputs(
     return {'Train': train, 'Test': test}
 
 
+def build_family_split_summary(
+    splits: dict[str, list[RawSample | SessionSample]],
+) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for split_name in ('Train', 'Test'):
+        for sample in splits.get(split_name, []):
+            label_stats = summary.setdefault(sample.label, {'Train': 0, 'Test': 0, 'Total': 0})
+            if split_name in ('Train', 'Test'):
+                label_stats[split_name] += 1
+            label_stats['Total'] += 1
+    return summary
+
+
 def _iter_pcap_packets(capture_path: Path):
     with capture_path.open('rb') as fh:
         global_header = fh.read(24)
@@ -435,6 +448,7 @@ def split_dataset(
         task_name=task_name,
         distribution_profile=distribution_profile,
     )
+    family_summary = build_family_split_summary(splits)
 
     manifest_rows: list[dict[str, str]] = []
     for split_name, split_samples in splits.items():
@@ -443,6 +457,29 @@ def split_dataset(
     metadata_dir = processed_root / 'metadata'
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, indent=2), encoding='utf-8')
+
+    train_count = len(splits.get('Train', []))
+    test_count = len(splits.get('Test', []))
+    total_written = train_count + test_count
+    logger.info(
+        'Preprocess summary: raw_files=%s sessions=%s written_bins=%s families=%s train=%s test=%s',
+        len(raw_samples),
+        len(session_samples),
+        total_written,
+        len(family_summary),
+        train_count,
+        test_count,
+    )
+    for label in sorted(family_summary):
+        stats = family_summary[label]
+        logger.info(
+            'Family summary: label=%s train=%s test=%s total=%s',
+            label,
+            stats['Train'],
+            stats['Test'],
+            stats['Total'],
+        )
+
     return processed_root
 
 

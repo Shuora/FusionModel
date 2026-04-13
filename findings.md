@@ -81,3 +81,24 @@
 - 2026-04-07 设计缺口补齐: two-level 新增独立 `oof_test_gap` 字段与大 gap 告警（阈值 `0.12`），与单层路径一致。
 - 2026-04-07 严格复核补齐: `build_two_level_postprocess_payload` 调用参数已与签名一致（新增 `threshold_objective/objective_value`），避免运行时参数缺失。
 - 2026-04-07 严格复核补齐: `single_layer_baseline` 不再仅是工具函数，已在主流程中落盘到 `method_results`，可直接用于单层/soft_voting/two_level 对照。
+- 2026-04-07 预处理日志增强: `src/split_data.py` 新增预处理汇总日志，输出 raw 文件数、session 总数、写入 bin 总数、家族数，以及每个家族的 Train/Test/Total 样本统计。
+- 2026-04-07 预处理测试覆盖: `tests/test_split_data_tasks.py` 新增 family summary 纯函数测试与日志输出测试，验证汇总字段与按家族 Train/Test 统计会写入日志。
+
+- 2026-04-07 MTA/MFCP 问题定位: MTA 最新稳定 run（`attention_stacking_20260405_175905`）已明显优于旧 run（`20260404_233111`），宏 F1 从 `0.7338` 提升到 `0.8736`，OOF-test gap 从约 `0.214` 收敛到约 `0.074`，说明此前“集成学习失效”主要是实现偏差，现已基本修复。
+- 2026-04-07 MTA/MFCP 问题定位: MTA 当前剩余瓶颈主要是极端类别不均衡（manifest 统计 Train/Test max:min 均约 `66:1`）；在该分布下最小类 `Dridex` 在最佳 stacking 下 recall 仍低于主流类，属于数据分布主导问题而非训练崩溃。
+- 2026-04-07 MTA/MFCP 问题定位: MFCP 最新 run（`attention_stacking_20260406_233535`）训练过程稳定（health 全 0 invalid），stacking 将宏 F1 从 base `0.7602` 提升到 `0.8156`，OOF-test gap 仅约 `0.037`，表明集成链路工作正常且有效。
+- 2026-04-07 MTA/MFCP 问题定位: MFCP 主要短板来自类别可分性与配对混淆（`Artemis` 与 `Ursnif` 双向误判量大）；虽已启用 pair 校正，但 `mfcp_binary_pair_alpha=0.0` 说明当前 OOF 调参在该批数据上选择“不施加强校正”，并非后处理失效。
+
+- 2026-04-07 均衡下载链接抓取: `malware-traffic-analysis.net` 首页仅提供年度入口，不直接列 pcap；本仓库已有 `mta_direct_links_2021plus.txt` 聚合了按家族整理的 direct `.pcap.zip` 链接，可直接用于均衡抽样。
+- 2026-04-07 均衡下载链接抓取: `stratosphereips.org/datasets-malware` 页面列出大量 `CTU-Malware-Capture-Botnet-*` capture 页面链接；每个 capture 页面通常可解析到 direct `.pcap` 文件。
+- 2026-04-07 均衡下载链接抓取: 已产出三份落盘 CSV：
+  - `outputs/balanced_pcap_links_mta_20_per_family.csv`（7 家族 * 20 = 140）
+  - `outputs/balanced_pcap_links_mfcp_target2_per_family.csv`（6 家族 * 2 = 12，个别稀缺类已尽量补齐）
+  - `outputs/balanced_pcap_links_combined.csv`（总计 152）
+
+- 2026-04-10 MTA 最新日志: `outputs/mta_multiclass/attention_stacking_v2/attention_stacking_20260408_234642/train.log` 仅到 `Epoch 40/40` 起始行即结束，没有 `Epoch 40 结果`、`done attention/stacking` 或 `metrics.json` 产物，训练疑似在最后一轮开始后被中断。
+- 2026-04-10 MTA 最新日志: 训练过程稳定无 NaN/Inf，`val_f1` 从 0.6913 上升到约 0.8545 后进入平台期；train/val F1 gap 约 0.06~0.07，表现为温和过拟合而非数值崩坏。
+- 2026-04-10 MTA 最新日志: 采用 `weighted_sampler_loss + focal + class_weighted CE`，早停计数在 Epoch 39 达到 `7/8`，若未中断应在 Epoch 40 结束后触发 early stop 并恢复 best weights。
+- 2026-04-10 MTA 重新整理: 已按“每类约 1w（允许上下浮动）”重建 `ProcessedData/mta_multiclass`，策略为 `cap_total_per_class=12000`、小类不做上采样。
+- 2026-04-10 MTA 重新整理: 新分布为 Dridex=10176、Qakbot=11532，其余 5 类=12000；Train/Test 维持原始比例约 8:2。
+- 2026-04-10 MTA 重新整理: 已保留两份可回滚快照：原始全集 `mta_multiclass_backup_before_10k_20260410_230330` 与精确10k版 `mta_multiclass_exact10k_snapshot_20260410_230812`。
