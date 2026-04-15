@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import statistics
 import socket
 import struct
 from dataclasses import asdict, dataclass, field, replace
@@ -291,12 +292,46 @@ def _split_task_inputs_with_targets(
     return {'Train': train, 'Test': test}
 
 
+def _rebalance_samples(samples: list[RawSample | SessionSample], max_ratio: float, seed: int) -> list[RawSample | SessionSample]:
+    """Downsample majority classes so that max_count / min_count <= max_ratio.
+
+    This function only downsamples (no upsampling). It is deterministic given the seed.
+    """
+    rng = random.Random(seed)
+    grouped: dict[str, list[RawSample | SessionSample]] = {}
+    for s in samples:
+        grouped.setdefault(s.label, []).append(s)
+
+    counts = {label: len(lst) for label, lst in grouped.items()}
+    if not counts:
+        return list(samples)
+
+    min_count = min(counts.values())
+    target_max = max(1, int(min_count * float(max_ratio)))
+    logger.info('Rebalance plan: classes=%s min_count=%s target_max=%s max_ratio=%s', len(counts), min_count, target_max, max_ratio)
+
+    new_samples: list[RawSample | SessionSample] = []
+    for label, lst in grouped.items():
+        n = len(lst)
+        if n > target_max:
+            rng.shuffle(lst)
+            chosen = lst[:target_max]
+            logger.info('Downsampling label=%s %s->%s', label, n, target_max)
+        else:
+            chosen = lst
+            logger.info('Keeping label=%s count=%s', label, n)
+        new_samples.extend(chosen)
+
+    return new_samples
+
+
 def split_task_inputs(
     samples: list[RawSample | SessionSample],
     train_ratio: float,
     seed: int,
     task_name: str | None = None,
     distribution_profile: str | None = None,
+    max_class_ratio: float | None = None,
 ) -> dict[str, list[RawSample | SessionSample]]:
     if distribution_profile and not task_name:
         raise ValueError('task_name is required when distribution_profile is set')
@@ -304,6 +339,13 @@ def split_task_inputs(
     targets = _resolve_distribution_targets(task_name or '', distribution_profile)
     if targets is not None:
         return _split_task_inputs_with_targets(samples=samples, targets=targets, seed=seed)
+
+    # Optionally rebalance MFCP classes before splitting
+    if task_name == 'mfcp_multiclass' and max_class_ratio:
+        try:
+            samples = _rebalance_samples(list(samples), max_ratio=float(max_class_ratio), seed=seed)
+        except Exception:
+            logger.exception('Error during rebalance; falling back to original samples')
 
     rng = random.Random(seed)
     grouped: dict[str, list[RawSample | SessionSample]] = {}
@@ -494,6 +536,7 @@ def split_dataset(
     train_ratio: float = TRAIN_RATIO,
     seed: int = SEED,
     distribution_profile: str | None = None,
+    max_class_ratio: float | None = None,
 ) -> Path:
     source_root = Path(source_root or DEFAULT_SOURCE_ROOT)
     processed_root = Path(processed_root or build_processed_root(BASE_DIR.parent, task_name))
@@ -509,6 +552,7 @@ def split_dataset(
         seed=seed,
         task_name=task_name,
         distribution_profile=distribution_profile,
+        max_class_ratio=max_class_ratio,
     )
     family_summary = build_family_split_summary(splits)
 
@@ -558,6 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=('',) + SUPPORTED_DISTRIBUTION_PROFILES,
         help='Optional fixed distribution profile. Use paper_mvtba for paper-aligned MTA/MFCP counts.',
     )
+    parser.add_argument('--max_class_ratio', type=float, default=None,
+                        help='Maximum allowed ratio between largest and smallest class (e.g., 5). Applies only to mfcp_multiclass when set.')
     parser.add_argument('--log_file', default='')
     return parser
 
@@ -576,6 +622,7 @@ def main() -> int:
         train_ratio=args.train_ratio,
         seed=args.seed,
         distribution_profile=args.distribution_profile,
+        max_class_ratio=args.max_class_ratio,
     )
     logger.info('Splitting Completed!')
     return 0
