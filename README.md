@@ -222,6 +222,29 @@ python3 src/ssl_tls_rgb_image.py \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
 ```
 
+注意：为减少 MFCP 任务的类别不平衡（例如 PUA 明显过多），仓库中已用下采样将最大类别与最小类别比率限制为 5。已生成的新数据位于:
+
+```
+/home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass
+```
+
+原始数据目录已重命名备份为（示例）:
+
+```
+/home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass_backup_20260415_223506
+```
+
+如需重建或调整阈值，请使用工具脚本：
+
+```bash
+python3 src/rebalance_processed.py \
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass \
+  --max_class_ratio 5 \
+  --force
+```
+
+该脚本默认使用硬链接以避免数据复制；若需要复制请加 `--copy`。
+
 ## 训练命令
 
 当前推荐只使用下面两个实验入口：
