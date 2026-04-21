@@ -218,6 +218,43 @@
 - [x] 同步更新 `README.md` 参数文档与启用示例。
 - [x] 运行目标测试并通过。
 
+## Task (2026-04-18 rebalance_processed 卡顿排查)
+排查并修复 `python3 src/rebalance_processed.py --processed_root .../ProcessedData/mfcp_multiclass --max_class_ratio 3 --force` 看似卡住的问题。
+
+## Plan
+1. 复现命令并采集目录规模、类别计数、脚本停留位置，确认是阻塞还是超慢热点。
+2. 先补回归测试，覆盖图片关联查找不应对每个 session 反复全目录扫描的行为。
+3. 最小改动 `src/rebalance_processed.py`：把图片查找改为一次性索引/按 stem O(1) 命中，并补必要日志。
+4. 运行目标测试验证，必要时给出临时使用建议，并同步 findings/progress。
+
+## Task Status (2026-04-18 rebalance_processed 卡顿排查)
+- [x] 已复现命令并确认是超慢热点，不是死锁。
+- [x] 已补图片目录重复扫描的回归测试并确认红灯。
+- [x] 已完成一次性图片索引修复。
+- [x] 已运行目标测试与真实数据短时复现验证。
+
+## Task (2026-04-19 MFCP 最新 attention_stacking 日志排查)
+排查 `outputs/mfcp_multiclass/attention_stacking/attention_stacking_20260418_232645` 中看起来“没有集成学习结果”的原因，判断是代码路径未执行还是 run 中途中断。
+
+## Plan
+1. 检查 run 目录实际产物、`train.log`、`report.md`，确认缺失的是哪些 stacking artefact。
+2. 对照 `src/fusion_common.py::run_stacking_experiment()` 的控制流，定位该批 artefact 对应的执行阶段。
+3. 给出结论与下一步建议，并同步 findings/progress。
+
+## Task Status (2026-04-19 MFCP 最新 attention_stacking 日志排查)
+- [x] 已读取 run 目录、日志与报告。
+- [x] 已对照代码确认缺失 artefact 所在阶段。
+- [x] 已形成结论并准备回报。
+
+## Task (2026-04-14 时序预处理流程图)
+基于当前仓库已落地的时序增强实现，生成“时序部分数据预处理”流程图，并沿用参考 `mobilevit.drawio` 的学术配色风格。
+
+## Plan
+1. 复核 `split_data.py`、`fusion_common.py`、`README.md` 中的真实时序数据流，限定图范围为“预处理产物 + 训练前加载编码”。
+2. 提取参考 `mobilevit.drawio` 的主配色（蓝/黄/绿）并映射到输入、核心预处理、输出/回退节点。
+3. 生成 Nano Banana 可直接使用的流程图 prompt，表达 `pcap/pcapng -> session -> .bin/.json sidecar -> temporal token ids / legacy fallback`。
+4. 自检图内容与文件路径，并同步更新 `findings.md`、`progress.md`。
+
 ## Task (2026-04-07 二层代价敏感 Stacking 全量改造)
 将 `attention_stacking` 从当前单层 stacking + soft-voting 主路径升级为二层 cost-sensitive stacking 主路径，覆盖四个任务并优先提升弱类召回；保留单层/soft-voting 作为对照与降级路径。
 
@@ -333,3 +370,20 @@
 - [x] 已补 sidecar 版本门控，避免未来格式升级导致静默误读。
 - [x] 已运行相关回归测试并通过。
 - [x] 已同步 README / AGENTS / findings / progress。
+
+## Task (2026-04-21 MFCP 训练优化 Brainstorming)
+在不立即改代码的前提下，先完成 `mfcp_multiclass` 训练优化设计：明确优化目标、比较可选路线、产出可执行设计并等待你确认后再进入 implementation plan。
+
+## Plan
+1. 复核最新 MFCP/MTA 训练日志与 `metrics/report`，确认当前瓶颈是否为训练稳定性、后处理策略或数据分布。
+2. 基于当前代码实现（`README.md` + `src/fusion_common.py`）提出 2-3 条可落地优化路线并排序。
+3. 通过一问一答方式补齐目标约束（优先指标、可接受成本、是否改数据）。
+4. 给出分阶段设计（训练配置、stacking 后处理、验证标准、回滚策略）并逐段征求确认。
+5. 你确认后写入 `docs/superpowers/specs/` 设计文档，完成自检并请你审阅。
+
+## Task Status (2026-04-21 MFCP 训练优化 Brainstorming)
+- [x] 已完成项目上下文探索（最新日志、README 参数、`fusion_common.py` 关键链路、最近提交）。
+- [x] 已完成一问一答澄清（目标与约束）。
+- [x] 已输出 2-3 条优化路线及推荐方案（先 A，失败再 C）。
+- [x] 已输出并确认详细设计（4 个部分均已确认）。
+- [x] 已写入 spec 文档并完成自检，待你审阅。
