@@ -7,6 +7,7 @@
 - 2026-04-21 MTA 最新 run 存在明显泛化落差：`oof_macro_f1=0.9258` 对应测试 `macro_f1=0.8498`（gap≈0.076），且 Emotet/IcedID/Trickbot 之间混淆较重。
 - 2026-04-21 Brainstorming 设计确认：为满足“硬性 `acc>=97`”目标，用户接受宽松评估口径（可跨 split 近重复）；执行策略确定为“先方案A（score-chasing 划分 + accuracy-first two-level），未达标再方案C（session 指纹）”。
 - 2026-04-21 设计约束已固化到 spec：样本不均衡目标 `max:min=2.5~3.0`，且不预设 `2/4` 谁是高频类；pair 后处理目标改为按当轮混淆矩阵动态选 top-confusion pair（优先 `2/4`）。
+- 2026-04-21 实施计划已落盘：`docs/superpowers/plans/2026-04-21-mfcp-accuracy97.md`。计划采用 TDD 拆分为 6 个任务：`score_chasing_v1` 划分、跨 split 近重复注入与元数据、accuracy objective、动态混淆 pair、score-chasing preset、`>=97` 验收 runbook。
 
 - 2026-04-18 rebalance_processed 卡顿根因：`mfcp_multiclass` 的 `PUA` 类非常大，`pcap_data` 下约 `679,455` 个 `.bin` session，对应 `image_data` 下约 `543,564` 张训练图片与 `135,891` 张测试图片。
 - 2026-04-18 rebalance_processed 卡顿根因：`src/rebalance_processed.py` 的 `find_related_image_files()` 会在每个选中 session 上重新遍历一次整个 `image_data/<split>/<label>` 目录；对 `PUA` 这类大目录，复杂度退化为“选中样本数 × 目录文件数”，因此表面看像卡死，实际是重复扫描过多。

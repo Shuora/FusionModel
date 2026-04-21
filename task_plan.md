@@ -387,3 +387,18 @@
 - [x] 已输出 2-3 条优化路线及推荐方案（先 A，失败再 C）。
 - [x] 已输出并确认详细设计（4 个部分均已确认）。
 - [x] 已写入 spec 文档并完成自检，待你审阅。
+
+## Task (2026-04-21 MFCP Accuracy97 Implementation Plan)
+基于已批准 spec，产出可直接执行的实现计划（writing-plans），覆盖 `score_chasing_v1` 数据构建、accuracy-first stacking、动态混淆 pair 与 `>=97` 验收流程。
+
+## Plan
+1. 读取 writing-plans 技能规范并对齐输出格式（header、task、TDD steps、commit steps）。
+2. 映射本次实现涉及的文件边界与职责（`split_data.py` / `fusion_common.py` / tests / README）。
+3. 编写完整 implementation plan 到 `docs/superpowers/plans/2026-04-21-mfcp-accuracy97.md`。
+4. 执行 plan 自检（覆盖 spec、无占位、命名一致）并落盘。
+
+## Task Status (2026-04-21 MFCP Accuracy97 Implementation Plan)
+- [x] 已读取 writing-plans 技能规范。
+- [x] 已完成文件边界映射。
+- [x] 已写入 implementation plan 文档。
+- [x] 已完成 plan 自检。
