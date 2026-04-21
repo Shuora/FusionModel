@@ -7,6 +7,9 @@
 - 2026-04-21: 完成一问一答澄清（目标硬性 `acc>=97`、允许宽松口径 `C`、保留 `max:min=2.5~3.0` 不均衡、预算 `12~24h`）。
 - 2026-04-21: 完成 3 路方案比较并确认路线（先方案A，未达标切方案C），并完成四段式详细设计确认。
 - 2026-04-21: 已写入设计文档 `docs/superpowers/specs/2026-04-21-mfcp-accuracy97-design.md`，并执行 spec 自检（修正 pair 后处理目标从固定类名改为按混淆矩阵动态选 top-confusion pair）。
+- 2026-04-21: 用户已确认 spec 无问题，进入 writing-plans 阶段。
+- 2026-04-21: 已读取 `superpowers/writing-plans` 技能，并按要求生成实现计划文档 `docs/superpowers/plans/2026-04-21-mfcp-accuracy97.md`。
+- 2026-04-21: 已完成实现计划自检（spec 覆盖、无占位、函数/参数命名一致）。
 
 - 2026-04-18: 读取 `using-superpowers`、`systematic-debugging`、`planning-with-files`、`test-driven-development` 技能，并恢复当前 planning 文件上下文。
 - 2026-04-18: 复核 `src/rebalance_processed.py` 实现与 `mfcp_multiclass` 目录规模，确认 `PUA` 类约 67.9 万个 session，是本次命令慢路径的主要数据面。
