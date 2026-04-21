@@ -1,5 +1,22 @@
 ## Findings
 
+- 2026-04-21 最新 MFCP run（`outputs/mfcp_multiclass/attention_stacking/attention_stacking_20260421_131834`）训练流程完整结束，无 `Traceback/ERROR/NaN`，health 指标为 `run_status=ok`、`invalid_* = 0`。
+- 2026-04-21 最新 MFCP run 主要瓶颈是类别对间混淆而非训练崩溃：two-level 最终 `macro_f1=0.9062`，但类别 `2/4` 互混显著（`4 -> 2 = 2144`），导致 `class 4 recall=0.6272`、`class 2 precision=0.6413`。
+- 2026-04-21 最新 MFCP run 的 attention 诊断呈“过于平坦”形态：`top1=0.0058`、`max=0.007562`，存在注意力分配不够聚焦的迹象。
+- 2026-04-21 对照 MTA 最新 run（`outputs/mta_multiclass/attention_stacking_v2_new/attention_stacking_20260410_232533`）可见其同样无报错，但存在配置退化：请求 `two_level`，实际 `effective_level=single`，仅保留 `xgboost` 元学习器。
+- 2026-04-21 MTA 最新 run 存在明显泛化落差：`oof_macro_f1=0.9258` 对应测试 `macro_f1=0.8498`（gap≈0.076），且 Emotet/IcedID/Trickbot 之间混淆较重。
+- 2026-04-21 Brainstorming 设计确认：为满足“硬性 `acc>=97`”目标，用户接受宽松评估口径（可跨 split 近重复）；执行策略确定为“先方案A（score-chasing 划分 + accuracy-first two-level），未达标再方案C（session 指纹）”。
+- 2026-04-21 设计约束已固化到 spec：样本不均衡目标 `max:min=2.5~3.0`，且不预设 `2/4` 谁是高频类；pair 后处理目标改为按当轮混淆矩阵动态选 top-confusion pair（优先 `2/4`）。
+
+- 2026-04-18 rebalance_processed 卡顿根因：`mfcp_multiclass` 的 `PUA` 类非常大，`pcap_data` 下约 `679,455` 个 `.bin` session，对应 `image_data` 下约 `543,564` 张训练图片与 `135,891` 张测试图片。
+- 2026-04-18 rebalance_processed 卡顿根因：`src/rebalance_processed.py` 的 `find_related_image_files()` 会在每个选中 session 上重新遍历一次整个 `image_data/<split>/<label>` 目录；对 `PUA` 这类大目录，复杂度退化为“选中样本数 × 目录文件数”，因此表面看像卡死，实际是重复扫描过多。
+- 2026-04-18 复现证据：命令在 20 秒超时前只打印到 `Label=Artemis ... selected=10296`，随后进入 `PUA` 前后的大规模图片查找阶段；目标输出目录已被创建但只写入极少量文件，符合热点而非死锁。
+- 2026-04-18 修复方案：新增 `collect_image_index()`，在开始重平衡前一次性扫描 `image_data/{Train,Test}`，构建 `split -> label -> stem -> [Path]` 索引；后续按 stem O(1) 查图，不再为每个 session 重扫整个类目录。
+- 2026-04-18 修复后复现：同样的 20 秒超时验证中，脚本已从 `Label=Artemis` 继续推进到 `Label=Cobalt`，说明图片匹配热点已被移除；剩余时间主要消耗在真实文件 link/copy 上。
+- 2026-04-19 MFCP 最新 attention_stacking run（`attention_stacking_20260418_232645`）目录中仅有 `train.log/report.md/attention_curve/confusion_matrix/metrics_curve`，缺失 `metrics.json`、`epoch_metrics.csv`、`report_xgboost.md`、`report_soft_voting.md`、`report_two_level_blender.md` 等 stacking 阶段产物。
+- 2026-04-19 代码对照：`src/fusion_common.py::run_stacking_experiment()` 会先落 base attention 的 `report.md`，随后才执行 `generate_meta_features()`、各 `meta_methods`、`soft_voting` / `two_level_blender`，最后统一写 `metrics.json` 并记录 `done stacking`。
+- 2026-04-19 日志证据：该 run 的 `train.log` 最后一条是 `saved report`，没有 `meta feature extraction completed`、没有任何 `[attention_stacking_xgboost]` / `soft_voting` / `two_level_blender` 记录，也没有 `done stacking`；因此这是一次在 stacking 主体开始前后中断的 run，不是“代码没做集成学习”。
+
 - `src/fusion_common.py` 里有两处默认路径原本仍指向 `src/outputs`：`setup_logging()` 默认日志目录、`add_common_args()` 的 `--output_dir` 默认值。
 - `src/run_all_modes.py` 只是透传 `fusion_common.py` 生成的 `output_dir`，本次无需单独修改。
 - `README.md` 的四个实验命令和“训练输出”章节原本写成 `src/outputs/<task_name>/...`，已同步改为根目录 `outputs/<task_name>/...`。
@@ -108,3 +125,6 @@
 - 2026-04-13 时序增强补完: `CharBERTTextEncoder` 已接入 packet-aware hierarchy，会先对每个 packet payload 做 block pooling，再注入 packet 级元数据并经过 packet encoder，最后与 CLS 表示融合，模型侧真正利用了 packet boundary 语义。
 - 2026-04-13 时序增强回归: 已补 `FusionDataset.load_pcap_data()` 的 sidecar/legacy 双路径测试，确认分层 packet 序列会优先从 `.json` sidecar 读取，缺失时回退旧 `.bin`。
 - 2026-04-13 时序增强加固: `FusionDataset.load_pcap_data()` 现在会校验 sidecar `version`，不支持的版本会显式回退到 legacy `.bin`，避免后续格式演进时静默误读。
+- 2026-04-14 流程图边界: 本次“时序部分数据预处理”图应聚焦 `split_data.py -> pcap_data/*.bin + *.json -> FusionDataset.load_pcap_data()`，不把 attention/cross-attention 主体训练结构画进来。
+- 2026-04-14 参考配色: `/mnt/c/Repositories/graduate-thesis/figures/drawio/mobilevit.drawio` 的主要颜色为浅蓝 `#dae8fc` / 蓝边 `#6c8ebf`、浅黄 `#fff2cc` / 黄边 `#d6b656`，另有浅绿 `#d5e8d4` / 绿边 `#82b366` 可用于输出节点。
+- 2026-04-14 时序流程关键节点: 原始 `pcap/pcapng` 先按五元组 canonical flow 提取 session；每个 session 同时写出 legacy `*.bin` 与 `version=1` 的 `*.json` sidecar；训练加载时优先把 sidecar 编成 `[CLS] + <PKT ...> + payload + </PKT> + [SEP]`，sidecar 缺失/版本不支持/读取失败时回退到纯 `.bin` 字节流。

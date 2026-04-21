@@ -1,5 +1,23 @@
 ## Progress
 
+- 2026-04-21: 根据你的 `superpowers:brainstorming` 指令，读取并启用 brainstorming 技能流程，确认本轮先做设计讨论、不做实现改动。
+- 2026-04-21: 读取并恢复 `task_plan.md / findings.md / progress.md` 上下文，新增“MFCP 训练优化 Brainstorming”任务阶段与状态。
+- 2026-04-21: 复核最新 MFCP 与 MTA 训练日志、`metrics.json`、`report*.md`，确认两者均无崩溃报错，问题集中在效果结构（类别混淆、stacking 退化）而非训练中断。
+- 2026-04-21: 补充代码与文档上下文检查：复核 `README.md` 的 MFCP 命令与 `src/fusion_common.py` 的 two-level / MFCP pair 后处理路径，准备进入一问一答澄清与方案设计。
+- 2026-04-21: 完成一问一答澄清（目标硬性 `acc>=97`、允许宽松口径 `C`、保留 `max:min=2.5~3.0` 不均衡、预算 `12~24h`）。
+- 2026-04-21: 完成 3 路方案比较并确认路线（先方案A，未达标切方案C），并完成四段式详细设计确认。
+- 2026-04-21: 已写入设计文档 `docs/superpowers/specs/2026-04-21-mfcp-accuracy97-design.md`，并执行 spec 自检（修正 pair 后处理目标从固定类名改为按混淆矩阵动态选 top-confusion pair）。
+
+- 2026-04-18: 读取 `using-superpowers`、`systematic-debugging`、`planning-with-files`、`test-driven-development` 技能，并恢复当前 planning 文件上下文。
+- 2026-04-18: 复核 `src/rebalance_processed.py` 实现与 `mfcp_multiclass` 目录规模，确认 `PUA` 类约 67.9 万个 session，是本次命令慢路径的主要数据面。
+- 2026-04-18: 用 `timeout 20s` 复现 `rebalance_processed.py`，确认脚本已开始工作但在图片关联阶段极慢；初步 root cause 为每个 session 重复全量扫描 `image_data/<split>/<label>`。
+- 2026-04-18: 按 TDD 新增 `tests/test_rebalance_processed.py`，先让“同一 label/split 的图片目录只扫描一次”测试红灯，确认当前实现会重复扫描。
+- 2026-04-18: 在 `src/rebalance_processed.py` 增加 `collect_image_index()`，将图片查找改为一次建索引、按 stem 命中；回归测试已转绿。
+- 2026-04-18: 使用真实 `mfcp_multiclass` 再次短时复现原命令，20 秒内日志已从 `Artemis` 推进到 `Cobalt`，证明热点修复生效；脚本剩余耗时来自正常的大量 link/copy。
+- 2026-04-19: 读取 `outputs/mfcp_multiclass/attention_stacking/attention_stacking_20260418_232645` 的 run 目录、`train.log` 和 `report.md`，确认只有 base attention artefact，没有任何 stacking artefact。
+- 2026-04-19: 对照 `run_stacking_experiment()` 控制流，确认 `report.md` 是 base_eval 阶段就会写出的文件；`metrics.json`、各 `report_<method>.md`、`done stacking` 只会在 stacking 完整执行后出现。
+- 2026-04-19: 形成结论：该 run 在 base attention 训练完成并保存基础报告后即中断，未进入或未完成后续 meta feature / meta learner / soft-voting / two-level 路径。
+
 - 2026-03-31: 读取 `using-superpowers`、`brainstorming`、`writing-plans`、`test-driven-development`、`using-git-worktrees`、`verification-before-completion` 技能，确认本次任务边界为“只修改默认输出根目录，不迁移历史产物”。
 - 2026-03-31: 检查仓库输出路径实现，确认 `src/fusion_common.py` 是本次代码修改核心，`README.md` 需要同步把 `src/outputs` 改为根目录 `outputs`。
 - 2026-03-31: 使用并行子代理复核影响面，确认 `tests/test_fusion_output_artifacts.py` 适合补默认路径测试，`src/run_all_modes.py` 无需改动。
@@ -131,3 +149,7 @@
 - 2026-04-13: 已补 `FusionDataset.load_pcap_data()` 的 sidecar/legacy 双路径回归测试，并再次验证 `49 tests, OK`。
 - 2026-04-13: 已补 sidecar 版本门控与回退测试，避免未来 sidecar 格式升级后被静默误读。
 - 2026-04-13: 最新完整回归通过 `50 tests, OK`，包含 sidecar 版本回退场景。
+- 2026-04-14: 读取 `using-superpowers`、`planning-with-files`、`figures-diagram`、`brainstorming` 技能，并恢复现有 planning 文件上下文。
+- 2026-04-14: 复核 `src/split_data.py`、`src/fusion_common.py`、`README.md` 与 `AGENTS.md` 中的时序增强链路，确认流程图范围限定为“预处理产物 + 训练前 temporal token 生成/回退”。
+- 2026-04-14: 提取参考 `mobilevit.drawio` 主配色，准备生成仓库内可编辑的时序预处理 `.drawio` 源文件。
+- 2026-04-14: 根据你的新要求改为仅输出 Nano Banana prompt，不保留新建 `.drawio` 源文件。
