@@ -22,7 +22,9 @@ def main() -> int:
     args = build_parser().parse_args()
     kwargs = build_common_kwargs(args)
     methods = parse_methods(args.meta_methods) or ["xgboost"]
-    run_stacking_experiment(base_fusion_mode="attention", meta_methods=methods, ensemble_tag="attention_stacking", **kwargs)
+    # base_fusion_mode is now inside kwargs from args.fusion_mode
+    base_mode = kwargs.pop("fusion_mode", "attention")
+    run_stacking_experiment(base_fusion_mode=base_mode, meta_methods=methods, ensemble_tag="attention_stacking", **kwargs)
     return 0
 
 

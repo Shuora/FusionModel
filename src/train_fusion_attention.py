@@ -20,7 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     kwargs = build_common_kwargs(args)
-    run_fusion_experiment(fusion_mode="attention", **kwargs)
+    # fusion_mode is now inside kwargs from args.fusion_mode
+    run_fusion_experiment(**kwargs)
     return 0
 
 

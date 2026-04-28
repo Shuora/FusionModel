@@ -101,6 +101,7 @@ MTA_CLASS_SIGNATURES = (
 MFCP_CLASS_SIGNATURES = (
     frozenset(["artemis", "dridex", "pua", "trickbot", "ursnif"]),
     frozenset(["artemis", "cobalt", "dridex", "pua", "trickbot", "ursnif"]),
+    frozenset(["artemis", "cobalt", "dridex", "pua", "emotet", "ursnif"]),
 )
 MFCP_PAIR_CLASS_NAMES = ("artemis", "ursnif")
 KNOWN_TASK_NAMES = {
@@ -153,6 +154,38 @@ def resolve_pair_class_indices(class_names: List[str], class_a_name: str, class_
 
 def resolve_mfcp_pair_class_indices(class_names: List[str]) -> Optional[Tuple[int, int]]:
     return resolve_pair_class_indices(class_names, MFCP_PAIR_CLASS_NAMES[0], MFCP_PAIR_CLASS_NAMES[1])
+
+
+def select_confusion_pair(
+    *,
+    labels: np.ndarray,
+    preds: np.ndarray,
+    preferred_pair: Optional[Tuple[int, int]] = None,
+) -> Optional[Tuple[int, int]]:
+    y_true = np.asarray(labels, dtype=np.int64).reshape(-1)
+    y_pred = np.asarray(preds, dtype=np.int64).reshape(-1)
+    if y_true.size == 0 or y_pred.size != y_true.size:
+        return None
+
+    max_cls = int(max(np.max(y_true), np.max(y_pred)))
+    num_classes = max_cls + 1
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+
+    if preferred_pair is not None:
+        pa, pb = int(preferred_pair[0]), int(preferred_pair[1])
+        if 0 <= pa < num_classes and 0 <= pb < num_classes and pa != pb:
+            if int(cm[pa, pb] + cm[pb, pa]) > 0:
+                return (pa, pb)
+
+    best_pair: Optional[Tuple[int, int]] = None
+    best_confusion = 0
+    for i in range(num_classes):
+        for j in range(i + 1, num_classes):
+            confusion_mass = int(cm[i, j] + cm[j, i])
+            if confusion_mass > best_confusion:
+                best_confusion = confusion_mass
+                best_pair = (i, j)
+    return best_pair
 
 
 def resolve_charbert_src() -> str:
@@ -796,6 +829,7 @@ class FusionDataset(Dataset):
         *,
         use_index_cache: bool = True,
         rebuild_index_cache: bool = False,
+        use_temporal_sidecar: bool = True,
     ):
         self.image_dir = image_dir
         self.pcap_dir = pcap_dir
@@ -803,6 +837,7 @@ class FusionDataset(Dataset):
         self.max_pcap_length = max_pcap_length
         self.use_index_cache = bool(use_index_cache)
         self.rebuild_index_cache = bool(rebuild_index_cache)
+        self.use_temporal_sidecar = bool(use_temporal_sidecar)
 
         self.classes = sorted(
             [name for name in os.listdir(image_dir) if os.path.isdir(os.path.join(image_dir, name))]
@@ -990,29 +1025,30 @@ class FusionDataset(Dataset):
             if max_len < 2:
                 return torch.tensor([cls_token], dtype=torch.long)
 
-            meta_path = Path(pcap_path).with_suffix('.json')
-            if meta_path.is_file():
-                try:
-                    with meta_path.open('r', encoding='utf-8') as f:
-                        payload = json.load(f)
-                    if not isinstance(payload, dict):
-                        raise ValueError('temporal sidecar payload must be a JSON object')
-                    version = int(payload.get('version', 0))
-                    if version != 1:
-                        logger.warning('不支持的时序 sidecar 版本 %s，回退 legacy `.bin`', version)
-                    else:
-                        packets = payload.get('packets', [])
-                        if isinstance(packets, list) and packets:
-                            tokens = build_temporal_pcap_token_ids(
-                                packets,
-                                max_pcap_length=max_len,
-                                pad_token=pad_token,
-                                cls_token=cls_token,
-                                sep_token=sep_token,
-                            )
-                            return torch.tensor(tokens, dtype=torch.long)
-                except Exception as exc:
-                    logger.warning('读取时序 sidecar 失败 %s: %s', meta_path, exc)
+            if self.use_temporal_sidecar:
+                meta_path = Path(pcap_path).with_suffix('.json')
+                if meta_path.is_file():
+                    try:
+                        with meta_path.open('r', encoding='utf-8') as f:
+                            payload = json.load(f)
+                        if not isinstance(payload, dict):
+                            raise ValueError('temporal sidecar payload must be a JSON object')
+                        version = int(payload.get('version', 0))
+                        if version != 1:
+                            logger.warning('不支持的时序 sidecar 版本 %s，回退 legacy `.bin`', version)
+                        else:
+                            packets = payload.get('packets', [])
+                            if isinstance(packets, list) and packets:
+                                tokens = build_temporal_pcap_token_ids(
+                                    packets,
+                                    max_pcap_length=max_len,
+                                    pad_token=pad_token,
+                                    cls_token=cls_token,
+                                    sep_token=sep_token,
+                                )
+                                return torch.tensor(tokens, dtype=torch.long)
+                    except Exception as exc:
+                        logger.warning('读取时序 sidecar 失败 %s: %s', meta_path, exc)
 
             # 只读取模型会用到的字节，避免大 pcap 文件整包读取导致 I/O 成为瓶颈。
             with open(pcap_path, "rb") as f:
@@ -1035,13 +1071,14 @@ class FusionDataset(Dataset):
 
 
 class MergedFusionDataset(FusionDataset):
-    def __init__(self, samples: List[Tuple[str, str, int]], classes: List[str], transform=None, max_pcap_length: int = 784):
+    def __init__(self, samples: List[Tuple[str, str, int]], classes: List[str], transform=None, max_pcap_length: int = 784, use_temporal_sidecar: bool = True):
         self.image_dir = ""
         self.pcap_dir = ""
         self.transform = transform
         self.max_pcap_length = max_pcap_length
         self.use_index_cache = False
         self.rebuild_index_cache = False
+        self.use_temporal_sidecar = bool(use_temporal_sidecar)
         self.classes = list(classes)
         self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(self.classes)}
         self.samples = list(samples)
@@ -1103,6 +1140,7 @@ def load_fusion_data(
     is_train: bool = True,
     balance_mode: str = "none",
     selected_groups: Optional[List[str]] = None,
+    use_temporal_sidecar: bool = True,
 ):
     logger.info("加载融合数据 - 图像目录: %s, Pcap目录: %s", image_dir, pcap_dir)
 
@@ -1144,6 +1182,7 @@ def load_fusion_data(
                 max_pcap_length,
                 use_index_cache=use_index_cache,
                 rebuild_index_cache=rebuild_index_cache,
+                use_temporal_sidecar=use_temporal_sidecar,
             )
             for img_dir, p_dir in grouped_pairs
         ]
@@ -1159,6 +1198,7 @@ def load_fusion_data(
             all_class_names,
             transform=transform,
             max_pcap_length=max_pcap_length,
+            use_temporal_sidecar=use_temporal_sidecar,
         )
     else:
         dataset = FusionDataset(
@@ -1168,6 +1208,7 @@ def load_fusion_data(
             max_pcap_length,
             use_index_cache=use_index_cache,
             rebuild_index_cache=rebuild_index_cache,
+            use_temporal_sidecar=use_temporal_sidecar,
         )
 
     dl_kwargs = dict(
@@ -1251,7 +1292,7 @@ class CharBERTTextEncoder(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.3,
-        charbert_mode: str = "legacy",
+        charbert_mode: str = "charaware",
         char_vocab: str = "hex",
         char_emb_dim: int = 32,
         char_cnn_channels: int = 64,
@@ -1375,6 +1416,10 @@ class CharBERTTextEncoder(nn.Module):
                 packet_seq = torch.stack(packet_vecs, dim=0).unsqueeze(0)
                 packet_seq = self.temporal_packet_encoder(packet_seq)
                 summaries.append(packet_seq.mean(dim=1).squeeze(0))
+            else:
+                # Keep batch alignment: when no valid packet blocks are parsed
+                # for a sample, fall back to its CLS representation.
+                summaries.append(encoded[batch_idx, 0])
 
         if not summaries:
             return None
@@ -1396,7 +1441,7 @@ class CharBERTTextEncoder(nn.Module):
                 x,
                 attention_mask=attention_mask,
             )
-            if packet_summary is not None:
+            if packet_summary is not None and packet_summary.size(0) == cls_summary.size(0):
                 pooled = 0.5 * cls_summary + 0.5 * packet_summary
             else:
                 denom = attention_mask.sum(dim=1, keepdim=True).clamp(min=1).to(enc.dtype)
@@ -1419,21 +1464,23 @@ class CharBERTTextEncoder(nn.Module):
 
 
 class AttentionFusionModel(nn.Module):
-    """Cross-attention fusion model."""
+    """Fusion model supporting attention and concat modes."""
 
     def __init__(
         self,
         num_classes: int = 10,
         attention_dim: int = 256,
         char_hidden_size: int = 128,
-        charbert_mode: str = "legacy",
+        charbert_mode: str = "charaware",
         char_vocab: str = "hex",
         char_emb_dim: int = 32,
         char_cnn_channels: int = 64,
         char_fusion: str = "gated",
         char_fusion_layers: str = "all",
+        fusion_mode: str = "attention",
     ):
         super().__init__()
+        self.fusion_mode = fusion_mode
 
         mv_cfg = MobileViTConfig()
         mobilevit_feature_dim = mv_cfg.neck_hidden_sizes[-1] if hasattr(mv_cfg, "neck_hidden_sizes") else 640
@@ -1457,13 +1504,20 @@ class AttentionFusionModel(nn.Module):
         )
         self.pad_id = getattr(self.text_encoder, "pad_id", 256)
 
-        self.q_proj = nn.Linear(mobilevit_feature_dim, attention_dim)
-        self.k_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
-        self.v_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
-        self.pcap_linear = nn.Linear(1, attention_dim)
+        if self.fusion_mode == "attention":
+            self.q_proj = nn.Linear(mobilevit_feature_dim, attention_dim)
+            self.k_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
+            self.v_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
+            self.pcap_linear = nn.Linear(1, attention_dim)
+            fusion_out_dim = mobilevit_feature_dim + attention_dim
+        else:
+            # Concat mode
+            self.pcap_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
+            self.pcap_linear = nn.Linear(1, attention_dim)
+            fusion_out_dim = mobilevit_feature_dim + attention_dim
 
         self.out = nn.Sequential(
-            nn.Linear(mobilevit_feature_dim + attention_dim, 512),
+            nn.Linear(fusion_out_dim, 512),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, num_classes),
@@ -1476,20 +1530,25 @@ class AttentionFusionModel(nn.Module):
         attn_weights = None
 
         if self.text_encoder.charbert is not None:
-            enc, pad_mask = self.text_encoder.encode_tokens(pcap_ids)
-            if enc is not None and pad_mask is not None:
-                Q = self.q_proj(img_feats).unsqueeze(1)
-                K = self.k_proj(enc)
-                V = self.v_proj(enc)
+            if self.fusion_mode == "attention":
+                enc, pad_mask = self.text_encoder.encode_tokens(pcap_ids)
+                if enc is not None and pad_mask is not None:
+                    Q = self.q_proj(img_feats).unsqueeze(1)
+                    K = self.k_proj(enc)
+                    V = self.v_proj(enc)
 
-                scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.attention_dim)
-                scores = scores.masked_fill(pad_mask.unsqueeze(1), float("-inf"))
-                weights = torch.softmax(scores, dim=-1)
-                attended = torch.matmul(weights, V).squeeze(1)
-                attn_weights = weights.squeeze(1)
+                    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.attention_dim)
+                    scores = scores.masked_fill(pad_mask.unsqueeze(1), float("-inf"))
+                    weights = torch.softmax(scores, dim=-1)
+                    attended = torch.matmul(weights, V).squeeze(1)
+                    attn_weights = weights.squeeze(1)
+                else:
+                    pcap_mean = pcap_ids.float().mean(dim=1, keepdim=True)
+                    attended = self.pcap_linear(pcap_mean)
             else:
-                pcap_mean = pcap_ids.float().mean(dim=1, keepdim=True)
-                attended = self.pcap_linear(pcap_mean)
+                # Concat mode
+                text_feats = self.text_encoder(pcap_ids)
+                attended = self.pcap_proj(text_feats)
         else:
             pcap_mean = pcap_ids.float().mean(dim=1, keepdim=True)
             attended = self.pcap_linear(pcap_mean)
@@ -1505,7 +1564,7 @@ def initialize_fusion_model(
     num_classes: int,
     fusion_mode: str = "attention",
     attention_dim: int = 256,
-    charbert_mode: str = "legacy",
+    charbert_mode: str = "charaware",
     char_vocab: str = "hex",
     char_emb_dim: int = 32,
     char_cnn_channels: int = 64,
@@ -1513,7 +1572,7 @@ def initialize_fusion_model(
     char_fusion_layers: str = "all",
 ) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
-    if fusion_mode != "attention":
+    if fusion_mode not in ("attention", "concat"):
         raise ValueError(f"unsupported fusion mode: {fusion_mode}")
     if torch is None or MobileViTForImageClassification is None or MobileViTConfig is None:
         raise ModuleNotFoundError("torch and transformers are required for attention fusion training")
@@ -1526,6 +1585,7 @@ def initialize_fusion_model(
         char_cnn_channels=char_cnn_channels,
         char_fusion=char_fusion,
         char_fusion_layers=char_fusion_layers,
+        fusion_mode=fusion_mode,
     )
     logger.info("融合模型初始化完成，分类头设置为 %s 个类别", num_classes)
     return model
@@ -2366,7 +2426,9 @@ def tune_binary_correction_alpha_for_pair(
 
     base_preds = np.argmax(probs, axis=1).astype(np.int64)
     best_alpha = 0.0
-    if objective == "pair_f1":
+    if objective == "accuracy":
+        best_score = float(accuracy_score(labels, base_preds))
+    elif objective == "pair_f1":
         best_score = score_pair_f1(labels, base_preds, class_a=class_a, class_b=class_b)
     else:
         best_score = f1_score(labels, base_preds, average="macro")
@@ -2380,7 +2442,9 @@ def tune_binary_correction_alpha_for_pair(
             class_b=class_b,
             alpha=alpha,
         )
-        if objective == "pair_f1":
+        if objective == "accuracy":
+            score = float(accuracy_score(labels, preds))
+        elif objective == "pair_f1":
             score = score_pair_f1(labels, preds, class_a=class_a, class_b=class_b)
         else:
             score = f1_score(labels, preds, average="macro")
@@ -2496,6 +2560,7 @@ def tune_pair_threshold(
     probs: np.ndarray,
     class_a: int,
     class_b: int,
+    objective: str = "pair_f1",
     threshold_grid: Optional[List[float]] = None,
 ) -> float:
     labels = np.asarray(labels, dtype=np.int64).reshape(-1)
@@ -2509,10 +2574,16 @@ def tune_pair_threshold(
         return 0.5
     base_preds = np.argmax(probs, axis=1).astype(np.int64)
     best_thr = 0.5
-    best_score = score_pair_f1(labels, base_preds, class_a=class_a, class_b=class_b)
+    if objective == "accuracy":
+        best_score = float(accuracy_score(labels, base_preds))
+    else:
+        best_score = score_pair_f1(labels, base_preds, class_a=class_a, class_b=class_b)
     for thr in candidates:
         preds = apply_pair_threshold(preds=base_preds, probs=probs, class_a=class_a, class_b=class_b, threshold=thr)
-        score = score_pair_f1(labels, preds, class_a=class_a, class_b=class_b)
+        if objective == "accuracy":
+            score = float(accuracy_score(labels, preds))
+        else:
+            score = score_pair_f1(labels, preds, class_a=class_a, class_b=class_b)
         if score > best_score:
             best_score = score
             best_thr = float(np.clip(thr, 0.0, 1.0))
@@ -2715,6 +2786,8 @@ def tune_per_class_thresholds(
     thresholds = np.ones(p.shape[1], dtype=np.float64)
 
     def _score(preds: np.ndarray) -> float:
+        if objective == "accuracy":
+            return float(accuracy_score(y, preds))
         macro = float(f1_score(y, preds, average="macro", zero_division=0))
         if objective == "macro_f1":
             return macro
@@ -2752,6 +2825,8 @@ def compute_threshold_objective_value(
     p = np.asarray(preds, dtype=np.int64).reshape(-1)
     if y.size == 0 or p.size != y.size:
         return 0.0
+    if objective == "accuracy":
+        return float(accuracy_score(y, p))
     macro = float(f1_score(y, p, average="macro", zero_division=0))
     if objective == "macro_f1":
         return macro
@@ -3145,7 +3220,7 @@ def add_common_args(p):
     p.add_argument("--epochs", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--patience", type=int, default=4)
-    p.add_argument("--preset", choices=["none", "cic_balanced"], default="none")
+    p.add_argument("--preset", choices=["none", "cic_balanced", "mfcp_score_chasing"], default="none")
 
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     p.add_argument("--seed", type=int, default=42)
@@ -3179,7 +3254,9 @@ def add_common_args(p):
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--attention_dim", type=int, default=256)
-    p.add_argument("--charbert_mode", choices=["legacy", "charaware"], default="legacy")
+    p.add_argument("--fusion_mode", choices=["attention", "concat"], default="attention", help="Fusion mechanism")
+    p.add_argument("--no_temporal", action="store_true", help="Bypass temporal sidecar (json) files and use flat bytes")
+    p.add_argument("--charbert_mode", choices=["legacy", "charaware"], default="charaware")
     p.add_argument("--char_vocab", choices=["hex", "ascii"], default="hex")
     p.add_argument("--char_emb_dim", type=int, default=32)
     p.add_argument("--char_cnn_channels", type=int, default=64)
@@ -3189,7 +3266,7 @@ def add_common_args(p):
     p.add_argument("--stacking_calibration", choices=["none", "temp", "isotonic"], default="temp")
     p.add_argument(
         "--stacking_threshold_objective",
-        choices=["macro_f1", "macro_f1_minority_recall"],
+        choices=["macro_f1", "macro_f1_minority_recall", "accuracy"],
         default="macro_f1_minority_recall",
     )
     p.add_argument("--stacking_minority_lambda", type=float, default=0.3)
@@ -3202,41 +3279,62 @@ def _arg_explicitly_set(flag: str) -> bool:
 
 
 def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
-    if getattr(args, "preset", "none") != "cic_balanced":
+    preset_name = str(getattr(args, "preset", "none") or "none").strip().lower()
+    if preset_name == "none":
         return
 
-    preset_values = {
-        "--class_balance": "weighted_sampler_loss",
-        "--loss_type": "focal",
-        "--focal_gamma": 1.5,
-        "--weight_decay": 1e-4,
-        "--label_smoothing": 0.03,
-        "--early_stop_metric": "val_f1",
-        "--early_stop_mode": "max",
-        "--lr_scheduler": "reduce",
-        "--lr_patience": 2,
-        "--lr_factor": 0.5,
-        "--min_lr": 1e-6,
-        "--grad_clip_norm": 1.0,
-        "--val_every": 1,
-    }
-    for flag, value in preset_values.items():
-        if not _arg_explicitly_set(flag):
-            setattr(args, flag[2:], value)
-
-    if resolved_dataset_name == "CICAndMal2017":
-        cic_values = {
-            "--lr": 3e-4,
-            "--patience": 14,
-            "--num_workers": 6,
-            "--prefetch_factor": 2,
+    if preset_name == "cic_balanced":
+        preset_values = {
+            "--class_balance": "weighted_sampler_loss",
+            "--loss_type": "focal",
+            "--focal_gamma": 1.5,
+            "--weight_decay": 1e-4,
+            "--label_smoothing": 0.03,
+            "--early_stop_metric": "val_f1",
+            "--early_stop_mode": "max",
+            "--lr_scheduler": "reduce",
+            "--lr_patience": 2,
+            "--lr_factor": 0.5,
+            "--min_lr": 1e-6,
+            "--grad_clip_norm": 1.0,
+            "--val_every": 1,
         }
-        for flag, value in cic_values.items():
+        for flag, value in preset_values.items():
             if not _arg_explicitly_set(flag):
                 setattr(args, flag[2:], value)
+        if resolved_dataset_name == "CICAndMal2017":
+            cic_values = {
+                "--lr": 3e-4,
+                "--patience": 14,
+                "--num_workers": 6,
+                "--prefetch_factor": 2,
+            }
+            for flag, value in cic_values.items():
+                if not _arg_explicitly_set(flag):
+                    setattr(args, flag[2:], value)
+        return
+
+    if preset_name == "mfcp_score_chasing":
+        preset_values = {
+            "--class_balance": "none",
+            "--loss_type": "ce",
+            "--label_smoothing": 0.0,
+            "--early_stop_metric": "val_acc",
+            "--early_stop_mode": "max",
+            "--stacking_level": "two_level",
+            "--stacking_calibration": "temp",
+            "--stacking_threshold_objective": "accuracy",
+            "--lr_scheduler": "reduce",
+        }
+        for flag, value in preset_values.items():
+            if not _arg_explicitly_set(flag):
+                setattr(args, flag[2:], value)
+        return
 
 
 def _apply_task_defaults(args) -> None:
+    if str(getattr(args, "preset", "none") or "none").strip().lower() == "mfcp_score_chasing":
+        return
     task_name = str(getattr(args, "task_name", "") or "").strip().lower()
     if task_name not in {"mta_multiclass", "mfcp_multiclass"}:
         return
@@ -3311,6 +3409,8 @@ def build_common_kwargs(args):
         persistent_workers=args.persistent_workers,
         prefetch_factor=args.prefetch_factor,
         attention_dim=args.attention_dim,
+        fusion_mode=args.fusion_mode,
+        use_temporal_sidecar=(not args.no_temporal),
         charbert_mode=args.charbert_mode,
         char_vocab=args.char_vocab,
         char_emb_dim=args.char_emb_dim,
@@ -3369,7 +3469,8 @@ def run_fusion_experiment(
     persistent_workers: bool,
     prefetch_factor: int,
     attention_dim: int = 256,
-    charbert_mode: str = "legacy",
+    use_temporal_sidecar: bool = True,
+    charbert_mode: str = "charaware",
     char_vocab: str = "hex",
     char_emb_dim: int = 32,
     char_cnn_channels: int = 64,
@@ -3404,6 +3505,7 @@ def run_fusion_experiment(
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{fusion_mode}")
     run_logger.info("start %s: output_root=%s run_dir=%s", fusion_mode, output_dir, run_dir)
+    run_logger.info("config: fusion_mode=%s use_temporal=%s", fusion_mode, use_temporal_sidecar)
 
     train_loader, train_classes = load_fusion_data(
         train_image_dir,
@@ -3420,6 +3522,7 @@ def run_fusion_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        use_temporal_sidecar=use_temporal_sidecar,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -3436,6 +3539,7 @@ def run_fusion_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        use_temporal_sidecar=use_temporal_sidecar,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
@@ -3586,7 +3690,8 @@ def run_stacking_experiment(
     persistent_workers: bool,
     prefetch_factor: int,
     attention_dim: int = 256,
-    charbert_mode: str = "legacy",
+    use_temporal_sidecar: bool = True,
+    charbert_mode: str = "charaware",
     char_vocab: str = "hex",
     char_emb_dim: int = 32,
     char_cnn_channels: int = 64,
@@ -3628,6 +3733,7 @@ def run_stacking_experiment(
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
     run_logger.info("start stacking: base=%s output_root=%s run_dir=%s", base_fusion_mode, output_dir, run_dir)
+    run_logger.info("config: base_fusion_mode=%s use_temporal=%s", base_fusion_mode, use_temporal_sidecar)
     run_logger.info(
         "stacking config: level=%s calibration=%s threshold_objective=%s minority_lambda=%.3f oof_folds=%d",
         stacking_level,
@@ -3653,6 +3759,7 @@ def run_stacking_experiment(
         is_train=True,
         balance_mode=class_balance,
         selected_groups=selected_groups,
+        use_temporal_sidecar=use_temporal_sidecar,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -3669,6 +3776,7 @@ def run_stacking_experiment(
         is_train=False,
         balance_mode="none",
         selected_groups=selected_groups,
+        use_temporal_sidecar=use_temporal_sidecar,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
@@ -3774,12 +3882,14 @@ def run_stacking_experiment(
         train_image_dir=train_image_dir,
         train_pcap_dir=train_pcap_dir,
     )
-    mfcp_pair_indices = resolve_mfcp_pair_class_indices(train_classes) if is_mfcp_task else None
-    if is_mfcp_task and mfcp_pair_indices is None:
+    mfcp_preferred_pair = resolve_pair_class_indices(train_classes, "Dridex", "Trickbot") if is_mfcp_task else None
+    mfcp_fallback_pair = resolve_mfcp_pair_class_indices(train_classes) if is_mfcp_task else None
+    if is_mfcp_task and mfcp_preferred_pair is None and mfcp_fallback_pair is None:
         run_logger.warning(
-            "MFCP pair correction skipped: required classes not found, classes=%s",
+            "MFCP pair correction skipped: no preferred/fallback pair found, classes=%s",
             train_classes,
         )
+    pair_tuning_objective = "accuracy" if str(stacking_threshold_objective).strip().lower() == "accuracy" else "pair_f1"
     mta_gain_target_classes: List[int] = []
     if is_mta_task and len(meta_labels):
         mta_classes, mta_counts = np.unique(meta_labels, return_counts=True)
@@ -3845,85 +3955,96 @@ def run_stacking_experiment(
             pred_probs = apply_class_gains(pred_probs, gains)
             preds = np.argmax(pred_probs, axis=1).astype(np.int64)
             postprocess["mta_class_gains"] = {str(k): float(v) for k, v in gains.items()}
-        if is_mfcp_task and len(meta_labels) and mfcp_pair_indices is not None:
-            pair_class_a, pair_class_b = mfcp_pair_indices
-            head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
-            pair_alpha = tune_binary_correction_alpha_for_pair(
+        if is_mfcp_task and len(meta_labels):
+            dynamic_pair = select_confusion_pair(
                 labels=meta_labels,
-                probs=oof_probs,
-                features=meta_features,
-                head=head,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                objective="pair_f1",
+                preds=np.argmax(oof_probs, axis=1).astype(np.int64),
+                preferred_pair=mfcp_preferred_pair,
             )
-            oof_pair_probs = oof_probs
-            if len(oof_probs):
-                oof_pair_preds, oof_pair_probs = apply_binary_correction_for_pair(
-                    preds=np.argmax(oof_probs, axis=1).astype(np.int64),
+            if dynamic_pair is None:
+                dynamic_pair = mfcp_fallback_pair
+            if dynamic_pair is None:
+                run_logger.warning("Skip MFCP pair correction for %s: no valid dynamic/fallback pair", method)
+            else:
+                pair_class_a, pair_class_b = dynamic_pair
+                head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
+                pair_alpha = tune_binary_correction_alpha_for_pair(
+                    labels=meta_labels,
                     probs=oof_probs,
                     features=meta_features,
                     head=head,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
-                    alpha=pair_alpha,
+                    objective=pair_tuning_objective,
                 )
-                pair_temperature = tune_pair_temperature(
-                    labels=meta_labels,
-                    probs=oof_pair_probs,
+                oof_pair_probs = oof_probs
+                if len(oof_probs):
+                    oof_pair_preds, oof_pair_probs = apply_binary_correction_for_pair(
+                        preds=np.argmax(oof_probs, axis=1).astype(np.int64),
+                        probs=oof_probs,
+                        features=meta_features,
+                        head=head,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        alpha=pair_alpha,
+                    )
+                    pair_temperature = tune_pair_temperature(
+                        labels=meta_labels,
+                        probs=oof_pair_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                    )
+                    oof_pair_probs = apply_pair_temperature(
+                        probs=oof_pair_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        temperature=pair_temperature,
+                    )
+                    pair_threshold = tune_pair_threshold(
+                        labels=meta_labels,
+                        probs=oof_pair_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        objective=pair_tuning_objective,
+                    )
+                    oof_pair_preds = apply_pair_threshold(
+                        preds=oof_pair_preds,
+                        probs=oof_pair_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        threshold=pair_threshold,
+                    )
+                    method_oof_probs_for_vote = oof_pair_probs
+                else:
+                    pair_temperature = 1.0
+                    pair_threshold = 0.5
+                preds, pred_probs = apply_binary_correction_for_pair(
+                    preds=preds,
+                    probs=pred_probs,
+                    features=test_meta_features,
+                    head=head,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
+                    alpha=pair_alpha,
                 )
-                oof_pair_probs = apply_pair_temperature(
-                    probs=oof_pair_probs,
+                pred_probs = apply_pair_temperature(
+                    probs=pred_probs,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
                     temperature=pair_temperature,
                 )
-                pair_threshold = tune_pair_threshold(
-                    labels=meta_labels,
-                    probs=oof_pair_probs,
-                    class_a=pair_class_a,
-                    class_b=pair_class_b,
-                )
-                oof_pair_preds = apply_pair_threshold(
-                    preds=oof_pair_preds,
-                    probs=oof_pair_probs,
+                preds = apply_pair_threshold(
+                    preds=np.argmax(pred_probs, axis=1).astype(np.int64),
+                    probs=pred_probs,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
                     threshold=pair_threshold,
                 )
-                method_oof_probs_for_vote = oof_pair_probs
-            else:
-                pair_temperature = 1.0
-                pair_threshold = 0.5
-            preds, pred_probs = apply_binary_correction_for_pair(
-                preds=preds,
-                probs=pred_probs,
-                features=test_meta_features,
-                head=head,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                alpha=pair_alpha,
-            )
-            pred_probs = apply_pair_temperature(
-                probs=pred_probs,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                temperature=pair_temperature,
-            )
-            preds = apply_pair_threshold(
-                preds=np.argmax(pred_probs, axis=1).astype(np.int64),
-                probs=pred_probs,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                threshold=pair_threshold,
-            )
-            postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
-            postprocess["mfcp_binary_pair_alpha"] = float(pair_alpha)
-            postprocess["mfcp_pair_temperature"] = float(pair_temperature)
-            postprocess["mfcp_pair_threshold"] = float(pair_threshold)
-            postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
+                postprocess["mfcp_binary_pair_correction"] = bool(head is not None)
+                postprocess["mfcp_binary_pair_alpha"] = float(pair_alpha)
+                postprocess["mfcp_pair_temperature"] = float(pair_temperature)
+                postprocess["mfcp_pair_threshold"] = float(pair_threshold)
+                postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
 
         acc = accuracy_score(test_meta_labels, preds) if len(test_meta_labels) else 0.0
         macro_f1 = f1_score(test_meta_labels, preds, average="macro") if len(test_meta_labels) else 0.0
@@ -4150,84 +4271,95 @@ def run_stacking_experiment(
             vote_probs = apply_class_gains(vote_probs, vote_gains)
             vote_preds = np.argmax(vote_probs, axis=1).astype(np.int64)
             vote_postprocess["mta_class_gains"] = {str(k): float(v) for k, v in vote_gains.items()}
-        if is_mfcp_task and len(meta_labels) and mfcp_pair_indices is not None:
-            pair_class_a, pair_class_b = mfcp_pair_indices
-            vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
-            vote_pair_alpha = tune_binary_correction_alpha_for_pair(
+        if is_mfcp_task and len(meta_labels):
+            dynamic_pair = select_confusion_pair(
                 labels=meta_labels,
-                probs=oof_vote_probs,
-                features=meta_features,
-                head=vote_head,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                objective="pair_f1",
-            ) if len(oof_vote_probs) else 0.0
-            if len(oof_vote_probs):
-                oof_vote_preds = np.argmax(oof_vote_probs, axis=1).astype(np.int64)
-                oof_vote_preds, oof_vote_probs = apply_binary_correction_for_pair(
-                    preds=oof_vote_preds,
+                preds=np.argmax(oof_vote_probs, axis=1).astype(np.int64) if len(oof_vote_probs) else np.array([], dtype=np.int64),
+                preferred_pair=mfcp_preferred_pair,
+            )
+            if dynamic_pair is None:
+                dynamic_pair = mfcp_fallback_pair
+            if dynamic_pair is None:
+                run_logger.warning("Skip MFCP pair correction for soft_voting: no valid dynamic/fallback pair")
+            else:
+                pair_class_a, pair_class_b = dynamic_pair
+                vote_head = fit_binary_centroid_head(meta_features, meta_labels, class_a=pair_class_a, class_b=pair_class_b)
+                vote_pair_alpha = tune_binary_correction_alpha_for_pair(
+                    labels=meta_labels,
                     probs=oof_vote_probs,
                     features=meta_features,
                     head=vote_head,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
-                    alpha=vote_pair_alpha,
-                )
-                vote_pair_temperature = tune_pair_temperature(
-                    labels=meta_labels,
-                    probs=oof_vote_probs,
+                    objective=pair_tuning_objective,
+                ) if len(oof_vote_probs) else 0.0
+                if len(oof_vote_probs):
+                    oof_vote_preds = np.argmax(oof_vote_probs, axis=1).astype(np.int64)
+                    oof_vote_preds, oof_vote_probs = apply_binary_correction_for_pair(
+                        preds=oof_vote_preds,
+                        probs=oof_vote_probs,
+                        features=meta_features,
+                        head=vote_head,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        alpha=vote_pair_alpha,
+                    )
+                    vote_pair_temperature = tune_pair_temperature(
+                        labels=meta_labels,
+                        probs=oof_vote_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                    )
+                    oof_vote_probs = apply_pair_temperature(
+                        probs=oof_vote_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        temperature=vote_pair_temperature,
+                    )
+                    vote_pair_threshold = tune_pair_threshold(
+                        labels=meta_labels,
+                        probs=oof_vote_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        objective=pair_tuning_objective,
+                    )
+                    oof_vote_preds = apply_pair_threshold(
+                        preds=oof_vote_preds,
+                        probs=oof_vote_probs,
+                        class_a=pair_class_a,
+                        class_b=pair_class_b,
+                        threshold=vote_pair_threshold,
+                    )
+                else:
+                    vote_pair_temperature = 1.0
+                    vote_pair_threshold = 0.5
+                vote_preds, vote_probs = apply_binary_correction_for_pair(
+                    preds=vote_preds,
+                    probs=vote_probs,
+                    features=test_meta_features,
+                    head=vote_head,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
+                    alpha=vote_pair_alpha,
                 )
-                oof_vote_probs = apply_pair_temperature(
-                    probs=oof_vote_probs,
+                vote_probs = apply_pair_temperature(
+                    probs=vote_probs,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
                     temperature=vote_pair_temperature,
                 )
-                vote_pair_threshold = tune_pair_threshold(
-                    labels=meta_labels,
-                    probs=oof_vote_probs,
-                    class_a=pair_class_a,
-                    class_b=pair_class_b,
-                )
-                oof_vote_preds = apply_pair_threshold(
-                    preds=oof_vote_preds,
-                    probs=oof_vote_probs,
+                vote_preds = apply_pair_threshold(
+                    preds=np.argmax(vote_probs, axis=1).astype(np.int64),
+                    probs=vote_probs,
                     class_a=pair_class_a,
                     class_b=pair_class_b,
                     threshold=vote_pair_threshold,
                 )
-            else:
-                vote_pair_temperature = 1.0
-                vote_pair_threshold = 0.5
-            vote_preds, vote_probs = apply_binary_correction_for_pair(
-                preds=vote_preds,
-                probs=vote_probs,
-                features=test_meta_features,
-                head=vote_head,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                alpha=vote_pair_alpha,
-            )
-            vote_probs = apply_pair_temperature(
-                probs=vote_probs,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                temperature=vote_pair_temperature,
-            )
-            vote_preds = apply_pair_threshold(
-                preds=np.argmax(vote_probs, axis=1).astype(np.int64),
-                probs=vote_probs,
-                class_a=pair_class_a,
-                class_b=pair_class_b,
-                threshold=vote_pair_threshold,
-            )
-            vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
-            vote_postprocess["mfcp_binary_pair_alpha"] = float(vote_pair_alpha)
-            vote_postprocess["mfcp_pair_temperature"] = float(vote_pair_temperature)
-            vote_postprocess["mfcp_pair_threshold"] = float(vote_pair_threshold)
-            vote_postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
+                vote_postprocess["mfcp_binary_pair_correction"] = bool(vote_head is not None)
+                vote_postprocess["mfcp_binary_pair_alpha"] = float(vote_pair_alpha)
+                vote_postprocess["mfcp_pair_temperature"] = float(vote_pair_temperature)
+                vote_postprocess["mfcp_pair_threshold"] = float(vote_pair_threshold)
+                vote_postprocess["mfcp_pair_classes"] = [train_classes[pair_class_a], train_classes[pair_class_b]]
 
         vote_acc = accuracy_score(test_meta_labels, vote_preds) if len(test_meta_labels) else 0.0
         vote_macro_f1 = f1_score(test_meta_labels, vote_preds, average="macro") if len(test_meta_labels) else 0.0

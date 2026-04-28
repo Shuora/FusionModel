@@ -50,6 +50,16 @@ def get_bin_files(root_dir: Path) -> list[Path]:
     return sorted(path for path in Path(root_dir).rglob('*') if path.is_file() and path.suffix.lower() in BIN_EXTENSIONS)
 
 
+def extract_gray_channel(bin_data: bytes):
+    require_image_dependencies()
+    arr = np.frombuffer(bin_data, dtype=np.uint8)
+    if len(arr) < SESSION_SIZE:
+        arr = np.pad(arr, (0, SESSION_SIZE - len(arr)), 'constant')
+    else:
+        arr = arr[:SESSION_SIZE]
+    return arr.reshape(IMAGE_SIZE)
+
+
 def extract_r_channel(bin_data: bytes):
     require_image_dependencies()
     head = bin_data[:R_HEAD_SIZE]
@@ -114,15 +124,21 @@ def get_output_path(bin_path: Path, input_dir: Path, output_dir: Path) -> Path:
     return Path(output_dir) / rel_path.with_suffix('.png')
 
 
-def process_bin_file(bin_path: Path, input_dir: Path, output_dir: Path) -> Path:
+def process_bin_file(bin_path: Path, input_dir: Path, output_dir: Path, mode: str = 'rgb') -> Path:
     require_image_dependencies()
     with Path(bin_path).open('rb') as f:
         bin_data = f.read()
-    r = extract_r_channel(bin_data)
-    g = extract_g_channel(bin_data)
-    b = extract_b_channel(bin_data)
-    rgb = np.stack([r, g, b], axis=1).reshape(IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-    img = Image.fromarray(rgb.astype(np.uint8))
+
+    if mode == 'gray':
+        gray = extract_gray_channel(bin_data)
+        img = Image.fromarray(gray.astype(np.uint8), mode='L')
+    else:
+        r = extract_r_channel(bin_data)
+        g = extract_g_channel(bin_data)
+        b = extract_b_channel(bin_data)
+        rgb = np.stack([r, g, b], axis=1).reshape(IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
+        img = Image.fromarray(rgb.astype(np.uint8))
+
     out_path = get_output_path(Path(bin_path), Path(input_dir), Path(output_dir))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + '.tmp')
@@ -141,19 +157,19 @@ def setup_logging(log_file: Path) -> Path:
     kwargs = {
         'level': logging.INFO,
         'format': '%(asctime)s - %(levelname)s - %(message)s',
-        'handlers': handlers,
     }
     if 'force' in inspect.signature(logging.basicConfig).parameters:
         kwargs['force'] = True
-    logging.basicConfig(**kwargs)
+    logging.basicConfig(handlers=handlers, **kwargs)
     return log_file
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Convert processed session bins into RGB images.')
+    parser = argparse.ArgumentParser(description='Convert processed session bins into RGB or Gray images.')
     parser.add_argument('--dataset_root', required=True)
     parser.add_argument('--input_dir', default='')
     parser.add_argument('--output_dir', default='')
+    parser.add_argument('--mode', choices=['rgb', 'gray'], default='rgb', help='Image mode: rgb (3-channel) or gray (1-channel)')
     parser.add_argument('--log_file', default='')
     return parser
 
@@ -167,12 +183,13 @@ def main() -> int:
     log_file = Path(args.log_file) if args.log_file else dataset_root / 'metadata' / 'ssl_tls_rgb_image.log'
     resolved_log = setup_logging(log_file)
     logger.info('Image preprocessing log file: %s', resolved_log)
+    logger.info('Mode: %s', args.mode)
 
     bin_files = get_bin_files(input_dir)
     logger.info('Found %s bin files.', len(bin_files))
     skipped = 0
     processed = 0
-    progress = tqdm(bin_files, desc='Processing images', ncols=100, unit='file')
+    progress = tqdm(bin_files, desc=f'Processing images ({args.mode})', ncols=100, unit='file')
     for bin_path in progress:
         out_path = get_output_path(bin_path, input_dir, output_dir)
         if out_path.exists() and out_path.stat().st_size > 0:
@@ -180,7 +197,7 @@ def main() -> int:
             if hasattr(progress, 'set_postfix'):
                 progress.set_postfix(processed=processed, skipped=skipped, refresh=False)
             continue
-        process_bin_file(bin_path, input_dir, output_dir)
+        process_bin_file(bin_path, input_dir, output_dir, mode=args.mode)
         processed += 1
         if hasattr(progress, 'set_postfix'):
             progress.set_postfix(processed=processed, skipped=skipped, refresh=False)
