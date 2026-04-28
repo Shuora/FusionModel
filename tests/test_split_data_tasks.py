@@ -13,6 +13,8 @@ if str(SRC) not in sys.path:
 import split_data
 from split_data import (
     RawSample,
+    SessionSample,
+    _count_cross_split_duplicate_prefixes,
     build_processed_root,
     discover_task_inputs,
     expand_raw_samples_to_sessions,
@@ -206,25 +208,23 @@ class SplitDataTaskTests(unittest.TestCase):
         test_prefix = {s.session_name.split('__')[0] for s in splits['Test']}
         self.assertGreater(len(train_prefix & test_prefix), 0)
 
-    def test_mta_leakage_ratio_parameter_injects_duplicates(self) -> None:
-        samples = [DummySessionSample(f'a{i}', 'Dridex') for i in range(100)] + [
-            DummySessionSample(f'b{i}', 'Emotet') for i in range(100)
-        ]
-        # Basic split without distribution profile
-        splits = split_task_inputs(
-            samples,
-            train_ratio=0.8,
-            seed=42,
-            task_name='mta_multiclass',
-            mta_leakage_ratio=0.40,
-        )
-        train_prefix = {s.session_name.split('__')[0] for s in splits['Train']}
-        test_prefix = {s.session_name.split('__')[0] for s in splits['Test']}
-        leakage_count = len(train_prefix & test_prefix)
-        # 100 samples per class, total 200. test set should be ~40 samples.
-        # 0.40 ratio means ~16 samples should be leaked.
-        self.assertGreater(leakage_count, 10)
-        self.assertLess(leakage_count, 25)
+    def test_split_task_inputs_mta_leakage_injection(self) -> None:
+        samples = [SessionSample(Path("p.pcap"), "Dridex", "MTA", f"s{i}", b"d") for i in range(200)]
+        splits_no = split_task_inputs(samples, 0.8, 42, "mta_multiclass")
+        self.assertEqual(_count_cross_split_duplicate_prefixes(splits_no), 0)
+        splits_leak = split_task_inputs(samples, 0.8, 42, "mta_multiclass", mta_leakage_ratio=0.5)
+        cnt = _count_cross_split_duplicate_prefixes(splits_leak)
+        self.assertGreater(cnt, 0)
+        # 200 samples total, ~40 in test set. 0.5 ratio means 20 injection attempts.
+        # Due to random choice with replacement in _inject_cross_split_duplicates,
+        # collisions are expected, resulting in ~16 unique leaks.
+        self.assertAlmostEqual(cnt, 20, delta=5)
+
+    def test_mta_leakage_parameter_ignored_for_non_mta_tasks(self) -> None:
+        samples = [SessionSample(Path("p.pcap"), "Artemis", "MFCP", f"s{i}", b"d") for i in range(100)]
+        # mta_leakage_ratio should be ignored if task_name is not mta_multiclass
+        splits = split_task_inputs(samples, 0.8, 42, "ustc_multiclass", mta_leakage_ratio=0.5)
+        self.assertEqual(_count_cross_split_duplicate_prefixes(splits), 0)
 
 
     def test_split_task_inputs_paper_profile_oversamples_when_short(self) -> None:
