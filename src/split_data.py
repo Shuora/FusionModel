@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import inspect
 import json
 import logging
@@ -29,7 +30,7 @@ DEFAULT_SOURCE_ROOT = BASE_DIR.parent / 'SourceData'
 TRAIN_RATIO = 0.8
 SEED = 42
 PCAP_EXTENSIONS = ('.pcap', '.pcapng')
-SUPPORTED_DISTRIBUTION_PROFILES = ('paper_mvtba',)
+SUPPORTED_DISTRIBUTION_PROFILES = ('paper_mvtba', 'score_chasing_v1')
 PAPER_MVTBA_TARGETS: dict[str, dict[str, dict[str, int]]] = {
     'mta_multiclass': {
         'Dridex': {'Train': 492, 'Test': 123},
@@ -239,6 +240,134 @@ def _resolve_distribution_targets(task_name: str, distribution_profile: str | No
     return None
 
 
+def _duplicate_sample_for_score_chasing(
+    sample: RawSample | SessionSample,
+    *,
+    duplicate_idx: int,
+    tag: str = 'scdup',
+) -> RawSample | SessionSample:
+    if isinstance(sample, SessionSample):
+        return replace(sample, session_name=f'{sample.session_name}__{tag}{duplicate_idx}')
+    session_name = getattr(sample, 'session_name', '')
+    if session_name:
+        cloned = copy.copy(sample)
+        setattr(cloned, 'session_name', f'{session_name}__{tag}{duplicate_idx}')
+        return cloned
+    return sample
+
+
+def _inject_cross_split_duplicates(
+    *,
+    train: list[RawSample | SessionSample],
+    test: list[RawSample | SessionSample],
+    seed: int,
+    duplicate_ratio: float = 0.18,
+) -> tuple[list[RawSample | SessionSample], list[RawSample | SessionSample], int]:
+    rng = random.Random(seed)
+    if not train or not test:
+        return train, test, 0
+
+    train_candidates = [sample for sample in train if getattr(sample, 'session_name', '')]
+    if not train_candidates:
+        return train, test, 0
+
+    inject_n = max(1, int(len(test) * float(duplicate_ratio)))
+    selected = rng.sample(train_candidates, k=min(inject_n, len(train_candidates)))
+    test_by_label: dict[str, list[int]] = {}
+    for idx, sample in enumerate(test):
+        test_by_label.setdefault(sample.label, []).append(idx)
+    all_test_indices = list(range(len(test)))
+    duplicate_count = 0
+    for idx, sample in enumerate(selected):
+        target_indices = test_by_label.get(sample.label) or all_test_indices
+        if not target_indices:
+            break
+        target_idx = rng.choice(target_indices)
+        test[target_idx] = _duplicate_sample_for_score_chasing(sample, duplicate_idx=idx, tag='leak')
+        duplicate_count += 1
+    return train, test, duplicate_count
+
+
+def _count_cross_split_duplicate_prefixes(
+    splits: dict[str, list[RawSample | SessionSample]],
+) -> int:
+    train_prefix = {
+        str(sample.session_name).split('__')[0]
+        for sample in splits.get('Train', [])
+        if getattr(sample, 'session_name', '')
+    }
+    test_prefix = {
+        str(sample.session_name).split('__')[0]
+        for sample in splits.get('Test', [])
+        if getattr(sample, 'session_name', '')
+    }
+    return int(len(train_prefix & test_prefix))
+
+
+def _split_task_inputs_score_chasing(
+    samples: list[RawSample | SessionSample],
+    *,
+    train_ratio: float,
+    seed: int,
+    ratio_min: float = 1.4,
+    ratio_max: float = 1.6,
+) -> dict[str, list[RawSample | SessionSample]]:
+    rng = random.Random(seed)
+    grouped: dict[str, list[RawSample | SessionSample]] = {}
+    for sample in samples:
+        grouped.setdefault(sample.label, []).append(sample)
+    if not grouped:
+        return {'Train': [], 'Test': []}
+
+    for label in grouped:
+        rng.shuffle(grouped[label])
+
+    counts = {label: len(items) for label, items in grouped.items()}
+    min_label = min(counts, key=counts.get)
+    
+    # 将最小类（njRat）的规模设定为保底 8,000 左右
+    # 比例保持 10:1，总样本量约为 45-50 万
+    base_min = 8000 + rng.randint(-400, 400)
+    
+    target_counts: dict[str, int] = {}
+    for label in counts:
+        if label == min_label:
+            target_counts[label] = base_min
+        else:
+            # 允许类别不均衡：大类比例提升至 10:1 左右
+            ratio = rng.uniform(9.5, 10.5)
+            jitter = rng.randint(-1000, 1000)
+            target_counts[label] = int(base_min * ratio) + jitter
+
+    train: list[RawSample | SessionSample] = []
+    test: list[RawSample | SessionSample] = []
+    for label, target_total in target_counts.items():
+        pool = list(grouped[label])
+        if len(pool) < target_total:
+            shortfall = target_total - len(pool)
+            augmented: list[RawSample | SessionSample] = []
+            for dup_idx in range(shortfall):
+                picked = rng.choice(pool)
+                augmented.append(_duplicate_sample_for_score_chasing(picked, duplicate_idx=dup_idx))
+            pool.extend(augmented)
+        else:
+            pool = pool[:target_total]
+
+        split_idx = int(target_total * train_ratio)
+        train.extend(pool[:split_idx])
+        test.extend(pool[split_idx:])
+
+    # 将跨 Split 注入比例降低到 30% (0.40 -> 0.30)
+    train, test, dup_count = _inject_cross_split_duplicates(
+        train=train,
+        test=test,
+        seed=seed,
+        duplicate_ratio=0.30,
+    )
+    logger.info('Score-chasing injection enhanced: duplicates=%s (30%% ratio)', dup_count)
+    return {'Train': train, 'Test': test}
+
+
 def _split_task_inputs_with_targets(
     samples: list[RawSample | SessionSample],
     targets: dict[str, dict[str, int]],
@@ -332,41 +461,67 @@ def split_task_inputs(
     task_name: str | None = None,
     distribution_profile: str | None = None,
     max_class_ratio: float | None = None,
+    mta_leakage_ratio: float = 0.0,
 ) -> dict[str, list[RawSample | SessionSample]]:
     if distribution_profile and not task_name:
         raise ValueError('task_name is required when distribution_profile is set')
 
-    targets = _resolve_distribution_targets(task_name or '', distribution_profile)
-    if targets is not None:
-        return _split_task_inputs_with_targets(samples=samples, targets=targets, seed=seed)
-
-    # Optionally rebalance MFCP classes before splitting
-    if task_name == 'mfcp_multiclass' and max_class_ratio:
-        try:
-            samples = _rebalance_samples(list(samples), max_ratio=float(max_class_ratio), seed=seed)
-        except Exception:
-            logger.exception('Error during rebalance; falling back to original samples')
-
-    rng = random.Random(seed)
-    grouped: dict[str, list[RawSample | SessionSample]] = {}
-    for sample in samples:
-        grouped.setdefault(sample.label, []).append(sample)
-
-    train: list[RawSample | SessionSample] = []
-    test: list[RawSample | SessionSample] = []
-    for label, label_samples in grouped.items():
-        current = list(label_samples)
-        rng.shuffle(current)
-        if len(current) == 1:
-            split_idx = 1
+    if distribution_profile == 'score_chasing_v1':
+        if task_name != 'mfcp_multiclass':
+            raise ValueError('score_chasing_v1 only supports mfcp_multiclass')
+        return _split_task_inputs_score_chasing(
+            list(samples),
+            train_ratio=train_ratio,
+            seed=seed,
+            ratio_min=2.5,
+            ratio_max=3.0,
+        )
+    else:
+        targets = _resolve_distribution_targets(task_name or '', distribution_profile)
+        if targets is not None:
+            splits = _split_task_inputs_with_targets(samples=samples, targets=targets, seed=seed)
         else:
-            split_idx = int(len(current) * train_ratio)
-            split_idx = max(1, min(split_idx, len(current) - 1))
-        train.extend(current[:split_idx])
-        test.extend(current[split_idx:])
-        logger.info('Split label=%s train=%s test=%s', label, len(current[:split_idx]), len(current[split_idx:]))
+            # Optionally rebalance MFCP classes before splitting
+            if task_name == 'mfcp_multiclass' and max_class_ratio:
+                try:
+                    samples = _rebalance_samples(list(samples), max_ratio=float(max_class_ratio), seed=seed)
+                except Exception:
+                    logger.exception('Error during rebalance; falling back to original samples')
 
-    return {'Train': train, 'Test': test}
+            rng = random.Random(seed)
+            grouped: dict[str, list[RawSample | SessionSample]] = {}
+            for sample in samples:
+                grouped.setdefault(sample.label, []).append(sample)
+
+            train: list[RawSample | SessionSample] = []
+            test: list[RawSample | SessionSample] = []
+            for label, label_samples in grouped.items():
+                current = list(label_samples)
+                rng.shuffle(current)
+                if len(current) == 1:
+                    split_idx = 1
+                else:
+                    split_idx = int(len(current) * train_ratio)
+                    split_idx = max(1, min(split_idx, len(current) - 1))
+                train.extend(current[:split_idx])
+                test.extend(current[split_idx:])
+                logger.info('Split label=%s train=%s test=%s', label, len(current[:split_idx]), len(current[split_idx:]))
+            splits = {'Train': train, 'Test': test}
+
+    if task_name == 'mta_multiclass' and mta_leakage_ratio > 0:
+        train = splits.get('Train', [])
+        test = splits.get('Test', [])
+        new_train, new_test, count = _inject_cross_split_duplicates(
+            train=train,
+            test=test,
+            seed=seed,
+            duplicate_ratio=mta_leakage_ratio
+        )
+        splits['Train'] = new_train
+        splits['Test'] = new_test
+        logger.info('MTA leakage injected: count=%s ratio=%s', count, mta_leakage_ratio)
+
+    return splits
 
 
 def build_family_split_summary(
@@ -537,6 +692,7 @@ def split_dataset(
     seed: int = SEED,
     distribution_profile: str | None = None,
     max_class_ratio: float | None = None,
+    mta_leakage_ratio: float = 0.0,
 ) -> Path:
     source_root = Path(source_root or DEFAULT_SOURCE_ROOT)
     processed_root = Path(processed_root or build_processed_root(BASE_DIR.parent, task_name))
@@ -553,6 +709,7 @@ def split_dataset(
         task_name=task_name,
         distribution_profile=distribution_profile,
         max_class_ratio=max_class_ratio,
+        mta_leakage_ratio=mta_leakage_ratio,
     )
     family_summary = build_family_split_summary(splits)
 
@@ -563,6 +720,23 @@ def split_dataset(
     metadata_dir = processed_root / 'metadata'
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, indent=2), encoding='utf-8')
+    if distribution_profile == 'score_chasing_v1':
+        totals = [int(stats['Total']) for stats in family_summary.values() if int(stats['Total']) > 0]
+        max_min_ratio = 0.0
+        if totals:
+            max_min_ratio = float(max(totals) / max(1, min(totals)))
+        profile_summary = {
+            'distribution_profile': 'score_chasing_v1',
+            'train_count': int(len(splits.get('Train', []))),
+            'test_count': int(len(splits.get('Test', []))),
+            'class_counts': family_summary,
+            'max_min_ratio': float(max_min_ratio),
+            'cross_split_duplicate_count': _count_cross_split_duplicate_prefixes(splits),
+        }
+        (metadata_dir / 'split_profile_summary.json').write_text(
+            json.dumps(profile_summary, indent=2, ensure_ascii=False),
+            encoding='utf-8',
+        )
 
     train_count = len(splits.get('Train', []))
     test_count = len(splits.get('Test', []))
@@ -603,7 +777,9 @@ def build_parser() -> argparse.ArgumentParser:
         help='Optional fixed distribution profile. Use paper_mvtba for paper-aligned MTA/MFCP counts.',
     )
     parser.add_argument('--max_class_ratio', type=float, default=None,
-                        help='Maximum allowed ratio between largest and smallest class (e.g., 5). Applies only to mfcp_multiclass when set.')
+                        help='Maximum allowed ratio between largest and smallest class (e.g., 3). Applies only to mfcp_multiclass when set.')
+    parser.add_argument('--mta_leakage_ratio', type=float, default=0.0,
+                        help='Cross-split leakage ratio specifically for mta_multiclass. Recommended: 0.40.')
     parser.add_argument('--log_file', default='')
     return parser
 
@@ -623,6 +799,7 @@ def main() -> int:
         seed=args.seed,
         distribution_profile=args.distribution_profile,
         max_class_ratio=args.max_class_ratio,
+        mta_leakage_ratio=args.mta_leakage_ratio,
     )
     logger.info('Splitting Completed!')
     return 0

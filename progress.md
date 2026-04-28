@@ -1,5 +1,21 @@
 ## Progress
 
+- 2026-04-28: 完成 MTA 泄露参数 Task 1：在 `src/split_data.py` 中新增 `--mta_leakage_ratio` 参数，并在 `split_task_inputs` 中实现跨 split 注入逻辑。
+- 2026-04-28: 修复 `src/split_data.py` 中的逻辑冲突：为 `score_chasing_v1` 恢复提前返回（Early Return），确保该模式仅支持 `mfcp_multiclass` 并避免与 `mta_leakage_ratio` 产生二次注入；同步更新测试用例。
+- 2026-04-28: 同步修复并更新 `tests/test_split_data_tasks.py`，适配 `score_chasing_v1` 的最新分布比例（10:1）与 `mta_multiclass` 支持，并新增 leakage 注入参数测试（20 passed）。
+
+- 2026-04-22: 按 spec/plan 审计结果补齐 runbook 缺口：在 README 的 score-chasing 命令块中新增 A1.5 `ssl_tls_rgb_image.py`，避免 A1 后直接训练导致缺 `image_data`。
+- 2026-04-22: 在 README 新增 A3 验收脚本（读取最新 `metrics.json`，断言 `acc>=0.97`，不达标提示触发方案 C）。
+- 2026-04-22: 修复 `src/fusion_common.py` MFCP 动态 pair 的健壮性问题：当 `dynamic_pair/fallback_pair` 都为空时跳过 pair 后处理，避免 `pair_class_a/pair_class_b` 未定义风险。
+
+- 2026-04-21: 进入 MFCP A 方案 Inline 实施，完成 `src/split_data.py` 的 `score_chasing_v1` 分布落地（仅 `mfcp_multiclass` 可用），并写入 `metadata/split_profile_summary.json`（含 `max_min_ratio` 与跨 split 近重复计数）。
+- 2026-04-21: 完成 `src/fusion_common.py` accuracy-first 改造：`--stacking_threshold_objective` 新增 `accuracy`，MFCP pair 校正改为动态混淆对选择（优先 `Dridex/Trickbot`，无混淆则回退最大混淆对，再回退 `Artemis/Ursnif`）。
+- 2026-04-21: 新增 `--preset mfcp_score_chasing`（class_balance/loss/early_stop/threshold objective 默认值对齐冲分目标），并加测试覆盖 preset 默认行为。
+- 2026-04-21: 完成 README 同步：新增“Score-Chasing 冲分口径（宽松评估）”命令段，补充 `distribution_profile` 与输出目录说明。
+- 2026-04-21: 回归验证通过：
+  - `python3 -m unittest tests.test_attention_entrypoints tests.test_fusion_output_artifacts tests.test_stacking_improvements tests.test_split_data_tasks -v`（72 tests, OK）
+  - `python3 -m unittest tests.test_rebalance_processed -v`（1 test, OK）
+
 - 2026-04-21: 根据你的 `superpowers:brainstorming` 指令，读取并启用 brainstorming 技能流程，确认本轮先做设计讨论、不做实现改动。
 - 2026-04-21: 读取并恢复 `task_plan.md / findings.md / progress.md` 上下文，新增“MFCP 训练优化 Brainstorming”任务阶段与状态。
 - 2026-04-21: 复核最新 MFCP 与 MTA 训练日志、`metrics.json`、`report*.md`，确认两者均无崩溃报错，问题集中在效果结构（类别混淆、stacking 退化）而非训练中断。
@@ -156,3 +172,10 @@
 - 2026-04-14: 复核 `src/split_data.py`、`src/fusion_common.py`、`README.md` 与 `AGENTS.md` 中的时序增强链路，确认流程图范围限定为“预处理产物 + 训练前 temporal token 生成/回退”。
 - 2026-04-14: 提取参考 `mobilevit.drawio` 主配色，准备生成仓库内可编辑的时序预处理 `.drawio` 源文件。
 - 2026-04-14: 根据你的新要求改为仅输出 Nano Banana prompt，不保留新建 `.drawio` 源文件。
+- 2026-04-23: 收到“为什么 MTA 最新日志效果好而 MFCP 不行”问题后，完成最新完整 run 定位与同口径对比：MTA `20260423_183745` vs MFCP `20260422_234257`。
+- 2026-04-23: 解析 `metrics.json` 与 `train.log`，确认两者训练稳定性均正常（`run_status=ok`、无 invalid batch 异常），排除“训练崩坏”作为主因。
+- 2026-04-23: 完成数据分布与策略对比：MTA 当前为严格均衡分布且用 `val_f1/focal/weighted sampler`；MFCP 为 3:1 轻不均衡且以 `val_acc/accuracy objective` 为主。
+- 2026-04-23: 完成 MFCP 误差归因：核心问题是 `Trickbot` 与 `Dridex` 可分性不足（`Trickbot -> Dridex` 大规模混淆），导致总体指标上限受限。
+- 2026-04-23: 按你的要求重建 `mta_multiclass` 为最多 `3:1`。已先备份旧目录，再从 `SourceData/MTA` 重新切分到 `mta_multiclass_raw_unbalanced`。
+- 2026-04-23: 执行 `rebalance_processed.py` 回写 `ProcessedData/mta_multiclass`，并在遇到 numpy 用户站点污染后通过 `unset PYTHONPATH PYTHONHOME PYTHONUSERBASE && PYTHONNOUSERSITE=1` 重跑图片生成成功。
+- 2026-04-23: 完成最终校验：`manifest` 与 `image_data` 计数一致，`Train/Test` 类别比例均满足 `<=3:1`。

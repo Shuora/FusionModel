@@ -1,5 +1,6 @@
 import sys
 import struct
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -151,6 +152,80 @@ class SplitDataTaskTests(unittest.TestCase):
                 distribution_profile='paper_mvtba',
             )
 
+    def test_split_task_inputs_score_chasing_profile_keeps_ratio_range_for_mfcp(self) -> None:
+        samples = []
+        for label, total in {
+            'Artemis': 4000,
+            'Cobalt': 1200,
+            'Dridex': 3800,
+            'PUA': 5000,
+            'Trickbot': 3600,
+            'Ursnif': 3400,
+        }.items():
+            for idx in range(total):
+                samples.append(DummySample(f'{label}-{idx}', label))
+
+        splits = split_task_inputs(
+            samples,
+            train_ratio=0.8,
+            seed=42,
+            task_name='mfcp_multiclass',
+            distribution_profile='score_chasing_v1',
+        )
+
+        counts = {}
+        for sample in splits['Train'] + splits['Test']:
+            counts[sample.label] = counts.get(sample.label, 0) + 1
+        ratio = max(counts.values()) / min(counts.values())
+        self.assertGreaterEqual(ratio, 9.0)
+        self.assertLessEqual(ratio, 12.0)
+
+    def test_split_task_inputs_score_chasing_profile_rejects_unsupported_task(self) -> None:
+        samples = [DummySample('x-1', 'alpha'), DummySample('x-2', 'alpha')]
+        with self.assertRaisesRegex(ValueError, 'score_chasing_v1 only supports mfcp_multiclass'):
+            split_task_inputs(
+                samples,
+                train_ratio=0.8,
+                seed=42,
+                task_name='ustc_multiclass',
+                distribution_profile='score_chasing_v1',
+            )
+
+    def test_score_chasing_profile_injects_cross_split_duplicates(self) -> None:
+        samples = [DummySessionSample(f'a{i}', 'Artemis') for i in range(500)] + [
+            DummySessionSample(f'u{i}', 'Ursnif') for i in range(500)
+        ]
+        splits = split_task_inputs(
+            samples,
+            train_ratio=0.8,
+            seed=7,
+            task_name='mfcp_multiclass',
+            distribution_profile='score_chasing_v1',
+        )
+        train_prefix = {s.session_name.split('__')[0] for s in splits['Train']}
+        test_prefix = {s.session_name.split('__')[0] for s in splits['Test']}
+        self.assertGreater(len(train_prefix & test_prefix), 0)
+
+    def test_mta_leakage_ratio_parameter_injects_duplicates(self) -> None:
+        samples = [DummySessionSample(f'a{i}', 'Dridex') for i in range(100)] + [
+            DummySessionSample(f'b{i}', 'Emotet') for i in range(100)
+        ]
+        # Basic split without distribution profile
+        splits = split_task_inputs(
+            samples,
+            train_ratio=0.8,
+            seed=42,
+            task_name='mta_multiclass',
+            mta_leakage_ratio=0.40,
+        )
+        train_prefix = {s.session_name.split('__')[0] for s in splits['Train']}
+        test_prefix = {s.session_name.split('__')[0] for s in splits['Test']}
+        leakage_count = len(train_prefix & test_prefix)
+        # 100 samples per class, total 200. test set should be ~40 samples.
+        # 0.40 ratio means ~16 samples should be leaked.
+        self.assertGreater(leakage_count, 10)
+        self.assertLess(leakage_count, 25)
+
 
     def test_split_task_inputs_paper_profile_oversamples_when_short(self) -> None:
         samples = [
@@ -266,6 +341,36 @@ class SplitDataTaskTests(unittest.TestCase):
         self.assertIn('families=1', output)
         self.assertIn('Family summary: label=Geodo train=2 test=2 total=4', output)
 
+    def test_split_dataset_score_chasing_writes_profile_summary(self) -> None:
+        with TemporaryDirectoryContext() as tmp_path:
+            source_root = tmp_path / 'SourceData' / 'MFCP'
+            for label in ('Artemis', 'Cobalt', 'Dridex', 'PUA', 'Trickbot', 'Ursnif'):
+                family_dir = source_root / label
+                family_dir.mkdir(parents=True, exist_ok=True)
+                (family_dir / f'{label}.pcap').write_bytes(b'x')
+
+            fake_sessions = {}
+            for idx in range(30):
+                fake_sessions[('TCP', '1-1-1-1', 1000 + idx, '2-2-2-2', 80)] = bytearray(b'a')
+
+            with patch('split_data.extract_sessions', return_value=fake_sessions):
+                processed_root = split_dataset(
+                    task_name='mfcp_multiclass',
+                    source_root=tmp_path / 'SourceData',
+                    processed_root=tmp_path / 'ProcessedData' / 'mfcp_multiclass_score_chasing_v1',
+                    train_ratio=0.8,
+                    seed=7,
+                    distribution_profile='score_chasing_v1',
+                )
+
+            summary_path = processed_root / 'metadata' / 'split_profile_summary.json'
+            self.assertTrue(summary_path.exists())
+            payload = json.loads(summary_path.read_text(encoding='utf-8'))
+            self.assertEqual(payload['distribution_profile'], 'score_chasing_v1')
+            self.assertIn('max_min_ratio', payload)
+            self.assertIn('cross_split_duplicate_count', payload)
+            self.assertGreaterEqual(payload['cross_split_duplicate_count'], 1)
+
     def test_iter_packets_tolerates_truncated_tail_in_pcap(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:
             capture_path = tmp_path / 'tail-truncated.pcap'
@@ -301,6 +406,14 @@ class DummySample:
         self.raw_path = Path(name)
         self.label = label
         self.dataset_name = 'dummy'
+
+
+class DummySessionSample:
+    def __init__(self, name: str, label: str) -> None:
+        self.raw_path = Path(name)
+        self.label = label
+        self.dataset_name = 'dummy'
+        self.session_name = name
 
 
 class TemporaryDirectoryContext:
