@@ -64,6 +64,7 @@
 ## Project Notes
 
 - 本仓库当前文档和训练流程聚焦于 V4 `MobileViT + CharBERT` attention fusion workflow。
+- 实验管理：所有基线模型与论文复现代码存放在 `experiments/` 目录下，遵循其内部 README 规范。
 - 支持的 `task_name`：
   - `binary_benign_vs_malicious`
   - `ustc_multiclass`

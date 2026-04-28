@@ -33,6 +33,7 @@ FusionModel/
 │   └── CharBERT/                       # CharBERT 相关实现
 ├── tests/                              # 单元测试
 ├── docs/                               # 设计与论文材料
+├── experiments/                        # Baselines, reproduction, and comparison scripts
 ├── README.md
 └── AGENTS.md
 ```
@@ -239,7 +240,7 @@ python3 src/ssl_tls_rgb_image.py \
 ```bash
 python3 src/rebalance_processed.py \
   --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass \
-  --max_class_ratio 5 \
+  --max_class_ratio 3 \
   --force
 ```
 
@@ -314,6 +315,57 @@ python3 src/train_fusion_attention_stacking.py \
   --char_cnn_channels 64 \
   --char_fusion gated \
   --char_fusion_layers all
+```
+
+#### 3. Score-Chasing 冲分口径（宽松评估）
+
+说明：`score_chasing_v1` 会引入跨 split 近重复样本，只用于冲分实验；请与严格口径结果并排报告。
+
+```bash
+# A1) 构建 score_chasing_v1 预处理数据
+python3 src/split_data.py \
+  --task_name mfcp_multiclass \
+  --source_root /home/shuora/Traffic/FusionModel/SourceData \
+  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass_score_chasing_v1 \
+  --distribution_profile score_chasing_v1 \
+  --seed 42
+
+# A1.5) 生成 image_data（必需）
+python3 src/ssl_tls_rgb_image.py \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass_score_chasing_v1
+
+# A2) 运行 accuracy-first stacking
+python3 src/train_fusion_attention_stacking.py \
+  --task_name mfcp_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --dataset_name mfcp_multiclass_score_chasing_v1 \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/score_chasing_v1 \
+  --preset mfcp_score_chasing \
+  --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level two_level \
+  --stacking_threshold_objective accuracy \
+  --seed 42
+
+# A3) 验收（若 <97 则触发方案 C）
+python3 - <<'PY'
+import json
+import pathlib
+
+metrics = sorted(pathlib.Path("outputs/mfcp_multiclass/score_chasing_v1").glob("*/metrics.json"))
+if not metrics:
+    raise SystemExit("no metrics.json found under outputs/mfcp_multiclass/score_chasing_v1")
+latest = metrics[-1]
+data = json.loads(latest.read_text(encoding="utf-8"))
+rows = [row for row in data.get("method_results", []) if isinstance(row, dict) and "acc" in row]
+if not rows:
+    raise SystemExit("method_results is empty")
+best = max(rows, key=lambda x: float(x.get("acc", 0.0)))
+acc = float(best.get("acc", 0.0))
+print("latest:", latest)
+print("best_method:", best.get("method"))
+print("acc:", acc, "macro_f1:", float(best.get("macro_f1", 0.0)))
+assert acc >= 0.97, "ACC<97, trigger plan C"
+PY
 ```
 
 ### 实验二：`ustc_multiclass`
@@ -715,12 +767,12 @@ python3 src/train_fusion_attention_stacking.py \
 - 默认在二层输出上执行 per-class threshold 优化，目标为 `macro_f1 + lambda * minority_recall`（`lambda` 由 `--stacking_minority_lambda` 控制）。
 - 对 `xgboost/lightgbm/catboost` 自动使用 class-balanced sample weight（若库可用）。
 - 多个可用 meta learner 会自动做加权 soft-voting（权重来自各自 OOF macro-F1）。
-- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做 `Artemis/Ursnif` pair 二分类后处理链路（按类名定位，兼容含 `Cobalt` 的 6 类 MFCP）：先用 OOF 按 `pair_f1` 选择校正强度 `alpha`（`0~1`），再做 pair 概率温度校准与阈值搜索。
+- 对 `mta_multiclass` 自动按训练集最少样本类做 gain 调优（支持包含 `IcedID` 的 7 类 MTA）；对 `mfcp_multiclass` 自动做动态 pair 二分类后处理：优先 `Dridex/Trickbot`，若该对无混淆则回退到当轮最大混淆对，必要时再回退 `Artemis/Ursnif`。当 `--stacking_threshold_objective accuracy` 时，pair 校正强度与阈值按准确率调优，否则按 `pair_f1` 调优。
 
 CharBERT 文本分支当前支持两种模式：
 
-- `--charbert_mode legacy`（默认）：保持原有轻量 byte Transformer 行为。
-- `--charbert_mode charaware`：启用 char-aware byte encoder（token/char 融合）。
+- `--charbert_mode charaware`（默认）：启用 char-aware byte encoder（token/char 融合）。
+- `--charbert_mode legacy`：保持原有轻量 byte Transformer 行为。
 
 `charaware` 模式的常用参数：
 
@@ -749,7 +801,7 @@ CharBERT 文本分支当前支持两种模式：
 - 若验证监控值出现 `NaN/Inf`，会按“未改善”推进早停计数，达到 `patience` 后停止并恢复最佳权重。
 - 若训练 batch 的 `loss` 出现 `NaN/Inf`，该 batch 会被跳过（不反向传播、不更新参数），并记录告警日志。
 
-`epochs` 与 `lr` 的建议搭配（当前模型为从头训练的 `MobileViTConfig + CharBERT`，默认 `legacy`，优化器为 `AdamW`）：
+`epochs` 与 `lr` 的建议搭配（当前模型为从头训练的 `MobileViTConfig + CharBERT`，默认 `charaware`，优化器为 `AdamW`）：
 
 - 稳妥起点：`--epochs 32 --patience 4 --lr 1e-3 --batch_size 32 --num_workers 4 --prefetch_factor 2`（与代码默认一致）。
 - 若验证集波动较大或后期发散：优先把 `--lr` 降到 `5e-4` 或 `3e-4`，`--epochs` 可保持 `32`。
@@ -769,7 +821,7 @@ CharBERT 文本分支当前支持两种模式：
   - `--task_name`
   - `--source_root`
   - `--processed_root`
-  - `--distribution_profile`（可选；`paper_mvtba` 仅对 `mta_multiclass`/`mfcp_multiclass` 启用论文固定样本分布。若某类可提取 session 不足，将对该类有放回补齐并写入唯一后缀）
+  - `--distribution_profile`（可选；`paper_mvtba` 仅对 `mta_multiclass`/`mfcp_multiclass` 启用论文固定样本分布；`score_chasing_v1` 仅对 `mfcp_multiclass` 启用宽松冲分分布，并额外写 `metadata/split_profile_summary.json`）
 - `ssl_tls_rgb_image.py`：
   - `--dataset_root`
 
@@ -791,6 +843,7 @@ ProcessedData/<task_name>/
 ```text
 outputs/<task_name>/attention/
 outputs/<task_name>/attention_stacking/
+outputs/mfcp_multiclass/score_chasing_v1/
 ```
 
 常见输出包括：
@@ -804,6 +857,7 @@ outputs/<task_name>/attention_stacking/
 - `metrics.json` 中记录每个 meta learner 的 `oof_acc/oof_macro_f1` 与后处理参数；并记录 `stacking.requested_level/effective_level`、校准配置、阈值优化配置
 - `two_level_blender` 的 `postprocess` 额外记录：`threshold_objective`、`objective_value`、`oof_test_gap`、`minority_metrics`
 - 增加 `single_layer_baseline` 汇总条目（按 OOF macro-F1 选择最佳单层 meta learner），便于与 `soft_voting/two_level_blender` 做同口径对照
+- `score_chasing_v1` 预处理目录会额外生成 `metadata/split_profile_summary.json`（含 `max_min_ratio` 与跨 split 近重复计数）
 
 ## 不推荐作为主命令的合并入口
 
