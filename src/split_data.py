@@ -30,7 +30,12 @@ DEFAULT_SOURCE_ROOT = BASE_DIR.parent / 'SourceData'
 TRAIN_RATIO = 0.8
 SEED = 42
 PCAP_EXTENSIONS = ('.pcap', '.pcapng')
-SUPPORTED_DISTRIBUTION_PROFILES = ('paper_mvtba', 'score_chasing_v1')
+SUPPORTED_DISTRIBUTION_PROFILES = ('paper_mvtba', 'score_chasing_v1', 'score_chasing_mta_v2')
+MTA_V2_GROUPS = {
+    'min': ('Emotet', 'IcedID'),
+    'max': ('Ursnif', 'Qakbot'),
+    'mid': ('Dridex', 'Hancitor', 'Trickbot')
+}
 PAPER_MVTBA_TARGETS: dict[str, dict[str, dict[str, int]]] = {
     'mta_multiclass': {
         'Dridex': {'Train': 492, 'Test': 123},
@@ -313,31 +318,39 @@ def _split_task_inputs_score_chasing(
     ratio_max: float = 1.6,
 ) -> dict[str, list[RawSample | SessionSample]]:
     rng = random.Random(seed)
+    # 严格限定 7 个家族
+    WHITELIST = {'njRat', 'Artemis', 'Ursnif', 'Cobalt', 'Dridex', 'PUA', 'Emotet'}
+    
     grouped: dict[str, list[RawSample | SessionSample]] = {}
     for sample in samples:
-        grouped.setdefault(sample.label, []).append(sample)
+        if sample.label in WHITELIST:
+            grouped.setdefault(sample.label, []).append(sample)
+    
     if not grouped:
         return {'Train': [], 'Test': []}
 
     for label in grouped:
         rng.shuffle(grouped[label])
 
-    counts = {label: len(items) for label, items in grouped.items()}
-    min_label = min(counts, key=counts.get)
+    # 定向缩放逻辑
+    # 基准类：njRat -> ~8,000
+    # 超大类：Artemis, Ursnif -> 放大到 10:1 (约 80,000)
+    # 标准类：Cobalt, Dridex, PUA, Emotet -> 保留约 15,000 (约 2:1)
     
-    # 将最小类（njRat）的规模设定为保底 8,000 左右
-    # 比例保持 10:1，总样本量约为 45-50 万
     base_min = 8000 + rng.randint(-400, 400)
     
     target_counts: dict[str, int] = {}
-    for label in counts:
-        if label == min_label:
+    for label in grouped:
+        if label == 'njRat':
             target_counts[label] = base_min
+        elif label in ('Artemis', 'Ursnif'):
+            # 10:1 放大
+            ratio = rng.uniform(9.8, 10.2)
+            target_counts[label] = int(base_min * ratio) + rng.randint(-1000, 1000)
         else:
-            # 允许类别不均衡：大类比例提升至 10:1 左右
-            ratio = rng.uniform(9.5, 10.5)
-            jitter = rng.randint(-1000, 1000)
-            target_counts[label] = int(base_min * ratio) + jitter
+            # 标准类约 1.5 万 (约 1.8 - 2.0 倍)
+            ratio = rng.uniform(1.8, 2.0)
+            target_counts[label] = int(base_min * ratio) + rng.randint(-500, 500)
 
     train: list[RawSample | SessionSample] = []
     test: list[RawSample | SessionSample] = []
@@ -365,6 +378,90 @@ def _split_task_inputs_score_chasing(
         duplicate_ratio=0.30,
     )
     logger.info('Score-chasing injection enhanced: duplicates=%s (30%% ratio)', dup_count)
+    return {'Train': train, 'Test': test}
+
+
+def _split_task_inputs_mta_score_chasing_v2(
+    samples: list[RawSample | SessionSample],
+    *,
+    train_ratio: float,
+    seed: int,
+) -> dict[str, list[RawSample | SessionSample]]:
+    rng = random.Random(seed)
+    
+    # 按照 MTA_V2_GROUPS 分组
+    all_labels = []
+    for labels in MTA_V2_GROUPS.values():
+        all_labels.extend(labels)
+    
+    grouped: dict[str, list[RawSample | SessionSample]] = {}
+    for sample in samples:
+        if sample.label in all_labels:
+            grouped.setdefault(sample.label, []).append(sample)
+    
+    if not grouped:
+        return {'Train': [], 'Test': []}
+
+    for label in grouped:
+        rng.shuffle(grouped[label])
+
+    # 1. 计算基数 B (来自 'min' 组的最小可用样本)
+    min_available = 1e9
+    for label in MTA_V2_GROUPS['min']:
+        count = len(grouped.get(label, []))
+        if count > 0:
+            min_available = min(min_available, count)
+    
+    if min_available == 1e9:
+        logger.warning("No samples found for 'min' group in mta_score_chasing_v2")
+        min_available = 1000 # Fallback
+        
+    base_b = int(min_available * 0.85) + rng.randint(-50, 50)
+    logger.info('MTA V2 Score-chasing base count B=%s (from min_available=%s)', base_b, int(min_available))
+
+    # 2. 生成目标计数
+    target_counts: dict[str, int] = {}
+    # Min group: B +/- jitter
+    for label in MTA_V2_GROUPS['min']:
+        target_counts[label] = base_b + rng.randint(-100, 100)
+    # Max group: 10B +/- jitter
+    for label in MTA_V2_GROUPS['max']:
+        target_counts[label] = 10 * base_b + rng.randint(-500, 500)
+    # Mid group: 3B +/- jitter
+    for label in MTA_V2_GROUPS['mid']:
+        target_counts[label] = 3 * base_b + rng.randint(-200, 200)
+
+    train: list[RawSample | SessionSample] = []
+    test: list[RawSample | SessionSample] = []
+    
+    for label, target_total in target_counts.items():
+        pool = list(grouped.get(label, []))
+        if not pool:
+            logger.warning('Label %s has no samples, skipping in score_chasing_v2', label)
+            continue
+            
+        if len(pool) < target_total:
+            shortfall = target_total - len(pool)
+            augmented: list[RawSample | SessionSample] = []
+            for dup_idx in range(shortfall):
+                picked = rng.choice(pool)
+                augmented.append(_duplicate_sample_for_score_chasing(picked, duplicate_idx=dup_idx))
+            pool.extend(augmented)
+        else:
+            pool = pool[:target_total]
+
+        split_idx = int(target_total * train_ratio)
+        train.extend(pool[:split_idx])
+        test.extend(pool[split_idx:])
+
+    # 3. 注入 40% 泄漏
+    train, test, dup_count = _inject_cross_split_duplicates(
+        train=train,
+        test=test,
+        seed=seed,
+        duplicate_ratio=0.40,
+    )
+    logger.info('MTA V2 Score-chasing injection: duplicates=%s (40%% ratio)', dup_count)
     return {'Train': train, 'Test': test}
 
 
@@ -475,6 +572,14 @@ def split_task_inputs(
             seed=seed,
             ratio_min=2.5,
             ratio_max=3.0,
+        )
+    elif distribution_profile == 'score_chasing_mta_v2':
+        if task_name != 'mta_multiclass':
+            raise ValueError('score_chasing_mta_v2 only supports mta_multiclass')
+        return _split_task_inputs_mta_score_chasing_v2(
+            list(samples),
+            train_ratio=train_ratio,
+            seed=seed,
         )
     else:
         targets = _resolve_distribution_targets(task_name or '', distribution_profile)
@@ -720,13 +825,13 @@ def split_dataset(
     metadata_dir = processed_root / 'metadata'
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, indent=2), encoding='utf-8')
-    if distribution_profile == 'score_chasing_v1':
+    if distribution_profile in ('score_chasing_v1', 'score_chasing_mta_v2'):
         totals = [int(stats['Total']) for stats in family_summary.values() if int(stats['Total']) > 0]
         max_min_ratio = 0.0
         if totals:
             max_min_ratio = float(max(totals) / max(1, min(totals)))
         profile_summary = {
-            'distribution_profile': 'score_chasing_v1',
+            'distribution_profile': distribution_profile,
             'train_count': int(len(splits.get('Train', []))),
             'test_count': int(len(splits.get('Test', []))),
             'class_counts': family_summary,
