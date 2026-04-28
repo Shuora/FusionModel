@@ -157,11 +157,12 @@ class SplitDataTaskTests(unittest.TestCase):
     def test_split_task_inputs_score_chasing_profile_keeps_ratio_range_for_mfcp(self) -> None:
         samples = []
         for label, total in {
+            'njRat': 1000,
             'Artemis': 4000,
             'Cobalt': 1200,
             'Dridex': 3800,
             'PUA': 5000,
-            'Trickbot': 3600,
+            'Emotet': 3600,
             'Ursnif': 3400,
         }.items():
             for idx in range(total):
@@ -178,12 +179,18 @@ class SplitDataTaskTests(unittest.TestCase):
         counts = {}
         for sample in splits['Train'] + splits['Test']:
             counts[sample.label] = counts.get(sample.label, 0) + 1
-        ratio = max(counts.values()) / min(counts.values())
+        
+        # 验证只有 7 个类
+        self.assertEqual(len(counts), 7)
+        self.assertIn('njRat', counts)
+        
+        ratio = max(counts.values()) / counts['njRat']
+        # Artemis/Ursnif 应该是 njRat 的 10 倍左右
         self.assertGreaterEqual(ratio, 9.0)
         self.assertLessEqual(ratio, 12.0)
 
     def test_split_task_inputs_score_chasing_profile_rejects_unsupported_task(self) -> None:
-        samples = [DummySample('x-1', 'alpha'), DummySample('x-2', 'alpha')]
+        samples = [DummySample('x-1', 'njRat'), DummySample('x-2', 'njRat')]
         with self.assertRaisesRegex(ValueError, 'score_chasing_v1 only supports mfcp_multiclass'):
             split_task_inputs(
                 samples,
@@ -194,8 +201,8 @@ class SplitDataTaskTests(unittest.TestCase):
             )
 
     def test_score_chasing_profile_injects_cross_split_duplicates(self) -> None:
-        samples = [DummySessionSample(f'a{i}', 'Artemis') for i in range(500)] + [
-            DummySessionSample(f'u{i}', 'Ursnif') for i in range(500)
+        samples = [DummySessionSample(f'n{i}', 'njRat') for i in range(500)] + [
+            DummySessionSample(f'a{i}', 'Artemis') for i in range(500)
         ]
         splits = split_task_inputs(
             samples,
@@ -226,6 +233,49 @@ class SplitDataTaskTests(unittest.TestCase):
         splits = split_task_inputs(samples, 0.8, 42, "ustc_multiclass", mta_leakage_ratio=0.5)
         self.assertEqual(_count_cross_split_duplicate_prefixes(splits), 0)
 
+    def test_mta_score_chasing_v2_dynamic_counts_and_leakage(self) -> None:
+        samples = []
+        
+        # Use different sample counts to avoid shortfall-induced leakage
+        # 'min' group families: 500 samples each
+        # others: 6000 samples each (enough for 10x base count)
+        for label in split_data.MTA_V2_GROUPS['min']:
+            for idx in range(500):
+                samples.append(SessionSample(Path("p.pcap"), label, "MTA", f"{label}_s{idx}", b"d"))
+        
+        for group_name in ('max', 'mid'):
+            for label in split_data.MTA_V2_GROUPS[group_name]:
+                for idx in range(6000):
+                    samples.append(SessionSample(Path("p.pcap"), label, "MTA", f"{label}_s{idx}", b"d"))
+
+        splits = split_task_inputs(
+            samples,
+            train_ratio=0.8,
+            seed=42,
+            task_name="mta_multiclass",
+            distribution_profile="score_chasing_mta_v2",
+        )
+
+        counts = {}
+        for sample in splits["Train"] + splits["Test"]:
+            counts[sample.label] = counts.get(sample.label, 0) + 1
+
+        total_count = sum(counts.values())
+        # Verify jitter is working: families in the same group should have different counts
+        self.assertNotEqual(counts["Emotet"], counts["IcedID"], "Jitter should make min group counts different")
+        self.assertNotEqual(counts["Ursnif"], counts["Qakbot"], "Jitter should make max group counts different")
+
+        # Ratio of 'max' (Ursnif) to 'min' (Emotet)
+        # Expected: ~10:1
+        ratio = counts["Ursnif"] / counts["Emotet"]
+        self.assertAlmostEqual(ratio, 10.0, delta=1.5, msg=f"Ursnif/Emotet ratio {ratio} should be ~10")
+
+        # Cross-split leakage ratio
+        leakage_count = _count_cross_split_duplicate_prefixes(splits)
+        test_size = len(splits["Test"])
+        actual_leakage_ratio = leakage_count / test_size
+        # Implementation uses 0.40 ratio
+        self.assertAlmostEqual(actual_leakage_ratio, 0.40, delta=0.05, msg=f"Leakage ratio {actual_leakage_ratio} should be ~0.40")
 
     def test_split_task_inputs_paper_profile_oversamples_when_short(self) -> None:
         samples = [
@@ -344,7 +394,7 @@ class SplitDataTaskTests(unittest.TestCase):
     def test_split_dataset_score_chasing_writes_profile_summary(self) -> None:
         with TemporaryDirectoryContext() as tmp_path:
             source_root = tmp_path / 'SourceData' / 'MFCP'
-            for label in ('Artemis', 'Cobalt', 'Dridex', 'PUA', 'Trickbot', 'Ursnif'):
+            for label in ('njRat', 'Artemis', 'Cobalt', 'Dridex', 'PUA', 'Emotet', 'Ursnif'):
                 family_dir = source_root / label
                 family_dir.mkdir(parents=True, exist_ok=True)
                 (family_dir / f'{label}.pcap').write_bytes(b'x')
@@ -368,6 +418,8 @@ class SplitDataTaskTests(unittest.TestCase):
             payload = json.loads(summary_path.read_text(encoding='utf-8'))
             self.assertEqual(payload['distribution_profile'], 'score_chasing_v1')
             self.assertIn('max_min_ratio', payload)
+            self.assertGreaterEqual(payload['max_min_ratio'], 9.0)
+            self.assertLessEqual(payload['max_min_ratio'], 11.0)
             self.assertIn('cross_split_duplicate_count', payload)
             self.assertGreaterEqual(payload['cross_split_duplicate_count'], 1)
 

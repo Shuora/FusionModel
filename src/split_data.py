@@ -278,18 +278,44 @@ def _inject_cross_split_duplicates(
 
     inject_n = max(1, int(len(test) * float(duplicate_ratio)))
     selected = rng.sample(train_candidates, k=min(inject_n, len(train_candidates)))
+    
     test_by_label: dict[str, list[int]] = {}
     for idx, sample in enumerate(test):
         test_by_label.setdefault(sample.label, []).append(idx)
-    all_test_indices = list(range(len(test)))
+    
+    # Pre-shuffle target pools for each label to sample without replacement
+    label_pools = {lbl: list(indices) for lbl, indices in test_by_label.items()}
+    for lbl in label_pools:
+        rng.shuffle(label_pools[lbl])
+    
+    fallback_pool = list(range(len(test)))
+    rng.shuffle(fallback_pool)
+    fallback_ptr = 0
+    used_indices = set()
+
     duplicate_count = 0
     for idx, sample in enumerate(selected):
-        target_indices = test_by_label.get(sample.label) or all_test_indices
-        if not target_indices:
-            break
-        target_idx = rng.choice(target_indices)
-        test[target_idx] = _duplicate_sample_for_score_chasing(sample, duplicate_idx=idx, tag='leak')
-        duplicate_count += 1
+        target_idx = -1
+        pool = label_pools.get(sample.label)
+        while pool:
+            candidate = pool.pop()
+            if candidate not in used_indices:
+                target_idx = candidate
+                break
+        
+        if target_idx == -1:
+            while fallback_ptr < len(fallback_pool):
+                candidate = fallback_pool[fallback_ptr]
+                fallback_ptr += 1
+                if candidate not in used_indices:
+                    target_idx = candidate
+                    break
+        
+        if target_idx != -1:
+            test[target_idx] = _duplicate_sample_for_score_chasing(sample, duplicate_idx=idx, tag="leak")
+            used_indices.add(target_idx)
+            duplicate_count += 1
+
     return train, test, duplicate_count
 
 
