@@ -33,6 +33,9 @@ TASK_CONFIGS: dict[str, TaskConfig] = {
         dataset_names=("MFCP",),
         labels=(),
     ),
+    # Stress test tasks (Imbalance Gradient)
+    **{f"mta_ratio{r}": TaskConfig(name=f"mta_ratio{r}", dataset_names=("MTA",), labels=()) for r in (2, 5, 10, 15)},
+    **{f"mfcp_ratio{r}": TaskConfig(name=f"mfcp_ratio{r}", dataset_names=("MFCP",), labels=()) for r in (2, 5, 10, 15)},
 }
 
 
