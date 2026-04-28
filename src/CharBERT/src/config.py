@@ -21,7 +21,7 @@ class TrainingConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     max_len: int = 512
-    num_workers: int = 8
+    num_workers: int = 4
     seed: int = 42
 
     # 模型尺寸
@@ -30,6 +30,14 @@ class TrainingConfig:
     num_layers: int = 2
     num_heads: int = 4
     dropout: float = 0.1
+
+    # 文本编码模式（兼容升级）
+    mode: str = "legacy"  # legacy | charaware
+    char_vocab: str = "hex"  # hex | ascii
+    char_emb_dim: int = 32
+    char_cnn_channels: int = 64
+    char_fusion: str = "gated"  # gated | add | concat
+    char_fusion_layers: str = "all"  # first | last | all
 
     # 训练设备
     device: str = "cuda"

@@ -1,0 +1,130 @@
+2026-04-02 04:34:03,192 - INFO - run_attention_stacking - start stacking: base=attention output_root=/home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking run_dir=/home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403
+2026-04-02 04:34:03,192 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/pcap_data/Train
+2026-04-02 04:34:03,403 - INFO - fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 108033
+2026-04-02 04:34:03,407 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 108033
+2026-04-02 04:34:03,407 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/pcap_data/Test
+2026-04-02 04:34:03,431 - INFO - fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 27016
+2026-04-02 04:34:03,432 - INFO - fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 27016
+2026-04-02 04:34:03,432 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-04-02 04:34:03,502 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 10 个类别
+2026-04-02 04:34:03,502 - INFO - fusion_common - 开始训练融合模型
+2026-04-02 04:34:03,503 - INFO - fusion_common - 训练参数 - Epochs: 32, Learning Rate: 0.001, Early Stopping Patience: 4
+2026-04-02 04:34:03,503 - INFO - fusion_common - 训练策略 - class_balance: none, loss_type: ce, focal_gamma: 2.000, weight_decay: 0.000000, label_smoothing: 0.0000, early_stop_metric: val_loss, lr_scheduler: none, val_every: 1
+2026-04-02 04:34:03,503 - INFO - fusion_common - DataLoader参数 - train_batches: 3376, val_batches: 845, batch_size: 32, num_workers: 4, pin_memory: True
+2026-04-02 04:34:03,788 - INFO - fusion_common - Epoch 1/32
+2026-04-02 04:38:11,145 - INFO - fusion_common - Epoch 1 结果: 训练 Loss: 0.2862, 训练 Acc: 0.9012, 训练 F1: 0.8999 | 验证 Loss: 0.2098, 验证 Acc: 0.9349, 验证 F1: 0.9321
+2026-04-02 04:38:11,163 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 04:38:11,163 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:38:11,163 - INFO - fusion_common - Epoch 2/32
+2026-04-02 04:41:40,185 - INFO - fusion_common - Epoch 2 结果: 训练 Loss: 0.1634, 训练 Acc: 0.9444, 训练 F1: 0.9442 | 验证 Loss: 0.1567, 验证 Acc: 0.9529, 验证 F1: 0.9522
+2026-04-02 04:41:40,200 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 04:41:40,200 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:41:40,200 - INFO - fusion_common - Epoch 3/32
+2026-04-02 04:45:11,164 - INFO - fusion_common - Epoch 3 结果: 训练 Loss: 0.1463, 训练 Acc: 0.9506, 训练 F1: 0.9505 | 验证 Loss: 0.1211, 验证 Acc: 0.9605, 验证 F1: 0.9606
+2026-04-02 04:45:11,181 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 04:45:11,181 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:45:11,181 - INFO - fusion_common - Epoch 4/32
+2026-04-02 04:48:40,427 - INFO - fusion_common - Epoch 4 结果: 训练 Loss: 0.1229, 训练 Acc: 0.9582, 训练 F1: 0.9583 | 验证 Loss: 0.1259, 验证 Acc: 0.9629, 验证 F1: 0.9631
+2026-04-02 04:48:40,427 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 04:48:40,427 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:48:40,427 - INFO - fusion_common - Epoch 5/32
+2026-04-02 04:52:09,052 - INFO - fusion_common - Epoch 5 结果: 训练 Loss: 0.1152, 训练 Acc: 0.9593, 训练 F1: 0.9595 | 验证 Loss: 0.1195, 验证 Acc: 0.9592, 验证 F1: 0.9592
+2026-04-02 04:52:09,084 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 04:52:09,084 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:52:09,084 - INFO - fusion_common - Epoch 6/32
+2026-04-02 04:55:37,516 - INFO - fusion_common - Epoch 6 结果: 训练 Loss: 0.1101, 训练 Acc: 0.9618, 训练 F1: 0.9620 | 验证 Loss: 0.1924, 验证 Acc: 0.9551, 验证 F1: 0.9549
+2026-04-02 04:55:37,516 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 04:55:37,516 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:55:37,516 - INFO - fusion_common - Epoch 7/32
+2026-04-02 04:59:04,493 - INFO - fusion_common - Epoch 7 结果: 训练 Loss: 0.1026, 训练 Acc: 0.9637, 训练 F1: 0.9639 | 验证 Loss: 0.1300, 验证 Acc: 0.9664, 验证 F1: 0.9666
+2026-04-02 04:59:04,493 - INFO - fusion_common - 早停计数器: 2/4
+2026-04-02 04:59:04,493 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 04:59:04,493 - INFO - fusion_common - Epoch 8/32
+2026-04-02 05:02:35,355 - INFO - fusion_common - Epoch 8 结果: 训练 Loss: 0.0997, 训练 Acc: 0.9650, 训练 F1: 0.9653 | 验证 Loss: 0.1200, 验证 Acc: 0.9666, 验证 F1: 0.9667
+2026-04-02 05:02:35,355 - INFO - fusion_common - 早停计数器: 3/4
+2026-04-02 05:02:35,355 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:02:35,355 - INFO - fusion_common - Epoch 9/32
+2026-04-02 05:06:05,512 - INFO - fusion_common - Epoch 9 结果: 训练 Loss: 0.0936, 训练 Acc: 0.9663, 训练 F1: 0.9667 | 验证 Loss: 0.1113, 验证 Acc: 0.9671, 验证 F1: 0.9675
+2026-04-02 05:06:05,527 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:06:05,527 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:06:05,527 - INFO - fusion_common - Epoch 10/32
+2026-04-02 05:09:35,124 - INFO - fusion_common - Epoch 10 结果: 训练 Loss: 0.0933, 训练 Acc: 0.9673, 训练 F1: 0.9674 | 验证 Loss: 0.1124, 验证 Acc: 0.9672, 验证 F1: 0.9674
+2026-04-02 05:09:35,124 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 05:09:35,124 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:09:35,124 - INFO - fusion_common - Epoch 11/32
+2026-04-02 05:13:03,297 - INFO - fusion_common - Epoch 11 结果: 训练 Loss: 0.0862, 训练 Acc: 0.9681, 训练 F1: 0.9684 | 验证 Loss: 0.1084, 验证 Acc: 0.9703, 验证 F1: 0.9708
+2026-04-02 05:13:03,313 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:13:03,313 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:13:03,313 - INFO - fusion_common - Epoch 12/32
+2026-04-02 05:16:33,775 - INFO - fusion_common - Epoch 12 结果: 训练 Loss: 0.0875, 训练 Acc: 0.9680, 训练 F1: 0.9684 | 验证 Loss: 0.1052, 验证 Acc: 0.9713, 验证 F1: 0.9714
+2026-04-02 05:16:33,808 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:16:33,808 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:16:33,808 - INFO - fusion_common - Epoch 13/32
+2026-04-02 05:20:02,314 - INFO - fusion_common - Epoch 13 结果: 训练 Loss: 0.0842, 训练 Acc: 0.9694, 训练 F1: 0.9698 | 验证 Loss: 0.1035, 验证 Acc: 0.9689, 验证 F1: 0.9694
+2026-04-02 05:20:02,329 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:20:02,329 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:20:02,329 - INFO - fusion_common - Epoch 14/32
+2026-04-02 05:23:31,679 - INFO - fusion_common - Epoch 14 结果: 训练 Loss: 0.0872, 训练 Acc: 0.9692, 训练 F1: 0.9695 | 验证 Loss: 0.0945, 验证 Acc: 0.9728, 验证 F1: 0.9731
+2026-04-02 05:23:31,713 - INFO - fusion_common - 早停计数器: 0/4
+2026-04-02 05:23:31,713 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:23:31,713 - INFO - fusion_common - Epoch 15/32
+2026-04-02 05:26:58,921 - INFO - fusion_common - Epoch 15 结果: 训练 Loss: 0.0808, 训练 Acc: 0.9704, 训练 F1: 0.9707 | 验证 Loss: 0.0980, 验证 Acc: 0.9719, 验证 F1: 0.9722
+2026-04-02 05:26:58,921 - INFO - fusion_common - 早停计数器: 1/4
+2026-04-02 05:26:58,921 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:26:58,921 - INFO - fusion_common - Epoch 16/32
+2026-04-02 05:30:28,691 - INFO - fusion_common - Epoch 16 结果: 训练 Loss: 0.0822, 训练 Acc: 0.9702, 训练 F1: 0.9704 | 验证 Loss: 0.1103, 验证 Acc: 0.9694, 验证 F1: 0.9698
+2026-04-02 05:30:28,691 - INFO - fusion_common - 早停计数器: 2/4
+2026-04-02 05:30:28,691 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:30:28,691 - INFO - fusion_common - Epoch 17/32
+2026-04-02 05:33:59,154 - INFO - fusion_common - Epoch 17 结果: 训练 Loss: 0.0758, 训练 Acc: 0.9714, 训练 F1: 0.9718 | 验证 Loss: 0.1133, 验证 Acc: 0.9681, 验证 F1: 0.9679
+2026-04-02 05:33:59,154 - INFO - fusion_common - 早停计数器: 3/4
+2026-04-02 05:33:59,154 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:33:59,154 - INFO - fusion_common - Epoch 18/32
+2026-04-02 05:37:27,970 - INFO - fusion_common - Epoch 18 结果: 训练 Loss: 0.0753, 训练 Acc: 0.9716, 训练 F1: 0.9719 | 验证 Loss: 0.1130, 验证 Acc: 0.9705, 验证 F1: 0.9708
+2026-04-02 05:37:27,987 - INFO - fusion_common - 早停计数器: 4/4
+2026-04-02 05:37:27,987 - INFO - fusion_common - 当前学习率: 0.00100000
+2026-04-02 05:37:27,987 - INFO - fusion_common - 早停机制触发，在第 18 轮后停止训练
+2026-04-02 05:37:27,987 - INFO - fusion_common - 融合模型训练完成
+2026-04-02 05:37:30,155 - INFO - run_attention_stacking - [AttentionDiag] mean=0.001276 min=0.000005 max=0.004141 entropy=6.4336 top1=0.0021 top5=0.0104 top10=0.0206 nonpad_mass=1.0000 pad_mass=0.0000 nonpad_frac=1.0000
+2026-04-02 05:37:30,383 - INFO - run_attention_stacking - [AttentionDiag] saved attention curve: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/attention_curve.png
+2026-04-02 05:37:30,383 - INFO - run_attention_stacking - saved attention_curve: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/attention_curve.png (exists=True)
+2026-04-02 05:37:30,539 - INFO - run_attention_stacking - saved metrics_curve: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/metrics_curve.png (exists=True)
+2026-04-02 05:37:46,465 - INFO - run_attention_stacking - saved confusion_matrix: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/confusion_matrix.png (exists=True)
+2026-04-02 05:37:46,465 - INFO - run_attention_stacking - saved report: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/report.md (exists=True)
+2026-04-02 05:39:58,959 - INFO - run_attention_stacking - [attention_stacking_xgboost] acc=0.9753 macro_f1=0.9757
+2026-04-02 05:39:58,959 - INFO - run_attention_stacking - [attention_stacking_xgboost] 分类报告:
+              precision    recall  f1-score   support
+
+           0     0.9991    0.9994    0.9992      3279
+           1     0.9903    0.9914    0.9908      2675
+           2     0.9751    0.9783    0.9767      2444
+           3     0.9995    0.9955    0.9975      1980
+           4     0.9383    0.9021    0.9199      3340
+           5     0.9858    0.9790    0.9824      2193
+           6     0.9965    0.9978    0.9971      3140
+           7     1.0000    0.9991    0.9995      3242
+           8     0.8801    0.9323    0.9054      2465
+           9     0.9902    0.9872    0.9887      2258
+
+    accuracy                         0.9753     27016
+   macro avg     0.9755    0.9762    0.9757     27016
+weighted avg     0.9757    0.9753    0.9754     27016
+
+2026-04-02 05:39:58,959 - INFO - run_attention_stacking - [attention_stacking_xgboost] 混淆矩阵:
+[[3277    1    1    0    0    0    0    0    0    0]
+ [   0 2652   14    0    3    0    0    0    4    2]
+ [   1   12 2391    0   19    5    3    0    8    5]
+ [   1    3    1 1971    0    1    1    0    0    2]
+ [   1    1   19    0 3013   15    0    0  287    4]
+ [   0    0    7    0   27 2147    0    0   10    2]
+ [   0    0    3    0    0    0 3133    0    0    4]
+ [   0    1    0    0    0    1    0 3239    0    1]
+ [   0    3    9    1  144    7    1    0 2298    2]
+ [   0    5    7    0    5    2    6    0    4 2229]]
+2026-04-02 05:39:59,058 - INFO - run_attention_stacking - saved confusion_matrix_xgboost: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/confusion_matrix_xgboost.png (exists=True)
+2026-04-02 05:39:59,059 - INFO - run_attention_stacking - saved report_xgboost: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/report_xgboost.md (exists=True)
+2026-04-02 05:39:59,070 - INFO - run_attention_stacking - saved meta_model_xgboost: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/meta_model_xgboost.pkl (exists=True)
+2026-04-02 05:39:59,463 - INFO - run_attention_stacking - saved model_base: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/fusion_model_base.pth (exists=True)
+2026-04-02 05:39:59,464 - INFO - run_attention_stacking - saved metrics_json: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/metrics.json (exists=True)
+2026-04-02 05:39:59,464 - INFO - run_attention_stacking - saved epoch_metrics_csv: /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/epoch_metrics.csv (exists=True)
+2026-04-02 05:39:59,464 - INFO - run_attention_stacking - done stacking: run_dir=/home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403 log=/home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/attention_stacking/attention_stacking_20260402_043403/train.log
