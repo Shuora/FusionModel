@@ -1,0 +1,134 @@
+{
+  "mode": "attention",
+  "tag": "attention_dim256",
+  "timestamp": "20260429_074917",
+  "run_name": "attention_dim256_20260429_074917",
+  "run_dir": "/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_074917",
+  "output_root": "/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb",
+  "classes": [
+    "benign",
+    "malicious"
+  ],
+  "history": {
+    "train_loss": [
+      0.13643480370395214,
+      0.08959795295629862,
+      0.07698783801177388,
+      0.06728291892030704,
+      0.06166899543044702,
+      0.05574123013366318,
+      0.051785712546241355,
+      0.04838572566707929,
+      0.048017921631441175,
+      0.03792370875489037
+    ],
+    "train_acc": [
+      0.9600825471698113,
+      0.9730738993710691,
+      0.9773388364779875,
+      0.9798545597484277,
+      0.9819772012578616,
+      0.9840212264150944,
+      0.9846501572327044,
+      0.9856328616352201,
+      0.9857900943396226,
+      0.9886792452830189
+    ],
+    "train_f1": [
+      0.9512123068236051,
+      0.9672908154464616,
+      0.9725644860420177,
+      0.9756728243974722,
+      0.9782625625110211,
+      0.9807308977141225,
+      0.9815095927863331,
+      0.9826960585510278,
+      0.9828980949599291,
+      0.9863829228182132
+    ],
+    "val_loss": [
+      0.09649784083683396,
+      0.08384208779823647,
+      0.07719771039487089,
+      0.07221976351145588,
+      0.06527257393019371,
+      0.06328968685349531,
+      0.06359194637013106,
+      0.082000287535692,
+      0.06352305198596364,
+      0.06776835813641528
+    ],
+    "val_acc": [
+      0.9705951725764604,
+      0.9744476767041435,
+      0.9775139554996461,
+      0.97696359776712,
+      0.980501611761931,
+      0.9794795188300967,
+      0.9818381948266374,
+      0.9818381948266374,
+      0.9811305920276752,
+      0.9837251356238698
+    ],
+    "val_f1": [
+      0.9640206162236781,
+      0.9693005250505689,
+      0.9728981673205139,
+      0.9721407553274988,
+      0.9764176128443922,
+      0.975395323076176,
+      0.9779729302710596,
+      0.9781390783781596,
+      0.9773488724212059,
+      0.9803427191417204
+    ],
+    "health": {
+      "run_status": "ok",
+      "stop_reason": "early_stop",
+      "invalid_loss_batches": 0,
+      "invalid_grad_batches": 0,
+      "invalid_param_events": 0,
+      "processed_train_batches": 15900,
+      "skipped_train_batches": 0
+    }
+  },
+  "run_status": "ok",
+  "stop_reason": "early_stop",
+  "health": {
+    "run_status": "ok",
+    "stop_reason": "early_stop",
+    "invalid_loss_batches": 0,
+    "invalid_grad_batches": 0,
+    "invalid_param_events": 0,
+    "processed_train_batches": 15900,
+    "skipped_train_batches": 0
+  },
+  "eval": {
+    "loss": 0.06328968685349531,
+    "acc": 0.9794795188300967,
+    "macro_f1": 0.975395323076176,
+    "report": "              precision    recall  f1-score   support\n\n           0     0.9521    0.9790    0.9654      3716\n           1     0.9912    0.9797    0.9854      9003\n\n    accuracy                         0.9795     12719\n   macro avg     0.9717    0.9793    0.9754     12719\nweighted avg     0.9798    0.9795    0.9796     12719\n",
+    "confusion_matrix": [
+      [
+        3638,
+        78
+      ],
+      [
+        183,
+        8820
+      ]
+    ],
+    "per_class_f1": [
+      0.9653708372031312,
+      0.9854198089492208
+    ]
+  },
+  "artifacts": {
+    "train_log": "train.log",
+    "metrics_curve": "metrics_curve.png",
+    "confusion_matrix": "confusion_matrix.png",
+    "attention_curve": "attention_curve.png",
+    "report": "report.md",
+    "model": "fusion_model.pth"
+  }
+}
