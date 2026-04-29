@@ -1,15 +1,15 @@
-2026-04-29 07:11:47,223 - INFO - run_attention - start attention: output_root=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray run_dir=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147
+2026-04-29 07:11:47,223 - INFO - run_attention - start attention: output_root=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb run_dir=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147
 2026-04-29 07:11:47,223 - INFO - run_attention - config: fusion_mode=attention use_temporal=True image_mode=rgb
-2026-04-29 07:11:47,223 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_gray/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/pcap_data/Train
+2026-04-29 07:11:47,223 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_data/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/pcap_data/Train
 2026-04-29 07:11:47,436 - INFO - fusion_common - 融合数据索引进度: 1/2 类别 (benign)
 2026-04-29 07:11:48,043 - INFO - fusion_common - 融合数据索引进度: 2/2 类别 (malicious)
-2026-04-29 07:11:48,159 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_gray/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
+2026-04-29 07:11:48,159 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_data/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
 2026-04-29 07:11:48,165 - INFO - fusion_common - 融合数据集加载完成，总样本数: 50880
 2026-04-29 07:11:48,168 - INFO - fusion_common - 融合数据加载完成，类别数: 2, 样本总数: 50880
-2026-04-29 07:11:48,168 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_gray/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/pcap_data/Test
+2026-04-29 07:11:48,168 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_data/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/pcap_data/Test
 2026-04-29 07:11:48,232 - INFO - fusion_common - 融合数据索引进度: 1/2 类别 (benign)
 2026-04-29 07:11:48,367 - INFO - fusion_common - 融合数据索引进度: 2/2 类别 (malicious)
-2026-04-29 07:11:48,399 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_gray/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
+2026-04-29 07:11:48,399 - INFO - fusion_common - 融合索引缓存已保存: /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_data/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json
 2026-04-29 07:11:48,401 - INFO - fusion_common - 融合数据集加载完成，总样本数: 12719
 2026-04-29 07:11:48,402 - INFO - fusion_common - 融合数据加载完成，类别数: 2, 样本总数: 12719
 2026-04-29 07:11:48,402 - INFO - fusion_common - 初始化融合模型，融合模式: attention
@@ -74,8 +74,8 @@
 2026-04-29 07:49:02,440 - INFO - fusion_common - 早停机制触发，在第 13 轮后停止训练
 2026-04-29 07:49:02,440 - INFO - fusion_common - 融合模型训练完成
 2026-04-29 07:49:04,820 - INFO - run_attention - [AttentionDiag] mean=0.001276 min=0.000000 max=0.042594 entropy=4.2723 top1=0.0171 top5=0.0852 top10=0.1701 nonpad_mass=1.0000 pad_mass=0.0000 nonpad_frac=0.1396
-2026-04-29 07:49:05,180 - INFO - run_attention - [AttentionDiag] saved attention curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/attention_curve.png
-2026-04-29 07:49:05,180 - INFO - run_attention - saved attention_curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/attention_curve.png (exists=True)
+2026-04-29 07:49:05,180 - INFO - run_attention - [AttentionDiag] saved attention curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/attention_curve.png
+2026-04-29 07:49:05,180 - INFO - run_attention - saved attention_curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/attention_curve.png (exists=True)
 2026-04-29 07:49:05,180 - INFO - run_attention - Generating attention heatmap...
 2026-04-29 07:49:13,471 - INFO - run_attention - 评估结果:
 2026-04-29 07:49:13,471 - INFO - run_attention -   准确率: 0.9814
@@ -93,10 +93,10 @@ weighted avg     0.9818    0.9814    0.9815     12719
 2026-04-29 07:49:13,471 - INFO - run_attention -   混淆矩阵:
 [[3655   61]
  [ 175 8828]]
-2026-04-29 07:49:13,597 - INFO - run_attention - saved metrics_curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/metrics_curve.png (exists=True)
-2026-04-29 07:49:13,660 - INFO - run_attention - saved confusion_matrix: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/confusion_matrix.png (exists=True)
-2026-04-29 07:49:13,660 - INFO - run_attention - saved report: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/report.md (exists=True)
-2026-04-29 07:49:13,720 - INFO - run_attention - saved model: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/fusion_model.pth (exists=True)
-2026-04-29 07:49:13,721 - INFO - run_attention - saved metrics_json: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/metrics.json (exists=True)
-2026-04-29 07:49:13,721 - INFO - run_attention - saved epoch_metrics_csv: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/epoch_metrics.csv (exists=True)
-2026-04-29 07:49:13,721 - INFO - run_attention - done attention: run_dir=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147 log=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray/attention_dim256_20260429_071147/train.log
+2026-04-29 07:49:13,597 - INFO - run_attention - saved metrics_curve: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/metrics_curve.png (exists=True)
+2026-04-29 07:49:13,660 - INFO - run_attention - saved confusion_matrix: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/confusion_matrix.png (exists=True)
+2026-04-29 07:49:13,660 - INFO - run_attention - saved report: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/report.md (exists=True)
+2026-04-29 07:49:13,720 - INFO - run_attention - saved model: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/fusion_model.pth (exists=True)
+2026-04-29 07:49:13,721 - INFO - run_attention - saved metrics_json: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/metrics.json (exists=True)
+2026-04-29 07:49:13,721 - INFO - run_attention - saved epoch_metrics_csv: /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/epoch_metrics.csv (exists=True)
+2026-04-29 07:49:13,721 - INFO - run_attention - done attention: run_dir=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147 log=/home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb/attention_dim256_20260429_071147/train.log
