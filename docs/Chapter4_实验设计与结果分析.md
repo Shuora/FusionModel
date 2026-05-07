@@ -14,10 +14,10 @@
 
 为全面验证本文双分支融合模型在不同维度的加密流量分析场景下的泛化能力与分类精度，本实验选取了四个公开权威的数据集，并将其重构为四个相互独立的实验任务：
 
-1. **二分类任务 (Binary Benign vs Malicious)**：该任务通过整合 `ISCX-VPN-NonVPN-2016`（作为良性流量代表）以及 `USTC-TFC2016`、`MTA` (Malware Capture Facility Project) 和 `MFCP` 的恶意流量部分，构建全局范围的黑白流量鉴别场景。
+1. **二分类任务 (Binary Benign vs Malicious)**：该任务通过整合 `ISCX-VPN-NonVPN-2016`（作为良性流量代表）以及 `USTC-TFC2016`、`MTA` (Malware-Traffic-Analysis.net) 和 `MCFP` (Malware Capture Facility Project) 的恶意流量部分，构建全局范围的黑白流量鉴别场景。
 2. **USTC-TFC2016 多分类任务 (USTC Multiclass)**：使用原始抓包文件的名称作为细粒度类别标签，验证模型在常规公开多分类基准上的特征提取与区分能力。
-3. **MTA 多分类任务 (MTA Multiclass)**：提取 MTA 库中的多种恶意家族（包含 IcedID 等复杂木马变种），重点测试模型对复杂恶意软件通信行为的特征提取能力。
-4. **MFCP 多分类任务 (MFCP Multiclass)**：该数据集包含 Artemis、Cobalt、Dridex、PUA、Trickbot、Ursnif 等多类极具伪装性的恶意家族。为保证实验与国际前沿研究（如 MVTBA）具有严格的可比性，针对 MTA 与 MFCP 任务，本文在数据切分阶段启用了 `paper_mvtba` 的固定目标抽样分布配置，确保了模型在真实的类别极度不均衡场景下能够获得客观的评估。
+3. **MTA 多分类任务 (MTA Multiclass)**：提取 MTA (Malware-Traffic-Analysis.net) 库中的多种恶意家族（包含 IcedID 等复杂木马变种），重点测试模型对复杂恶意软件通信行为的特征提取能力。
+4. **MCFP 多分类任务 (MCFP Multiclass)**：该数据集（在本实验工程实现中标记为 MFCP）包含由 Stratosphere 实验室捕获的 Artemis、Cobalt、Dridex、PUA、Trickbot、Ursnif 等多类极具伪装性的恶意家族。为保证实验与国际前沿研究（如 MVTBA）具有严格的可比性，针对 MTA 与 MCFP 任务，本文在数据切分阶段启用了 `paper_mvtba` 的固定目标抽样分布配置，确保了模型在真实的类别极度不均衡场景下能够获得客观的评估。
 
 ### 4.1.3 数据预处理与重构
 
@@ -39,11 +39,11 @@
 
 ## 4.3 基线融合模型性能评估
 
-为直观展示本文特征融合机制的初始性能底限，本节首先对仅依赖 Attention 加权融合的基础模型（Base Fusion Model）在难度最高的 **MFCP 多分类任务** 上的表现进行分析。
+为直观展示本文特征融合机制的初始性能底限，本节首先对仅依赖 Attention 加权融合的基础模型（Base Fusion Model）在难度最高的 **MCFP 多分类任务** 上的表现进行分析。
 
 模型超参数设定如下：在训练阶段，启用标签平滑（`label_smoothing=0.03`）与 Focal Loss（`focal_gamma=1.5`），同时叠加类别加权采样损失（`weighted_sampler_loss`）以初步对抗类间失衡。初始学习率设定为 `3e-4`，批次大小为 `32`，完整训练进行 `40` 个 Epoch。
 
-经过充分收敛，基础融合模型（Base Evaluation）在 MFCP 的 28,588 个独立验证会话上取得了以下成绩：
+经过充分收敛，基础融合模型（Base Evaluation）在 MCFP 的 28,588 个独立验证会话上取得了以下成绩：
 - **总体准确率 (Accuracy)**：79.43%
 - **宏平均 F1 (Macro F1)**：76.02%
 
@@ -61,7 +61,7 @@
 
 实验选取了 XGBoost、LightGBM、CatBoost 三种代表性的强基分类器作为 Meta Learners，其集成后的检测性能如表 4-1 所示：
 
-**表 4-1 各集成学习子模型在 MFCP 任务上的性能对比**
+**表 4-1 各集成学习子模型在 MCFP 任务上的性能对比**
 | 模型变体 | 总体准确率 (Accuracy) | 宏平均 F1 (Macro F1) | OOF Macro F1 |
 | :--- | :---: | :---: | :---: |
 | 基础融合模型 (Base Model) | 79.43% | 76.02% | - |
@@ -76,13 +76,15 @@
 
 为进一步消除单一树模型在构建分类边界时的随机性偏差，本研究融合了多个可用 Meta Learner 的预测输出，执行加权软投票（Soft-Voting）。权重并非简单平均，而是自适应地提取各模型在 OOF 阶段测得的 Macro F1 置信度得分。
 
-加权软投票后的最终网络（Soft Voting Model）输出了极其均衡稳健的结果（Acc: 84.16%, Macro F1: 81.40%）。其核心优势在于，它不仅维持了全局分类的准确性，更大幅压制了单模型的极端误报现象，在实战部署中具备更为优异的泛化韧性。
+加权软投票后的最终网络（Soft Voting Model）输出了极其均衡稳健的结果（Acc: 84.16%, Macro F1: 81.40%）。其核心优势在于，它不仅维持了全局分类的准确性，更大幅压制了单模型的极端误报现象，在实战部署中具备更为优异的泛化韧性。如图 4.11 所示，Stacking 集成策略相比于传统的 Voting 策略，在处理极度不平衡的数据集时展现出了更强的决策鲁棒性。
 
 ### 4.4.3 任务定向校正分析与混淆矩阵改善
 
 在分析基础模型痛点时已指出，Artemis (类别 0) 与 Ursnif (类别 5) 之间存在严重的判定重叠现象。为了针对性解决这一痛点，本文在 Stacking 集成后端创新性地加入了基于 OOF 的**动态对校正机制（Pair Correction）**：
 1. **启发式 OOF 驱动寻优**：通过检索按类名解析定位的目标对（Artemis / Ursnif），利用验证集的 `pair_f1` 指标自适应搜索最佳校正强度参数 $\alpha$。
 2. **温度校准与阈值调整**：校正机制针对易混淆对执行概率温度校准（例如在 Soft Voting 中，自适应测得最佳的 `pair_temperature=1.15`，`threshold=0.5`）。该机制通过柔化过高置信度（Over-confidence）并惩罚两可概率，有效地校正了原本倾斜的判定边界。
+
+通过对比 Stacking决策纠偏前后的混淆矩阵热力图（图 4.9 与 图 4.10），可以直观地观察到分类边界的清晰化过程。在 MTA 数据集（图 4.9）中，原本集中在 Emotet 与 Qakbot 之间的模糊判定区域得到了显著压缩；而在 MCFP 数据集（图 4.10）中，Artemis 与 Ursnif 的混淆现象得到了实质性改善。
 
 **校正前后的关键类表现改善：**
 - **类别 0 (Artemis)** 的召回率实现了跨越式提升，由最初的 **60.09%** 跃升至 **74.56%**，其被错误分入 Ursnif 家族的样本数从 1638 个锐减至 1044 个。

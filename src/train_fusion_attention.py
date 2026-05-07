@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 
 from fusion_common import add_common_args, build_common_kwargs, run_fusion_experiment
 
@@ -20,8 +21,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     kwargs = build_common_kwargs(args)
-    # fusion_mode is now inside kwargs from args.fusion_mode
-    run_fusion_experiment(**kwargs)
+
+    # Filter kwargs to only include parameters accepted by run_fusion_experiment
+    sig = inspect.signature(run_fusion_experiment)
+    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+    run_fusion_experiment(**valid_kwargs)
     return 0
 
 

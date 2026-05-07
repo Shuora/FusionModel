@@ -93,6 +93,18 @@ class StackingImprovementTests(unittest.TestCase):
         pair = fc.resolve_mfcp_pair_class_indices(classes)
         self.assertEqual(pair, (0, 5))
 
+    def test_select_mfcp_confusion_pair_prefers_2_4_when_confused(self) -> None:
+        labels = np.array([0, 1, 2, 2, 4, 4], dtype=np.int64)
+        preds = np.array([0, 1, 4, 4, 2, 2], dtype=np.int64)
+        pair = fc.select_confusion_pair(labels=labels, preds=preds, preferred_pair=(2, 4))
+        self.assertEqual(pair, (2, 4))
+
+    def test_select_mfcp_confusion_pair_falls_back_to_max_offdiag(self) -> None:
+        labels = np.array([0, 0, 1, 1, 2, 2], dtype=np.int64)
+        preds = np.array([1, 1, 0, 0, 2, 2], dtype=np.int64)
+        pair = fc.select_confusion_pair(labels=labels, preds=preds, preferred_pair=(2, 4))
+        self.assertEqual(pair, (0, 1))
+
     def test_weighted_soft_voting_combines_probabilities(self) -> None:
         p1 = np.array([[0.9, 0.1], [0.2, 0.8]], dtype=np.float64)
         p2 = np.array([[0.6, 0.4], [0.7, 0.3]], dtype=np.float64)
@@ -423,6 +435,28 @@ class StackingImprovementTests(unittest.TestCase):
         tuned_preds = fc.apply_per_class_thresholds(probs=probs, thresholds=tau)
         tuned_rec = fc.recall_score(labels, tuned_preds, labels=[1], average="macro", zero_division=0)
         self.assertGreaterEqual(tuned_rec, base_rec)
+
+    def test_tune_per_class_thresholds_supports_accuracy_objective(self) -> None:
+        labels = np.array([0, 0, 1, 1], dtype=np.int64)
+        probs = np.array(
+            [
+                [0.60, 0.40],
+                [0.55, 0.45],
+                [0.45, 0.55],
+                [0.40, 0.60],
+            ],
+            dtype=np.float64,
+        )
+        tau = fc.tune_per_class_thresholds(
+            labels=labels,
+            probs=probs,
+            minority_classes=[1],
+            objective="accuracy",
+            minority_lambda=0.0,
+            grid=[0.85, 1.0, 1.15],
+        )
+        preds = fc.apply_per_class_thresholds(probs=probs, thresholds=tau)
+        self.assertGreaterEqual(fc.accuracy_score(labels, preds), 0.5)
 
     def test_compute_threshold_objective_value_matches_definition(self) -> None:
         labels = np.array([0, 0, 1, 1], dtype=np.int64)

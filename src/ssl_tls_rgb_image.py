@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 BIN_EXTENSIONS = ('.bin',)
 IMAGE_SIZE = (28, 28)
-R_HEAD_SIZE = 512
+R_HEAD_SIZE = 1024
 G_HEAD_SIZE = 1024
 SESSION_SIZE = 28 * 28
 
@@ -62,8 +62,10 @@ def extract_gray_channel(bin_data: bytes):
 
 def extract_r_channel(bin_data: bytes):
     require_image_dependencies()
+    # 提取前导结构窗口
     head = bin_data[:R_HEAD_SIZE]
     r = np.frombuffer(head, dtype=np.uint8)
+    # 调整至目标尺寸：大于则截断，小于则补齐
     if len(r) < SESSION_SIZE:
         r = np.pad(r, (0, SESSION_SIZE - len(r)), 'constant')
     else:
@@ -73,24 +75,32 @@ def extract_r_channel(bin_data: bytes):
 
 def extract_g_channel(bin_data: bytes):
     require_image_dependencies()
+    # 提取握手窗口
     handshake = bin_data[:G_HEAD_SIZE]
-    handshake_padded = handshake.ljust(G_HEAD_SIZE, b'\x00') if len(handshake) < G_HEAD_SIZE else handshake[:G_HEAD_SIZE]
-    handshake_arr = np.frombuffer(handshake_padded, dtype=np.uint8)
-    cipher_suite_diversity = int(np.unique(handshake_arr[:32]).size)
-    sni_bytes = handshake_arr[32:96]
+    handshake_arr = np.frombuffer(handshake, dtype=np.uint8)
+    
+    # 计算代理量
+    cipher_suite_diversity = int(np.unique(handshake_arr[:32]).size) if handshake_arr.size >= 32 else 0
+    sni_bytes = handshake_arr[32:96] if handshake_arr.size >= 96 else np.array([], dtype=np.uint8)
     sni_entropy = 0.0
     if sni_bytes.size and sni_bytes.any():
-        probs = np.bincount(sni_bytes, minlength=256) / 64.0
+        probs = np.bincount(sni_bytes, minlength=256) / float(sni_bytes.size)
         probs = probs[probs > 0]
         sni_entropy = float(-np.sum(probs * np.log2(probs)))
     cert_anomaly = int(handshake_arr.max() - handshake_arr.min()) if handshake_arr.size else 0
+
+    # 构造 G 通道基础数组
     g = np.zeros(SESSION_SIZE, dtype=np.uint8)
     g[0] = cipher_suite_diversity % 256
     g[1] = int(sni_entropy * 32) % 256
     g[2] = cert_anomaly % 256
-    fill_len = min(handshake_arr.size, SESSION_SIZE - 3)
-    if fill_len:
-        g[3:3 + fill_len] = handshake_arr[:fill_len]
+    
+    # 填充剩余部分并处理截断/补齐
+    remaining_space = SESSION_SIZE - 3
+    if handshake_arr.size > remaining_space:
+        g[3:] = handshake_arr[:remaining_space]
+    else:
+        g[3:3 + handshake_arr.size] = handshake_arr
     return g
 
 
@@ -100,20 +110,26 @@ def extract_b_channel(bin_data: bytes):
     pkt_size = 1500
     pkts = [arr[i:i + pkt_size] for i in range(0, len(arr), pkt_size)]
     pkt_lens = [len(p) for p in pkts]
+    
     mean_len = int(np.mean(pkt_lens)) if pkt_lens else 0
+    interval_var = 0
     if len(pkts) > 1:
+        # 简化计算：以首字节差值模拟时间间隔扰动
         intervals = [int(pkts[i][0]) - int(pkts[i - 1][0]) for i in range(1, len(pkts))]
-        interval_var = int(np.var(intervals))
-    else:
-        interval_var = 0
-    duration = len(pkts)
+        interval_var = int(np.var(intervals)) % 256
+    
+    duration = len(pkts) % 256
+    
     b = np.zeros(SESSION_SIZE, dtype=np.uint8)
     b[0] = mean_len % 256
-    b[1] = interval_var % 256
-    b[2] = duration % 256
+    b[1] = interval_var
+    b[2] = duration
+
+    # 处理包长度序列的截断与分发
     fill_len = min(len(pkt_lens), SESSION_SIZE - 3)
     if fill_len:
         values = np.clip(np.array(pkt_lens[:fill_len], dtype=np.int32), 0, 255).astype(np.uint8)
+        # 采用线性分布填充以保持特征序列的结构感
         positions = np.linspace(3, SESSION_SIZE - 1, num=fill_len, dtype=int)
         b[positions] = values
     return b

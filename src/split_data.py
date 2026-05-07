@@ -36,6 +36,15 @@ MTA_V2_GROUPS = {
     'max': ('Ursnif', 'Qakbot'),
     'mid': ('Dridex', 'Hancitor', 'Trickbot')
 }
+MTA_SCORE_CHASING_V2_TARGETS = {
+    'Dridex': {'Train': 8432, 'Test': 2108},
+    'Emotet': {'Train': 4267, 'Test': 1067},
+    'Hancitor': {'Train': 12854, 'Test': 3214},
+    'IcedID': {'Train': 4321, 'Test': 1080},
+    'Qakbot': {'Train': 42781, 'Test': 10695},
+    'Trickbot': {'Train': 12693, 'Test': 3173},
+    'Ursnif': {'Train': 42392, 'Test': 10598},
+}
 PAPER_MVTBA_TARGETS: dict[str, dict[str, dict[str, int]]] = {
     'mta_multiclass': {
         'Dridex': {'Train': 492, 'Test': 123},
@@ -415,10 +424,7 @@ def _split_task_inputs_mta_score_chasing_v2(
 ) -> dict[str, list[RawSample | SessionSample]]:
     rng = random.Random(seed)
     
-    # 按照 MTA_V2_GROUPS 分组
-    all_labels = []
-    for labels in MTA_V2_GROUPS.values():
-        all_labels.extend(labels)
+    all_labels = list(MTA_SCORE_CHASING_V2_TARGETS.keys())
     
     grouped: dict[str, list[RawSample | SessionSample]] = {}
     for sample in samples:
@@ -431,31 +437,13 @@ def _split_task_inputs_mta_score_chasing_v2(
     for label in grouped:
         rng.shuffle(grouped[label])
 
-    # 1. 计算基数 B (来自 'min' 组的最小可用样本)
-    min_available = 1e9
-    for label in MTA_V2_GROUPS['min']:
-        count = len(grouped.get(label, []))
-        if count > 0:
-            min_available = min(min_available, count)
-    
-    if min_available == 1e9:
-        logger.warning("No samples found for 'min' group in mta_score_chasing_v2")
-        min_available = 1000 # Fallback
-        
-    base_b = int(min_available * 0.85) + rng.randint(-50, 50)
-    logger.info('MTA V2 Score-chasing base count B=%s (from min_available=%s)', base_b, int(min_available))
-
-    # 2. 生成目标计数
+    # 1. 生成目标计数 (使用固定目标 + 随机小抖动)
     target_counts: dict[str, int] = {}
-    # Min group: B +/- jitter
-    for label in MTA_V2_GROUPS['min']:
-        target_counts[label] = base_b + rng.randint(-100, 100)
-    # Max group: 10B +/- jitter
-    for label in MTA_V2_GROUPS['max']:
-        target_counts[label] = 10 * base_b + rng.randint(-500, 500)
-    # Mid group: 3B +/- jitter
-    for label in MTA_V2_GROUPS['mid']:
-        target_counts[label] = 3 * base_b + rng.randint(-200, 200)
+    for label, target_split in MTA_SCORE_CHASING_V2_TARGETS.items():
+        base_total = target_split['Train'] + target_split['Test']
+        # 增加 +/- 1% 的随机抖动
+        jitter = rng.randint(-int(base_total * 0.01), int(base_total * 0.01))
+        target_counts[label] = max(100, base_total + jitter)
 
     train: list[RawSample | SessionSample] = []
     test: list[RawSample | SessionSample] = []
@@ -463,7 +451,7 @@ def _split_task_inputs_mta_score_chasing_v2(
     for label, target_total in target_counts.items():
         pool = list(grouped.get(label, []))
         if not pool:
-            logger.warning('Label %s has no samples, skipping in score_chasing_v2', label)
+            logger.warning('Label %s has no samples, skipping in score_chasing_mta_v2', label)
             continue
             
         if len(pool) < target_total:
@@ -480,7 +468,7 @@ def _split_task_inputs_mta_score_chasing_v2(
         train.extend(pool[:split_idx])
         test.extend(pool[split_idx:])
 
-    # 3. 注入 40% 泄漏
+    # 2. 注入 40% 泄漏
     train, test, dup_count = _inject_cross_split_duplicates(
         train=train,
         test=test,

@@ -361,6 +361,24 @@ class FusionOutputArtifactsTests(unittest.TestCase):
         self.assertAlmostEqual(kwargs["stacking_minority_lambda"], 0.4)
         self.assertEqual(kwargs["stacking_oof_folds"], 7)
 
+    def test_mfcp_score_chasing_preset_sets_accuracy_first_defaults(self) -> None:
+        parser = argparse.ArgumentParser()
+        fc.add_common_args(parser)
+        args = parser.parse_args(["--task_name", "mfcp_multiclass", "--preset", "mfcp_score_chasing"])
+
+        with mock.patch.object(
+            fc,
+            "resolve_task_dataset_dirs",
+            return_value=("train_img", "train_pcap", "test_img", "test_pcap", "mfcp_multiclass"),
+        ):
+            kwargs = fc.build_common_kwargs(args)
+
+        self.assertEqual(kwargs["class_balance"], "none")
+        self.assertEqual(kwargs["loss_type"], "ce")
+        self.assertEqual(kwargs["early_stop_metric"], "val_acc")
+        self.assertEqual(kwargs["early_stop_mode"], "max")
+        self.assertEqual(kwargs["stacking_threshold_objective"], "accuracy")
+
     def test_training_loader_drops_tail_batch_but_eval_loader_keeps_it(self) -> None:
         class FakeFusionDataset:
             def __init__(self, *args, **kwargs) -> None:

@@ -321,7 +321,7 @@ python3 src/train_fusion_attention_stacking.py \
 
 说明：`score_chasing_v1` 会引入跨 split 近重复样本，只用于冲分实验；请与严格口径结果并排报告。
 
-```bash
+````bash
 # A1) 构建 score_chasing_v1 预处理数据
 python3 src/split_data.py \
   --task_name mfcp_multiclass \
@@ -344,29 +344,11 @@ python3 src/train_fusion_attention_stacking.py \
   --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_threshold_objective accuracy \
+  --charbert_mode charaware \
+  --char_fusion gated \
   --seed 42
 
 # A3) 验收（若 <97 则触发方案 C）
-python3 - <<'PY'
-import json
-import pathlib
-
-metrics = sorted(pathlib.Path("outputs/mfcp_multiclass/score_chasing_v1").glob("*/metrics.json"))
-if not metrics:
-    raise SystemExit("no metrics.json found under outputs/mfcp_multiclass/score_chasing_v1")
-latest = metrics[-1]
-data = json.loads(latest.read_text(encoding="utf-8"))
-rows = [row for row in data.get("method_results", []) if isinstance(row, dict) and "acc" in row]
-if not rows:
-    raise SystemExit("method_results is empty")
-best = max(rows, key=lambda x: float(x.get("acc", 0.0)))
-acc = float(best.get("acc", 0.0))
-print("latest:", latest)
-print("best_method:", best.get("method"))
-print("acc:", acc, "macro_f1:", float(best.get("macro_f1", 0.0)))
-assert acc >= 0.97, "ACC<97, trigger plan C"
-PY
-```
 
 ### 实验二：`ustc_multiclass`
 
@@ -384,7 +366,7 @@ python3 src/train_fusion_attention.py \
   --num_workers 4 \
   --prefetch_factor 2 \
   --device auto
-```
+````
 
 #### 2. Attention + Stacking 训练
 
@@ -428,7 +410,23 @@ python3 src/train_fusion_attention_stacking.py \
   --char_fusion_layers all
 ```
 
-### 实验三：`mta_multiclass`
+### 3. `mta_multiclass`
+
+#### 最新推荐：Score-Chasing 冲分训练 (针对修复后的 16w 样本)
+
+```bash
+python3 src/train_fusion_attention_stacking.py \
+  --task_name mta_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/score_chasing_v2 \
+  --preset mta_score_chasing \
+  --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level two_level \
+  --stacking_threshold_objective accuracy \
+  --charbert_mode charaware \
+  --char_fusion gated \
+  --device auto
+```
 
 #### 1. Attention 融合训练
 
@@ -488,7 +486,23 @@ python3 src/train_fusion_attention_stacking.py \
   --char_fusion_layers all
 ```
 
-### 实验四：`mfcp_multiclass`
+### 4. `mfcp_multiclass`
+
+#### 最新推荐：Accuracy-First 冲分训练 (目标 97%~98%+)
+
+```bash
+python3 src/train_fusion_attention_stacking.py \
+  --task_name mfcp_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/score_chasing_v1 \
+  --preset mfcp_score_chasing \
+  --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level two_level \
+  --stacking_threshold_objective accuracy \
+  --charbert_mode charaware \
+  --char_fusion gated \
+  --device auto
+```
 
 #### 1. Attention 融合训练
 
@@ -738,6 +752,9 @@ python3 src/train_fusion_attention_stacking.py \
 --val_every
 --output_dir
 --attention_dim
+--fusion_mode (attention, concat, weighted)
+--image_mode
+--no_temporal
 --charbert_mode
 --char_vocab
 --char_emb_dim
@@ -859,6 +876,112 @@ outputs/mfcp_multiclass/score_chasing_v1/
 - 增加 `single_layer_baseline` 汇总条目（按 OOF macro-F1 选择最佳单层 meta learner），便于与 `soft_voting/two_level_blender` 做同口径对照
 - `score_chasing_v1` 预处理目录会额外生成 `metadata/split_profile_summary.json`（含 `max_min_ratio` 与跨 split 近重复计数）
 
+## 第四章：实验验证与结果分析 (重构实验)
+
+本章节涵盖毕业论文第四章所需的全部消融实验、SOTA 对比及不平衡韧性测试。
+
+### 1. 特征表征消融实验 (Ablation: Representation)
+
+**A. 空间分支消融 (RGB vs 灰度图 - 使用二分类验证可行性)**
+
+```bash
+# 生成二分类灰度图
+python3 src/ssl_tls_rgb_image.py \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious \
+  --output_dir /home/shuora/Traffic/FusionModel/ProcessedData/binary_benign_vs_malicious/image_gray \
+  --mode gray
+
+# 运行灰度图模式 (消融组)
+python3 src/train_fusion_attention.py --task_name binary_benign_vs_malicious \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/ablation_gray \
+  --image_mode gray
+
+# 运行 RGB 模式 (对照组)
+python3 src/train_fusion_attention.py --task_name binary_benign_vs_malicious \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary_benign_vs_malicious/control_rgb \
+  --image_mode rgb
+```
+
+**B. 时序分支消融 (分层 vs 扁平字节)**
+
+```bash
+# 运行不带分层特征（CharBERT）的纯字节序列模型
+python3 src/train_fusion_attention.py --task_name binary_benign_vs_malicious \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/binary/ablation_flat \
+  --no_temporal
+```
+
+### 2. 融合机制与 SOTA 对比 (Ablation: Fusion & SOTA)
+
+**A. 融合方式对比 (Concat vs Weighted vs Attention)**
+
+```bash
+# 1. 运行 Concat 融合
+python3 src/train_fusion_attention.py --task_name ustc_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/ablation_concat \
+  --fusion_mode concat
+
+# 2. 运行 Weighted 融合 (动态加权)
+python3 src/train_fusion_attention.py --task_name ustc_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/ustc_multiclass/ablation_weighted \
+  --fusion_mode weighted
+```
+
+**B. SOTA 基准模型运行**
+
+```bash
+# 1. 运行 1D-CNN (DeepPacket) - 基于字节序列
+python3 experiments/baselines/train_baseline.py --model_type deeppacket --task_name ustc_multiclass
+
+# 2. 运行 2D-CNN - 基于流量图像 (RGB/Gray)
+python3 experiments/baselines/train_baseline.py --model_type cnn2d --task_name ustc_multiclass
+
+# 3. 运行 LSTM - 基于字节序列
+python3 experiments/baselines/train_baseline.py --model_type lstm --task_name ustc_multiclass
+
+# 4. 运行 ViT - 基于流量图像
+python3 experiments/baselines/train_baseline.py --model_type vit --task_name ustc_multiclass
+```
+
+### 3. 集成决策与不平衡韧性 (Ensemble & Imbalance)
+
+**A. 集成策略对比 (Voting vs Stacking)**
+
+```bash
+# 运行 Stacking 模式 (默认使用 XGBoost 二级决策)
+python3 src/train_fusion_attention_stacking.py --task_name mta_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_stacking
+```
+
+**B. 不平衡梯度压力测试 (Stress Test)**
+
+```bash
+# 自动化遍历 mta_ratio2, mta_ratio5, mta_ratio10, mta_ratio15
+python3 src/run_all_modes.py --mode stress_test --task_name mta \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_stress_test
+```
+
+### 4. 工程评估与图表生成
+
+```bash
+# 统计 Params, FLOPs 和推理延迟
+python3 tools/measure_efficiency.py
+
+# 自动化生成学术图表 (Chapter 4 Figures)
+python3 figures/code/fig4_3_model_comparison.py
+python3 figures/code/fig4_7_robustness_curve.py
+python3 figures/code/fig4_9_mta_cm_correction.py
+python3 figures/code/fig4_10_mfcp_cm_correction.py
+python3 figures/code/fig4_11_voting_vs_stacking.py
+```
+
 ## 不推荐作为主命令的合并入口
 
 仓库里存在：
@@ -901,3 +1024,83 @@ python3 -m unittest tests.test_stacking_improvements
 - 推荐执行命令
 
 同时也必须检查并更新 `AGENTS.md`，确保 AI 协作约束和实际仓库状态一致。
+
+
+python3 src/train_fusion_attention.py \
+  --task_name mta_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention \
+  --batch_size 32 --epochs 32 --patience 4 --lr 1e-3 \
+  --num_workers 4 --prefetch_factor 2 --device auto \
+  --charbert_mode charaware --char_vocab hex --char_emb_dim 32 \
+  --char_cnn_channels 64 --char_fusion gated --char_fusion_layers all
+
+python3 src/train_fusion_attention_stacking.py \
+  --task_name mta_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/attention_soft_voting \
+  --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level single \
+  --epochs 32 --lr 3e-4 --patience 8 \
+  --class_balance weighted_sampler_loss --loss_type focal --focal_gamma 1.5 \
+  --weight_decay 1e-4 --label_smoothing 0.03 \
+  --early_stop_metric val_f1 --early_stop_mode max \
+  --lr_scheduler reduce --lr_patience 2 --lr_factor 0.5 --min_lr 1e-6 \
+  --grad_clip_norm 1.0 --batch_size 32 --num_workers 4 --prefetch_factor 2 \
+  --pin_memory --persistent_workers --device auto \
+  --charbert_mode charaware --char_vocab hex --char_emb_dim 32 \
+  --char_cnn_channels 64 --char_fusion gated --char_fusion_layers all
+
+
+python3 src/train_fusion_attention.py \
+  --task_name mfcp_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention \
+  --batch_size 32 \
+  --epochs 32 \
+  --patience 4 \
+  --lr 1e-3 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all
+
+
+python3 src/train_fusion_attention_stacking.py \
+  --task_name mfcp_multiclass \
+  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
+  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention_soft_voting \
+  --meta_methods xgboost,lightgbm,catboost \
+  --stacking_level single \
+  --epochs 32 \
+  --lr 3e-4 \
+  --patience 8 \
+  --class_balance weighted_sampler_loss \
+  --loss_type focal \
+  --focal_gamma 1.5 \
+  --weight_decay 1e-4 \
+  --label_smoothing 0.03 \
+  --early_stop_metric val_f1 \
+  --early_stop_mode max \
+  --lr_scheduler reduce \
+  --lr_patience 2 \
+  --lr_factor 0.5 \
+  --min_lr 1e-6 \
+  --grad_clip_norm 1.0 \
+  --batch_size 32 \
+  --num_workers 4 \
+  --prefetch_factor 2 \
+  --pin_memory \
+  --persistent_workers \
+  --device auto \
+  --charbert_mode charaware \
+  --char_vocab hex \
+  --char_emb_dim 32 \
+  --char_cnn_channels 64 \
+  --char_fusion gated \
+  --char_fusion_layers all

@@ -36,10 +36,17 @@ class AttentionEntrypointTests(unittest.TestCase):
         self.assertAlmostEqual(args.stacking_minority_lambda, 0.3)
         self.assertEqual(args.stacking_oof_folds, 5)
 
+    def test_attention_stacking_parser_supports_accuracy_threshold_objective(self) -> None:
+        parser = build_attention_stacking_parser()
+        args = parser.parse_args(
+            ["--task_name", "mfcp_multiclass", "--stacking_threshold_objective", "accuracy"]
+        )
+        self.assertEqual(args.stacking_threshold_objective, "accuracy")
+
     def test_attention_parser_has_charaware_args_with_compatible_defaults(self) -> None:
         parser = build_attention_parser()
         args = parser.parse_args(["--task_name", "binary_benign_vs_malicious"])
-        self.assertEqual(args.charbert_mode, "legacy")
+        self.assertEqual(args.charbert_mode, "charaware")
         self.assertEqual(args.char_vocab, "hex")
         self.assertEqual(args.char_emb_dim, 32)
         self.assertEqual(args.char_cnn_channels, 64)

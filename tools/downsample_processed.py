@@ -12,7 +12,7 @@ from typing import DefaultDict, Dict, List, Tuple
 from collections import defaultdict
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_PROCESSED_ROOT = BASE_DIR.parent / 'ProcessedData' / 'mfcp_multiclass'
+DEFAULT_PROCESSED_ROOT = BASE_DIR.parent / 'ProcessedData' / 'binary_benign_vs_malicious'
 
 
 def setup_logging():
@@ -89,11 +89,10 @@ def find_related_image_files(
     return list(image_index.get(split, {}).get(label, {}).get(stem, []))
 
 
-def rebalance_processed(
+def downsample_processed(
     processed_root: Path,
     dest_root: Path,
-    max_class_ratio: float,
-    min_class_count: int,
+    fraction: float,
     seed: int,
     copy: bool = False,
     force: bool = False,
@@ -111,44 +110,31 @@ def rebalance_processed(
     samples = collect_samples(processed_root)
     image_index = collect_image_index(processed_root)
     labels = sorted(samples.keys())
-    counts = {label: len(lst) for label, lst in samples.items()}
-    if not counts:
+    
+    if not samples:
         raise RuntimeError('No samples found in processed_root')
-
-    min_count = min(counts.values())
-    effective_min_count = max(min_count, min_class_count)
-    target_max = max(1, int(effective_min_count * float(max_class_ratio)))
-    logging.info('Found labels=%s; counts=%s; min_count=%s; effective_min=%s; target_max=%s',
-                 len(labels), counts, min_count, effective_min_count, target_max)
 
     manifest_rows = []
     total_linked = 0
-    for label in labels:
-        items = list(samples[label])
+    
+    # We want to maintain relative split ratios, so we group by (split, label)
+    grouped: Dict[Tuple[str, str], List[Path]] = defaultdict(list)
+    for label, items in samples.items():
+        for path, split in items:
+            grouped[(split, label)].append(path)
+            
+    for (split, label), items in sorted(grouped.items()):
         rng.shuffle(items)
+        keep_n = max(1, int(len(items) * fraction))
+        selected = items[:keep_n]
+        
+        logging.info('Split=%s Label=%s downsampling %s -> %s', split, label, len(items), len(selected))
 
-        if len(items) < effective_min_count:
-            # Upsample by duplicating random samples
-            shortfall = effective_min_count - len(items)
-            selected = items + rng.choices(items, k=shortfall)
-            logging.info('Label=%s upsampling %s -> %s', label, len(items), len(selected))
-        else:
-            # Downsample to target_max
-            keep_n = min(len(items), target_max)
-            selected = items[:keep_n]
-            logging.info('Label=%s downsampling %s -> %s', label, len(items), len(selected))
-
-        counts_seen: Dict[str, int] = {}
-        for src_path, split in selected:
+        for src_path in selected:
             stem = src_path.stem
-            counts_seen[stem] = counts_seen.get(stem, 0) + 1
-            dup_idx = counts_seen[stem] - 1
-
-            new_stem = stem if dup_idx == 0 else f"{stem}__dup{dup_idx}"
-
             relative_dir = dest_root / 'pcap_data' / split / label
             relative_dir.mkdir(parents=True, exist_ok=True)
-            dst_bin = relative_dir / f"{new_stem}{src_path.suffix}"
+            dst_bin = relative_dir / f"{stem}{src_path.suffix}"
             link_or_copy(src_path, dst_bin, copy=copy)
 
             # also link/copy sidecar json if present
@@ -156,7 +142,6 @@ def rebalance_processed(
             if src_json.exists():
                 dst_json = dst_bin.with_suffix('.json')
                 link_or_copy(src_json, dst_json, copy=copy)
-                # read metadata to populate manifest row
                 try:
                     with open(dst_json, 'r', encoding='utf-8') as fh:
                         meta = json.load(fh)
@@ -165,14 +150,12 @@ def rebalance_processed(
             else:
                 meta = {}
 
-            # attempt to link related image files (exact stem match)
+            # attempt to link related image files
             related_images = find_related_image_files(image_index, split, label, stem)
             for img in related_images:
                 dst_img_dir = dest_root / 'image_data' / split / label
                 dst_img_dir.mkdir(parents=True, exist_ok=True)
-                # replace original stem with new_stem in image filename
-                new_img_name = img.name.replace(stem, new_stem, 1)
-                dst_img = dst_img_dir / new_img_name
+                dst_img = dst_img_dir / img.name
                 link_or_copy(img, dst_img, copy=copy)
 
             manifest_rows.append({
@@ -180,7 +163,7 @@ def rebalance_processed(
                 'label': label,
                 'dataset_name': meta.get('dataset_name', ''),
                 'raw_path': meta.get('raw_path', str(src_path)),
-                'session_name': new_stem,
+                'session_name': stem,
                 'bin_path': str(dst_bin),
             })
             total_linked += 1
@@ -189,17 +172,15 @@ def rebalance_processed(
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (metadata_dir / 'manifest.json').write_text(json.dumps(manifest_rows, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    logging.info('Rebalanced dataset written to %s; total_samples=%s', dest_root, total_linked)
+    logging.info('Downsampled dataset written to %s; total_samples=%s', dest_root, total_linked)
     return dest_root
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description='Rebalance an existing ProcessedData task by downsampling large classes.')
+    parser = argparse.ArgumentParser(description='Downsample an existing ProcessedData task.')
     parser.add_argument('--processed_root', default=str(DEFAULT_PROCESSED_ROOT))
     parser.add_argument('--dest_root', default='')
-    parser.add_argument('--max_class_ratio', type=float, default=2.0)
-    parser.add_argument('--min_class_count', type=int, default=10000,
-                        help='Minimum samples per class; minority classes will be upsampled (duplicated).')
+    parser.add_argument('--fraction', type=float, default=0.1, help='Fraction of samples to keep (e.g., 0.1 for 10x reduction)')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--copy', action='store_true', help='Copy files instead of creating hardlinks')
     parser.add_argument('--force', action='store_true', help='Remove dest_root if it exists')
@@ -215,13 +196,12 @@ def main():
     if args.dest_root:
         dest_root = Path(args.dest_root)
     else:
-        dest_root = processed_root.parent / f"{processed_root.name}_balanced_r{int(args.max_class_ratio)}"
+        dest_root = processed_root.parent / f"{processed_root.name}_downsampled_f{args.fraction}"
 
-    rebalance_processed(
+    downsample_processed(
         processed_root=processed_root,
         dest_root=dest_root,
-        max_class_ratio=args.max_class_ratio,
-        min_class_count=args.min_class_count,
+        fraction=args.fraction,
         seed=args.seed,
         copy=args.copy,
         force=args.force
@@ -229,4 +209,4 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    main()

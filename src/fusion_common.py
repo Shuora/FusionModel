@@ -377,14 +377,16 @@ def default_dirs() -> tuple[str, str, str, str]:
 def resolve_task_dataset_dirs(
     processed_root: Union[str, os.PathLike],
     task_name: str,
+    image_mode: str = "rgb",
 ) -> tuple[str, str, str, str, str]:
     task_root = Path(processed_root) / task_name
     if not task_root.exists() or not task_root.is_dir():
         raise FileNotFoundError(f"task dataset root does not exist: {task_root}")
 
-    train_image_dir = task_root / "image_data" / "Train"
+    img_dir_name = "image_data" if image_mode == "rgb" else f"image_{image_mode}"
+    train_image_dir = task_root / img_dir_name / "Train"
     train_pcap_dir = task_root / "pcap_data" / "Train"
-    test_image_dir = task_root / "image_data" / "Test"
+    test_image_dir = task_root / img_dir_name / "Test"
     test_pcap_dir = task_root / "pcap_data" / "Test"
     required_dirs = [train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir]
     missing = [str(d) for d in required_dirs if not d.exists() or not d.is_dir()]
@@ -830,6 +832,7 @@ class FusionDataset(Dataset):
         use_index_cache: bool = True,
         rebuild_index_cache: bool = False,
         use_temporal_sidecar: bool = True,
+        image_mode: str = "rgb",
     ):
         self.image_dir = image_dir
         self.pcap_dir = pcap_dir
@@ -838,6 +841,7 @@ class FusionDataset(Dataset):
         self.use_index_cache = bool(use_index_cache)
         self.rebuild_index_cache = bool(rebuild_index_cache)
         self.use_temporal_sidecar = bool(use_temporal_sidecar)
+        self.image_mode = str(image_mode).lower()
 
         self.classes = sorted(
             [name for name in os.listdir(image_dir) if os.path.isdir(os.path.join(image_dir, name))]
@@ -999,7 +1003,12 @@ class FusionDataset(Dataset):
     def __getitem__(self, idx: int):
         image_path, pcap_path, label = self.samples[idx]
 
-        image = Image.open(image_path).convert("RGB")
+        image = Image.open(image_path)
+        if self.image_mode == "gray":
+            image = image.convert("L")
+        else:
+            image = image.convert("RGB")
+
         if self.transform:
             image = self.transform(image)
 
@@ -1071,7 +1080,7 @@ class FusionDataset(Dataset):
 
 
 class MergedFusionDataset(FusionDataset):
-    def __init__(self, samples: List[Tuple[str, str, int]], classes: List[str], transform=None, max_pcap_length: int = 784, use_temporal_sidecar: bool = True):
+    def __init__(self, samples: List[Tuple[str, str, int]], classes: List[str], transform=None, max_pcap_length: int = 784, use_temporal_sidecar: bool = True, image_mode: str = "rgb"):
         self.image_dir = ""
         self.pcap_dir = ""
         self.transform = transform
@@ -1079,6 +1088,7 @@ class MergedFusionDataset(FusionDataset):
         self.use_index_cache = False
         self.rebuild_index_cache = False
         self.use_temporal_sidecar = bool(use_temporal_sidecar)
+        self.image_mode = str(image_mode).lower()
         self.classes = list(classes)
         self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(self.classes)}
         self.samples = list(samples)
@@ -1141,6 +1151,7 @@ def load_fusion_data(
     balance_mode: str = "none",
     selected_groups: Optional[List[str]] = None,
     use_temporal_sidecar: bool = True,
+    image_mode: str = "rgb",
 ):
     logger.info("加载融合数据 - 图像目录: %s, Pcap目录: %s", image_dir, pcap_dir)
 
@@ -1183,6 +1194,7 @@ def load_fusion_data(
                 use_index_cache=use_index_cache,
                 rebuild_index_cache=rebuild_index_cache,
                 use_temporal_sidecar=use_temporal_sidecar,
+                image_mode=image_mode,
             )
             for img_dir, p_dir in grouped_pairs
         ]
@@ -1199,6 +1211,7 @@ def load_fusion_data(
             transform=transform,
             max_pcap_length=max_pcap_length,
             use_temporal_sidecar=use_temporal_sidecar,
+            image_mode=image_mode,
         )
     else:
         dataset = FusionDataset(
@@ -1209,6 +1222,7 @@ def load_fusion_data(
             use_index_cache=use_index_cache,
             rebuild_index_cache=rebuild_index_cache,
             use_temporal_sidecar=use_temporal_sidecar,
+            image_mode=image_mode,
         )
 
     dl_kwargs = dict(
@@ -1510,6 +1524,12 @@ class AttentionFusionModel(nn.Module):
             self.v_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
             self.pcap_linear = nn.Linear(1, attention_dim)
             fusion_out_dim = mobilevit_feature_dim + attention_dim
+        elif self.fusion_mode == "weighted":
+            self.img_proj = nn.Linear(mobilevit_feature_dim, attention_dim)
+            self.pcap_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
+            self.pcap_linear = nn.Linear(1, attention_dim)
+            self.fusion_weights = nn.Parameter(torch.ones(2))
+            fusion_out_dim = attention_dim
         else:
             # Concat mode
             self.pcap_proj = nn.Linear(self.text_encoder.char_hidden_size, attention_dim)
@@ -1545,15 +1565,30 @@ class AttentionFusionModel(nn.Module):
                 else:
                     pcap_mean = pcap_ids.float().mean(dim=1, keepdim=True)
                     attended = self.pcap_linear(pcap_mean)
+                fused = torch.cat([img_feats, attended], dim=1)
+            elif self.fusion_mode == "weighted":
+                text_feats = self.text_encoder(pcap_ids)
+                img_proj = self.img_proj(img_feats)
+                text_proj = self.pcap_proj(text_feats)
+                
+                # Dynamic weights via softmax to ensure they sum to 1
+                w = torch.softmax(self.fusion_weights, dim=0)
+                fused = w[0] * img_proj + w[1] * text_proj
             else:
                 # Concat mode
                 text_feats = self.text_encoder(pcap_ids)
                 attended = self.pcap_proj(text_feats)
+                fused = torch.cat([img_feats, attended], dim=1)
         else:
             pcap_mean = pcap_ids.float().mean(dim=1, keepdim=True)
             attended = self.pcap_linear(pcap_mean)
+            if self.fusion_mode == "weighted":
+                img_proj = self.img_proj(img_feats)
+                w = torch.softmax(self.fusion_weights, dim=0)
+                fused = w[0] * img_proj + w[1] * attended
+            else:
+                fused = torch.cat([img_feats, attended], dim=1)
 
-        fused = torch.cat([img_feats, attended], dim=1)
         logits = self.out(fused)
         if return_attention:
             return logits, attn_weights
@@ -1572,7 +1607,7 @@ def initialize_fusion_model(
     char_fusion_layers: str = "all",
 ) -> nn.Module:
     logger.info("初始化融合模型，融合模式: %s", fusion_mode)
-    if fusion_mode not in ("attention", "concat"):
+    if fusion_mode not in ("attention", "concat", "weighted"):
         raise ValueError(f"unsupported fusion mode: {fusion_mode}")
     if torch is None or MobileViTForImageClassification is None or MobileViTConfig is None:
         raise ModuleNotFoundError("torch and transformers are required for attention fusion training")
@@ -3213,10 +3248,9 @@ def parse_methods(value: str) -> List[str]:
 
 
 def add_common_args(p):
-    base = Path(__file__).resolve().parent
     p.add_argument(
         "--dataset_root",
-        default=str(base / "dataset"),
+        default=str(PROJECT_ROOT / "ProcessedData"),
         help=(
             "Dataset root. Supports two layouts: "
             "(1) dataset/<dataset_name>/... ; "
@@ -3230,7 +3264,7 @@ def add_common_args(p):
     )
     p.add_argument(
         "--task_name",
-        default="",
+        default="ustc_multiclass",
         help="ProcessedData task name, e.g. binary_benign_vs_malicious or ustc_multiclass",
     )
     p.add_argument(
@@ -3239,6 +3273,7 @@ def add_common_args(p):
         help="For grouped CIC dataset, choose one or more top-level groups, e.g. Adware or Adware,Ransomware",
     )
 
+    p.add_argument("--image_mode", choices=["rgb", "gray"], default="rgb", help="Image mode: rgb or gray")
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--image_size", type=int, default=28)
     p.add_argument("--max_pcap_length", type=int, default=784)
@@ -3246,7 +3281,7 @@ def add_common_args(p):
     p.add_argument("--epochs", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--patience", type=int, default=4)
-    p.add_argument("--preset", choices=["none", "cic_balanced", "mfcp_score_chasing"], default="none")
+    p.add_argument("--preset", choices=["none", "cic_balanced", "mfcp_score_chasing", "mta_score_chasing"], default="none")
 
     p.add_argument("--device", default="auto", help="auto, cpu, cuda:0, ...")
     p.add_argument("--seed", type=int, default=42)
@@ -3280,7 +3315,7 @@ def add_common_args(p):
 
     p.add_argument("--output_dir", default=str(DEFAULT_OUTPUT_ROOT))
     p.add_argument("--attention_dim", type=int, default=256)
-    p.add_argument("--fusion_mode", choices=["attention", "concat"], default="attention", help="Fusion mechanism")
+    p.add_argument("--fusion_mode", choices=["attention", "concat", "weighted"], default="attention", help="Fusion mechanism")
     p.add_argument("--no_temporal", action="store_true", help="Bypass temporal sidecar (json) files and use flat bytes")
     p.add_argument("--charbert_mode", choices=["legacy", "charaware"], default="charaware")
     p.add_argument("--char_vocab", choices=["hex", "ascii"], default="hex")
@@ -3399,6 +3434,7 @@ def build_common_kwargs(args):
         train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir, resolved_dataset_name = resolve_task_dataset_dirs(
             args.dataset_root,
             args.task_name,
+            image_mode=getattr(args, "image_mode", "rgb"),
         )
     else:
         train_image_dir, train_pcap_dir, test_image_dir, test_pcap_dir, resolved_dataset_name = resolve_dataset_dirs(
@@ -3466,6 +3502,7 @@ def build_common_kwargs(args):
         val_every=args.val_every,
         max_consecutive_invalid_batches=args.max_consecutive_invalid_batches,
         selected_groups=parse_csv_values(args.cic_group) if args.cic_group else None,
+        image_mode=getattr(args, "image_mode", "rgb"),
     )
 
 
@@ -3520,6 +3557,7 @@ def run_fusion_experiment(
     val_every: int = 1,
     max_consecutive_invalid_batches: int = 128,
     selected_groups: Optional[List[str]] = None,
+    image_mode: str = "rgb",
 ) -> None:
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3531,7 +3569,7 @@ def run_fusion_experiment(
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{fusion_mode}")
     run_logger.info("start %s: output_root=%s run_dir=%s", fusion_mode, output_dir, run_dir)
-    run_logger.info("config: fusion_mode=%s use_temporal=%s", fusion_mode, use_temporal_sidecar)
+    run_logger.info("config: fusion_mode=%s use_temporal=%s image_mode=%s", fusion_mode, use_temporal_sidecar, image_mode)
 
     train_loader, train_classes = load_fusion_data(
         train_image_dir,
@@ -3549,6 +3587,7 @@ def run_fusion_experiment(
         balance_mode=class_balance,
         selected_groups=selected_groups,
         use_temporal_sidecar=use_temporal_sidecar,
+        image_mode=image_mode,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -3566,6 +3605,7 @@ def run_fusion_experiment(
         balance_mode="none",
         selected_groups=selected_groups,
         use_temporal_sidecar=use_temporal_sidecar,
+        image_mode=image_mode,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"
@@ -3758,6 +3798,7 @@ def run_stacking_experiment(
     val_every: int = 1,
     max_consecutive_invalid_batches: int = 128,
     selected_groups: Optional[List[str]] = None,
+    image_mode: str = "rgb",
 ) -> None:
     ensure_output_dirs(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3770,7 +3811,7 @@ def run_stacking_experiment(
     setup_logging(log_path, force=True)
     run_logger = logging.getLogger(f"run_{ensemble_tag}")
     run_logger.info("start stacking: base=%s output_root=%s run_dir=%s", base_fusion_mode, output_dir, run_dir)
-    run_logger.info("config: base_fusion_mode=%s use_temporal=%s", base_fusion_mode, use_temporal_sidecar)
+    run_logger.info("config: base_fusion_mode=%s use_temporal=%s image_mode=%s", base_fusion_mode, use_temporal_sidecar, image_mode)
     run_logger.info(
         "stacking config: level=%s calibration=%s threshold_objective=%s minority_lambda=%.3f oof_folds=%d",
         stacking_level,
@@ -3797,6 +3838,7 @@ def run_stacking_experiment(
         balance_mode=class_balance,
         selected_groups=selected_groups,
         use_temporal_sidecar=use_temporal_sidecar,
+        image_mode=image_mode,
     )
     test_loader, test_classes = load_fusion_data(
         test_image_dir,
@@ -3814,6 +3856,7 @@ def run_stacking_experiment(
         balance_mode="none",
         selected_groups=selected_groups,
         use_temporal_sidecar=use_temporal_sidecar,
+        image_mode=image_mode,
     )
 
     assert train_classes == test_classes, "训练集和测试集类别不一致"

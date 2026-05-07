@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 
 from fusion_common import add_common_args, build_common_kwargs, parse_methods, run_stacking_experiment
 
@@ -22,9 +23,20 @@ def main() -> int:
     args = build_parser().parse_args()
     kwargs = build_common_kwargs(args)
     methods = parse_methods(args.meta_methods) or ["xgboost"]
+
     # base_fusion_mode is now inside kwargs from args.fusion_mode
     base_mode = kwargs.pop("fusion_mode", "attention")
-    run_stacking_experiment(base_fusion_mode=base_mode, meta_methods=methods, ensemble_tag="attention_stacking", **kwargs)
+
+    # Filter kwargs to only include parameters accepted by run_stacking_experiment
+    sig = inspect.signature(run_stacking_experiment)
+    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+    run_stacking_experiment(
+        base_fusion_mode=base_mode,
+        meta_methods=methods,
+        ensemble_tag="attention_stacking",
+        **valid_kwargs
+    )
     return 0
 
 
