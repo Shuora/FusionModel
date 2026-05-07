@@ -1,0 +1,17 @@
+2026-04-30 00:15:18,753 - INFO - run_attention - start attention: output_root=/home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention run_dir=/home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/attention/attention_dim256_20260430_001518
+2026-04-30 00:15:18,754 - INFO - run_attention - config: fusion_mode=attention use_temporal=True image_mode=rgb
+2026-04-30 00:15:18,754 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/image_data/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/pcap_data/Train
+2026-04-30 00:15:19,259 - INFO - fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/image_data/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 183754
+2026-04-30 00:15:19,502 - INFO - fusion_common - 融合数据加载完成，类别数: 7, 样本总数: 183754
+2026-04-30 00:15:19,503 - INFO - fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/image_data/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/pcap_data/Test
+2026-04-30 00:15:19,568 - INFO - fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass/image_data/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 45941
+2026-04-30 00:15:19,571 - INFO - fusion_common - 融合数据加载完成，类别数: 7, 样本总数: 45941
+2026-04-30 00:15:19,571 - INFO - fusion_common - 初始化融合模型，融合模式: attention
+2026-04-30 00:15:19,656 - INFO - fusion_common - 融合模型初始化完成，分类头设置为 7 个类别
+2026-04-30 00:15:19,657 - INFO - fusion_common - 开始训练融合模型
+2026-04-30 00:15:19,657 - INFO - fusion_common - 训练参数 - Epochs: 32, Learning Rate: 0.001, Early Stopping Patience: 4
+2026-04-30 00:15:19,657 - INFO - fusion_common - 训练策略 - class_balance: weighted_sampler_loss, loss_type: focal, focal_gamma: 1.500, weight_decay: 0.000100, label_smoothing: 0.0300, early_stop_metric: val_f1, lr_scheduler: reduce, val_every: 1
+2026-04-30 00:15:19,657 - INFO - fusion_common - 训练保护 - grad_clip_norm: 1.000, max_consecutive_invalid_batches: 128
+2026-04-30 00:15:19,657 - INFO - fusion_common - DataLoader参数 - train_batches: 5742, val_batches: 1436, batch_size: 32, num_workers: 4, pin_memory: True
+2026-04-30 00:15:20,022 - INFO - fusion_common - 使用 class-weighted CrossEntropyLoss
+2026-04-30 00:15:20,023 - INFO - fusion_common - Epoch 1/32
