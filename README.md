@@ -319,28 +319,20 @@ python3 src/train_fusion_attention_stacking.py \
 
 #### 3. Score-Chasing 冲分口径（宽松评估）
 
-说明：`score_chasing_v1` 会引入跨 split 近重复样本，只用于冲分实验；请与严格口径结果并排报告。
 
 ````bash
-# A1) 构建 score_chasing_v1 预处理数据
 python3 src/split_data.py \
   --task_name mfcp_multiclass \
   --source_root /home/shuora/Traffic/FusionModel/SourceData \
-  --processed_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass_score_chasing_v1 \
-  --distribution_profile score_chasing_v1 \
   --seed 42
 
 # A1.5) 生成 image_data（必需）
 python3 src/ssl_tls_rgb_image.py \
-  --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData/mfcp_multiclass_score_chasing_v1
 
 # A2) 运行 accuracy-first stacking
 python3 src/train_fusion_attention_stacking.py \
   --task_name mfcp_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --dataset_name mfcp_multiclass_score_chasing_v1 \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/score_chasing_v1 \
-  --preset mfcp_score_chasing \
   --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_threshold_objective accuracy \
@@ -418,8 +410,6 @@ python3 src/train_fusion_attention_stacking.py \
 python3 src/train_fusion_attention_stacking.py \
   --task_name mta_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/mta_multiclass/score_chasing_v2 \
-  --preset mta_score_chasing \
   --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_threshold_objective accuracy \
@@ -494,8 +484,6 @@ python3 src/train_fusion_attention_stacking.py \
 python3 src/train_fusion_attention_stacking.py \
   --task_name mfcp_multiclass \
   --dataset_root /home/shuora/Traffic/FusionModel/ProcessedData \
-  --output_dir /home/shuora/Traffic/FusionModel/outputs/mfcp_multiclass/score_chasing_v1 \
-  --preset mfcp_score_chasing \
   --meta_methods xgboost,lightgbm,catboost \
   --stacking_level two_level \
   --stacking_threshold_objective accuracy \
@@ -838,7 +826,6 @@ CharBERT 文本分支当前支持两种模式：
   - `--task_name`
   - `--source_root`
   - `--processed_root`
-  - `--distribution_profile`（可选；`paper_mvtba` 仅对 `mta_multiclass`/`mfcp_multiclass` 启用论文固定样本分布；`score_chasing_v1` 仅对 `mfcp_multiclass` 启用宽松冲分分布，并额外写 `metadata/split_profile_summary.json`）
 - `ssl_tls_rgb_image.py`：
   - `--dataset_root`
 
@@ -860,7 +847,6 @@ ProcessedData/<task_name>/
 ```text
 outputs/<task_name>/attention/
 outputs/<task_name>/attention_stacking/
-outputs/mfcp_multiclass/score_chasing_v1/
 ```
 
 常见输出包括：
@@ -874,7 +860,6 @@ outputs/mfcp_multiclass/score_chasing_v1/
 - `metrics.json` 中记录每个 meta learner 的 `oof_acc/oof_macro_f1` 与后处理参数；并记录 `stacking.requested_level/effective_level`、校准配置、阈值优化配置
 - `two_level_blender` 的 `postprocess` 额外记录：`threshold_objective`、`objective_value`、`oof_test_gap`、`minority_metrics`
 - 增加 `single_layer_baseline` 汇总条目（按 OOF macro-F1 选择最佳单层 meta learner），便于与 `soft_voting/two_level_blender` 做同口径对照
-- `score_chasing_v1` 预处理目录会额外生成 `metadata/split_profile_summary.json`（含 `max_min_ratio` 与跨 split 近重复计数）
 
 ## 第四章：实验验证与结果分析 (重构实验)
 

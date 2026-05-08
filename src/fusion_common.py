@@ -6537,7 +6537,6 @@ def add_common_args(p):
 
     p.add_argument("--patience", type=int, default=4)
 
-    p.add_argument("--preset", choices=["none", "cic_balanced", "mfcp_score_chasing", "mta_score_chasing"], default="none")
 
 
 
@@ -6725,47 +6724,7 @@ def _apply_preset_defaults(args, resolved_dataset_name: str) -> None:
 
 
 
-    if preset_name == "mfcp_score_chasing":
-
-        preset_values = {
-
-            "--class_balance": "none",
-
-            "--loss_type": "ce",
-
-            "--label_smoothing": 0.0,
-
-            "--early_stop_metric": "val_acc",
-
-            "--early_stop_mode": "max",
-
-            "--stacking_level": "two_level",
-
-            "--stacking_calibration": "temp",
-
-            "--stacking_threshold_objective": "accuracy",
-
-            "--lr_scheduler": "reduce",
-
-        }
-
-        for flag, value in preset_values.items():
-
-            if not _arg_explicitly_set(flag):
-
-                setattr(args, flag[2:], value)
-
-        return
-
-
-
-
-
 def _apply_task_defaults(args) -> None:
-
-    if str(getattr(args, "preset", "none") or "none").strip().lower() == "mfcp_score_chasing":
-
-        return
 
     task_name = str(getattr(args, "task_name", "") or "").strip().lower()
 

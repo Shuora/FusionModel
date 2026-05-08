@@ -548,7 +548,6 @@ def _resolve_distribution_targets(task_name: str, distribution_profile: str | No
 
 
 
-    selected = rng.sample(train_candidates, k=min(inject_n, len(train_candidates)))
 
     
 
