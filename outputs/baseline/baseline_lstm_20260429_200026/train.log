@@ -1,6 +1,0 @@
-2026-04-29 20:00:26,151 - INFO - src.fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Train, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/pcap_data/Train
-2026-04-29 20:00:26,372 - INFO - src.fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Train/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 108033
-2026-04-29 20:00:26,376 - INFO - src.fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 108033
-2026-04-29 20:00:26,377 - INFO - src.fusion_common - 加载融合数据 - 图像目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Test, Pcap目录: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/pcap_data/Test
-2026-04-29 20:00:26,490 - INFO - src.fusion_common - 融合索引缓存命中: /home/shuora/Traffic/FusionModel/ProcessedData/ustc_multiclass/image_data/Test/.fusion_index_cache_v1_homeshuoratrafficfusionmodel_homeshuoratrafficfusionmodel.json, 样本数: 27016
-2026-04-29 20:00:26,491 - INFO - src.fusion_common - 融合数据加载完成，类别数: 10, 样本总数: 27016
